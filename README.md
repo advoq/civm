@@ -1,119 +1,116 @@
 # ci-vm — infraestrutura de CI compartilhada
 
-Repo dedicado para infra de CI/CD que é cross-cutting entre os projetos
-do mesmo dono. Source-of-truth para:
+Repo dedicado para a infraestrutura de CI/CD que serve múltiplos
+projetos do mesmo dono (compexhub, vitae, advoq, etc).
 
-- **Templates de workflow** (router, optimistic-retry, reusable)
-- **Runbooks operacionais** (vitae-ci self-hosted runner, billing fallback)
-- **Disciplinas metodológicas** (SSDV3 spec-driven dev, Kahneman, invariantes)
-- **Regras granulares** (testing, security, governance, observability,
-  ssdv3) que repos podem vendor
+**O que ci-vm É:**
 
-Cada repo do dono é peer self-contained — adota o que faz sentido pra
-ele via copy/paste OU `go run` cross-repo OU reusable workflow.
+- Repo de infra que **hospeda configuração da VM self-hosted**
+  registrada como GitHub Actions runner com label `vitae-ci`.
+- Quando GitHub Actions atribui um job ao label `vitae-ci`, o runner
+  na VM executa **exatamente o .yml do peer repo**, igual ubuntu-latest
+  faria.
+- Distribui templates de workflow + runbooks operacionais + disciplinas
+  metodológicas + regras granulares que peers podem **copiar** para
+  seus próprios repos.
 
-## Estrutura
+**O que ci-vm NÃO é:**
 
+- ❌ Não é uma camada de "audit". GitHub Actions não audita código por
+  si só — só roda o que está no .yml. Se um peer quer audit de estilo,
+  adiciona step `eslint .` ou ferramenta-do-projeto no próprio .yml.
+- ❌ Não é uma plataforma de orquestração custom. ci-vm é só onde a
+  VM mora; orquestração é GitHub Actions padrão.
+- ❌ Não tem CLI próprio (`civmctl`) por enquanto. Se peer precisa de
+  ferramenta de discipline, usa a do próprio projeto.
+
+## Estrutura por audiência
+
+### Para quem **mantém ci-vm** (admin do repo)
+
+| Arquivo | Função |
+|---|---|
+| `README.md` | este arquivo |
+| `.github/workflows/ci.yml` | próprio CI: yamllint nos templates, link check |
+| `.gitignore` | exclude common artifacts |
+
+### Para quem **administra a VM** (sysadmin do vitae-ci)
+
+| Arquivo | Função |
+|---|---|
+| `runbooks/MULTI-PROJECT-RUNNER.md` | provisionar VM + N runners + tools (parity ubuntu-latest) + cron de cleanup (128GB SSD) |
+| `runbooks/LOCAL-CI-DISCIPLINE.md` | filosofia "local CI é gate de verdade, remoto é mirror" |
+
+### Para **peer repos** — **copiar**
+
+| Arquivo | Como adotar |
+|---|---|
+| `templates/ci-optimistic.yml.template` | `cp ... .github/workflows/ci.yml` no peer; substituir placeholders |
+| `templates/ci-router.yml.template` | idem, versão Tier 1 com router |
+| `templates/COMMUNICATION-STYLE.md` | copiar bloco entre marcadores BEGIN/END pra CLAUDE/AGENTS/CODEX do peer |
+| `runbooks/CI-BILLING-FALLBACK.md` | leia para entender as 3 camadas de fallback (referência, não copy) |
+| `runbooks/CI-GITHUB-APP-SETUP.md` | rota de upgrade futuro (referência) |
+
+### Para **peer repos** — **referenciar (não copiar)**
+
+| Arquivo | Função |
+|---|---|
+| `disciplines/KAHNEMAN-DISCIPLINES.md` | 12 disciplinas Sistema 1 vs 2 — referência metodológica |
+| `disciplines/SSDV3-PROMPTS.md` | Spec-Driven Dev V3 — prompts copiáveis |
+| `disciplines/INVARIANTS.md` | catálogo de invariantes (cada peer escolhe quais adotar) |
+| `rules/ssdv3.md`, `rules/testing.md`, `rules/security.md`, `rules/governance.md`, `rules/observability.md` | granular rules `.claude/rules/*` portáveis |
+
+## Como o vitae-ci runner funciona
+
+1. **Setup uma vez** seguindo `runbooks/MULTI-PROJECT-RUNNER.md`:
+   - Provisionar VM Linux (Ubuntu 22.04+, 4+ cores, 128GB SSD)
+   - Instalar toolchains (Go, Node, Docker, gh CLI, etc) — parity ubuntu-latest
+   - Registrar N runners GitHub com label `vitae-ci`
+   - Configurar cron de cleanup diário (disk hygiene)
+
+2. **Cada peer repo** referencia `runs-on: [self-hosted, vitae-ci]` em
+   seu próprio `.github/workflows/ci.yml`.
+
+3. **Quando billing GitHub OK:** workflow roda em `ubuntu-latest`
+   (GitHub-hosted, paga minutos). Quando billing bloqueado: roteia
+   para `vitae-ci` (sem custo). Detector heurístico documentado em
+   `runbooks/CI-BILLING-FALLBACK.md`; templates implementam o roteamento.
+
+4. **PR continua sendo criado** de onde o dev quiser (laptop, gh CLI,
+   GitHub UI). vitae-ci só executa CI; não cria PRs.
+
+## Adoção em 1 comando (para peer repos)
+
+Não tem 1-comando-mágico — adoção é manual, peer repo decide o que
+faz sentido:
+
+```bash
+# 1. Copiar template de workflow (escolher tier)
+cp ~/codespace/ci-vm/templates/ci-optimistic.yml.template \
+   <peer>/.github/workflows/ci.yml
+# Editar para substituir placeholders pelos gates reais do peer
+
+# 2. Copiar snippet COMMUNICATION-STYLE
+# (copiar bloco entre marcadores BEGIN/END em
+#  ~/codespace/ci-vm/templates/COMMUNICATION-STYLE.md
+#  pra CLAUDE.md, AGENTS.md, CODEX.md do peer)
+
+# 3. Configurar branch protection no GitHub
+# Settings > Branches > main > require status check:
+#   "Gates (typecheck, test, build, invariants)"
 ```
-ci-vm/
-├── README.md                ← este arquivo
-├── runbooks/                ← procedimentos operacionais
-│   ├── MULTI-PROJECT-RUNNER.md   (setup vitae-ci self-hosted compartilhado)
-│   ├── CI-BILLING-FALLBACK.md    (3 tiers de fallback billing GitHub)
-│   ├── CI-GITHUB-APP-SETUP.md    (rota upgrade para GitHub App)
-│   └── LOCAL-CI-DISCIPLINE.md    (local CI é gate de verdade)
-├── templates/               ← arquivos copy-paste em peer repos
-│   ├── ci-optimistic.yml.template (Tier 3 zero-auth self-healing)
-│   ├── ci-router.yml.template     (Tier 1 detector + roteamento)
-│   └── COMMUNICATION-STYLE.md     (snippet pra CLAUDE/AGENTS/CODEX)
-├── disciplines/             ← metodologia + filosofia
-│   ├── KAHNEMAN-DISCIPLINES.md       (12 disciplinas Sistema 1 vs 2)
-│   ├── SSDV3-PROMPTS.md              (Spec-Driven Dev V3 prompts)
-│   ├── INVARIANTS.md                  (catálogo dos 14 invariantes)
-│   └── COVERAGE-EXCLUSIONS-template.md (formato de exclusões coverage)
-├── rules/                   ← regras granulares (.claude/rules/* portáveis)
-│   ├── ssdv3.md
-│   ├── testing.md
-│   ├── security.md
-│   ├── governance.md
-│   └── observability.md
-├── .github/workflows/       ← próprio CI deste repo
-│   └── ci.yml
-└── .gitignore
-```
 
-## Como adotar (em qualquer peer repo)
+Audit/discipline-checks ficam no projeto do peer (cada um com sua
+própria ferramenta — ex.: compexhub tem `compexhubctl`).
 
-### Mínimo (estilo + auditoria)
+## Versionamento
 
-1. **Copiar regra de Communication & report style** pra `CLAUDE.md`,
-   `AGENTS.md`, `CODEX.md` do peer repo:
-
-   ```bash
-   # Copia bloco entre marcadores BEGIN/END
-   awk '/<!-- COMMUNICATION-STYLE:BEGIN -->/,/<!-- COMMUNICATION-STYLE:END -->/' \
-     ~/codespace/ci-vm/templates/COMMUNICATION-STYLE.md
-   ```
-
-2. **Auditar via Go** (sem dependência local):
-
-   ```bash
-   go run github.com/emersonbusson/compexhub/tools/compexhubctl@latest audit comm-style
-   ```
-
-   Exit 0 = 3/3 ok; exit 1 = falta seção em algum arquivo.
-
-### CI workflow (escolher 1 dos 3 tiers)
-
-- **Tier 1 (router):** copiar `templates/ci-router.yml.template` pra
-  `.github/workflows/ci.yml` do peer. Roda detector heurístico,
-  decide entre ubuntu-latest e vitae-ci.
-- **Tier 3 (optimistic-retry):** copiar
-  `templates/ci-optimistic.yml.template`. Sempre tenta ubuntu-latest;
-  se falhar, dispara vitae-ci. Self-healing, zero auth.
-
-Em ambos: aggregator job final `Gates (typecheck, test, build, invariants)`
-deve ser configurado como required check em branch protection.
-
-### Disciplinas + invariantes
-
-Ler `disciplines/KAHNEMAN-DISCIPLINES.md` e `disciplines/SSDV3-PROMPTS.md`.
-Adotar invariantes listados em `disciplines/INVARIANTS.md` que façam
-sentido pro seu repo (alguns são compexhub-specific, ex.: invariantes #2,
-#3, #9 que falam de stack Next.js/Go).
-
-Cada peer pode implementar próprio detector dos invariantes que adotar.
-Exemplo: invariante #14 (no `.sh` em tools/) é genérico — copiar lógica
-do compexhubctl `tools/compexhubctl/cmd/checkinvariants/check_no_shell_scripts.go`.
-
-## Runner self-hosted (vitae-ci)
-
-Se múltiplos repos do dono compartilham o runner self-hosted, ler
-`runbooks/MULTI-PROJECT-RUNNER.md` para setup com N runners systemd
-isolados, capacity planning e checklist de adoção por peer.
-
-## Filosofia
-
-- **Local é o gate de verdade** (`runbooks/LOCAL-CI-DISCIPLINE.md`).
-  CI remoto é mirror informativo. Validação real acontece no laptop
-  do dev antes de push.
-- **Cada repo é self-contained.** ci-vm é a única exceção (admin
-  cross-cutting). Repos peer não conhecem uns aos outros.
-- **Disciplina vai em invariantes**, não em manual. Se a regra é
-  importante, vira gate de CI que falha automático.
-
-## Quando atualizar
-
-- Mudança em template/runbook: commit em ci-vm; peer repos pegam na
-  próxima copy/vendor manual.
-- Mudança em disciplina: atualizar `disciplines/` + comunicar peers
-  (não há propagação automática — vendor é vendor).
-
-Versionamento: tags semver opcionais. Peer repos podem travar em
-`@v1.x` se quiserem.
+Tags semver opcionais (v1.0.0, v1.1.0). Peer repos podem travar em
+versão se quiserem (ex.: `git checkout v1.2.0` antes de copiar
+templates).
 
 ## Histórico
 
-- **2026-05-10** — Bootstrap inicial. Extraído de compexhub conforme
-  proposta `docs/proposals/CI-VM-EXTRACTION.md`. Estrutura inicial:
-  4 runbooks + 3 templates + 4 disciplines + 5 rules + próprio CI.
+- **2026-05-10** — bootstrap inicial. Estrutura: 4 runbooks + 3
+  templates + 4 disciplines + 5 rules + próprio CI. Repo extraído de
+  compexhub conforme `docs/proposals/CI-VM-EXTRACTION.md`.
