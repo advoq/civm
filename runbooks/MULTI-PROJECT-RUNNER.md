@@ -111,20 +111,23 @@ do GitHub Actions ja garante isolamento:
 
 Resultado: cada job comeca do zero, sem crosstalk.
 
-### Rollback de runner peer
-
-Se runner quebrar workflow do peer:
+### Rollback de runner peer (1 comando)
 
 ```bash
-# Stop + uninstall systemd
-ssh gha-ubuntu-2404 "cd ~/actions-runner-<REPO> &&
-  sudo ./svc.sh stop && sudo ./svc.sh uninstall"
-
-# Remove from GitHub
 TOKEN=$(gh api -X POST /repos/emersonbusson/<REPO>/actions/runners/remove-token --jq .token)
-ssh gha-ubuntu-2404 "cd ~/actions-runner-<REPO> &&
+civmctl runner remove --short=<short> --token="$TOKEN" --execute
+```
+
+Faz tudo idempotente (best-effort): svc.sh stop + uninstall + config.sh
+remove + rm -rf dir. Token mascarado nos logs.
+
+Equivalente manual (se civmctl indisponivel):
+
+```bash
+ssh gha-ubuntu-2404 "cd ~/actions-runner-<short> &&
+  sudo ./svc.sh stop && sudo ./svc.sh uninstall &&
   ./config.sh remove --token '$TOKEN' &&
-  rm -rf ~/actions-runner-<REPO>"
+  rm -rf ~/actions-runner-<short>"
 ```
 
 Workflow do peer volta a rodar 100% em `ubuntu-latest` (com risco de

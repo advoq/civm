@@ -97,8 +97,44 @@ func runRunnerList(args []string) int {
 }
 
 func runRunnerRemove(args []string) int {
-	fmt.Fprintln(os.Stderr, "remove ainda nao implementado; use ./config.sh remove --token=<remove-token> manualmente")
-	return 1
+	fs := flag.NewFlagSet("runner remove", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	short := fs.String("short", "", "suffix curto (ex: cmpx, vitae, advoq)")
+	token := fs.String("token", "", "remove-token (gh api -X POST /repos/.../actions/runners/remove-token)")
+	baseDir := fs.String("base-dir", "", "base dir (default: $HOME)")
+	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")
+	timeoutMin := fs.Int("timeout", 5, "timeout em minutos")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, "erro nos args de runner remove:", err)
+		return exitUsage
+	}
+	if *baseDir == "" {
+		*baseDir = userHomeOrDefault()
+	}
+	opts := runner.DefaultRemoveOptions()
+	opts.Short = *short
+	opts.Token = *token
+	opts.BaseDir = *baseDir
+	opts.Execute = *execute
+	if *execute {
+		fmt.Fprintln(os.Stderr, "AVISO: --execute vai parar service + remover diretorio.")
+		fmt.Fprintln(os.Stderr, "Pressione Ctrl+C em 3s para abortar...")
+		time.Sleep(3 * time.Second)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutMin)*time.Minute)
+	defer cancel()
+	results, err := runner.Remove(ctx, opts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "erro:", err)
+		return exitUsage
+	}
+	runner.RenderRemoveTable(results, opts, os.Stdout)
+	for _, r := range results {
+		if r.Err != nil {
+			return 1
+		}
+	}
+	return 0
 }
 
 func userHomeOrDefault() string {

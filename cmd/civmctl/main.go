@@ -70,6 +70,7 @@ EXEMPLOS
   civmctl billing-status --repo=owner/repo --json
   civmctl runner add --repo=owner/repo --token=$(gh api ...) --short=cmpx
   civmctl runner add --repo=owner/repo --token=... --short=cmpx --execute
+  civmctl runner remove --short=cmpx --token=$(gh api -X POST .../remove-token) --execute
 
 DOCUMENTACAO
   PRD/SPEC: docs/specs/civmctl/

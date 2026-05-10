@@ -206,3 +206,134 @@ func shellQuote(s string) string {
 func defaultRun(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
+
+// ==== Remove ====
+
+// RemoveOptions controls a runner removal.
+type RemoveOptions struct {
+	Short     string // suffix do diretorio: ~/actions-runner-<short>
+	Token     string // remove-token (efemero, gh api .../runners/remove-token)
+	BaseDir   string // ex: "/home/emdev"
+	Execute   bool   // false = dry-run
+	RunFn     func(ctx context.Context, name string, args ...string) ([]byte, error)
+}
+
+// DefaultRemoveOptions returns sane defaults.
+func DefaultRemoveOptions() RemoveOptions {
+	return RemoveOptions{
+		Execute: false,
+		RunFn:   defaultRun,
+	}
+}
+
+// Remove undoes Add. All steps are idempotent (best-effort): missing dirs
+// are skip, services already stopped are skip. Designed to be safe to
+// re-run in cleanup automation.
+func Remove(ctx context.Context, opts RemoveOptions) ([]Result, error) {
+	if err := validateRemoveOptions(opts); err != nil {
+		return nil, err
+	}
+	if opts.RunFn == nil {
+		opts.RunFn = defaultRun
+	}
+	dir := fmt.Sprintf("%s/actions-runner-%s", opts.BaseDir, opts.Short)
+	steps := []Step{
+		{
+			Name:        "stop_service",
+			Description: "sudo svc.sh stop",
+			WouldDo:     fmt.Sprintf("(cd %s && sudo ./svc.sh stop) || true (idempotente)", dir),
+			Apply: func(ctx context.Context) error {
+				// best-effort; ignore error if not installed
+				_, _ = opts.RunFn(ctx, "sh", "-c",
+					fmt.Sprintf("cd %s 2>/dev/null && sudo ./svc.sh stop 2>&1 || true", shellQuote(dir)))
+				return nil
+			},
+		},
+		{
+			Name:        "uninstall_service",
+			Description: "sudo svc.sh uninstall",
+			WouldDo:     fmt.Sprintf("(cd %s && sudo ./svc.sh uninstall) || true", dir),
+			Apply: func(ctx context.Context) error {
+				_, _ = opts.RunFn(ctx, "sh", "-c",
+					fmt.Sprintf("cd %s 2>/dev/null && sudo ./svc.sh uninstall 2>&1 || true", shellQuote(dir)))
+				return nil
+			},
+		},
+		{
+			Name:        "config_remove",
+			Description: "config.sh remove --token=*** (deregister no GitHub)",
+			WouldDo:     fmt.Sprintf("(cd %s && ./config.sh remove --token=***) || true", dir),
+			Apply: func(ctx context.Context) error {
+				_, _ = opts.RunFn(ctx, "sh", "-c",
+					fmt.Sprintf("cd %s 2>/dev/null && ./config.sh remove --token %s 2>&1 || true",
+						shellQuote(dir), shellQuote(opts.Token)))
+				return nil
+			},
+		},
+		{
+			Name:        "remove_dir",
+			Description: "rm -rf " + dir,
+			WouldDo:     "rm -rf " + dir,
+			Apply: func(ctx context.Context) error {
+				_, err := opts.RunFn(ctx, "rm", "-rf", dir)
+				return err
+			},
+		},
+	}
+	results := make([]Result, 0, len(steps))
+	for _, s := range steps {
+		r := Result{Name: s.Name, Description: s.Description, WouldDo: s.WouldDo}
+		if !opts.Execute {
+			results = append(results, r)
+			continue
+		}
+		if err := s.Apply(ctx); err != nil {
+			r.Err = err
+		} else {
+			r.Executed = true
+		}
+		results = append(results, r)
+	}
+	return results, nil
+}
+
+func validateRemoveOptions(opts RemoveOptions) error {
+	if opts.Short == "" {
+		return fmt.Errorf("--short obrigatorio (suffix curto, ex: cmpx, vitae)")
+	}
+	if opts.BaseDir == "" {
+		return fmt.Errorf("--base-dir obrigatorio")
+	}
+	if opts.Token == "" {
+		return fmt.Errorf("--token obrigatorio (gh api -X POST .../actions/runners/remove-token)")
+	}
+	return nil
+}
+
+// RenderRemoveTable writes remove results human-readable.
+func RenderRemoveTable(results []Result, opts RemoveOptions, w io.Writer) {
+	mode := "DRY-RUN"
+	if opts.Execute {
+		mode = "EXECUTE"
+	}
+	fmt.Fprintf(w, "Modo: %s\n", mode)
+	fmt.Fprintf(w, "Short: %s | Dir: %s/actions-runner-%s\n\n",
+		opts.Short, opts.BaseDir, opts.Short)
+	for _, r := range results {
+		status := "(seria-aplicado)"
+		switch {
+		case r.Err != nil:
+			status = "erro: " + r.Err.Error()
+		case r.Executed:
+			status = "aplicado"
+		}
+		fmt.Fprintf(w, "  %-20s %s\n", r.Name, status)
+		if !opts.Execute {
+			fmt.Fprintf(w, "    -> %s\n", r.WouldDo)
+		}
+	}
+	fmt.Fprintln(w)
+	if !opts.Execute {
+		fmt.Fprintln(w, "Para aplicar: rode novamente com --execute")
+	}
+}

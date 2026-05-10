@@ -97,18 +97,15 @@ Node 24 (já está: v24.15.0 LTS Krypton via nvm).
 | Label `vitae-ci` reuso | Mesmo padrão dos peers já adotados; zero divergência |
 | Push trigger natural | Sem precisar `workflow_dispatch:` adicionado |
 
-## Rollback
-
-Se runner advoq quebrar workflow:
+## Rollback (1 comando)
 
 ```bash
-# Stop + uninstall service systemd
-ssh gha-ubuntu-2404 "cd ~/actions-runner-advoq && sudo ./svc.sh stop && sudo ./svc.sh uninstall"
-
-# Remove runner do GitHub
 TOKEN=$(gh api -X POST /repos/emersonbusson/advoq/actions/runners/remove-token --jq .token)
-ssh gha-ubuntu-2404 "cd ~/actions-runner-advoq && ./config.sh remove --token '$TOKEN' && rm -rf ~/actions-runner-advoq"
+civmctl runner remove --short=advoq --token="$TOKEN" --execute
 ```
+
+Faz tudo idempotente (best-effort): svc.sh stop + uninstall + config.sh
+remove + rm -rf dir. Token mascarado nos logs.
 
 Se template `ci-router.yml` quebrar workflow advoq:
 

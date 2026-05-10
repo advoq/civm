@@ -54,6 +54,7 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl cleanup [--execute]` | limpa Docker, /tmp, _work, apt cache |
 | `civmctl health` | health check (disk, mem, runners, ultimo cleanup) |
 | `civmctl runner add` | registra runner GitHub Actions self-hosted (mkdir + curl + tar + config.sh + svc.sh install + start) |
+| `civmctl runner remove` | desregistra runner (svc.sh stop + uninstall + config.sh remove + rm -rf dir) |
 | `civmctl drift` | compara pins locais vs upstream actions/runner-images (HTTP fetch) |
 | `civmctl billing-status` | detector heuristico de billing-block (zero-PAT, GITHUB_TOKEN suficiente) |
 
