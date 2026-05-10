@@ -84,3 +84,55 @@ brutos aqui.
 - **Open items:** SSH na VM para validar bootstrap end-to-end (impossível
   do agente sandboxed; admin humano executa)
 - **Next step:** humano executa `civmctl bootstrap` na VM e reporta resultado
+
+## 2026-05-10 — runner-end-to-end
+
+- **Branch:** main
+- **Scope:** push remoto, SSH end-to-end na VM gha-ubuntu-2404,
+  bootstrap real, registro de runner self-hosted, validacao via
+  workflow CI rodando na VM
+- **Goal:** fechar o ciclo zero-effort: do clone ate workflow rodando
+  no proprio runner self-hosted ci-vm, com upstream parity validada.
+- **Actions:**
+  - `gh repo create emersonbusson/ci-vm --private --source=. --push`
+    (autorizado pelo humano)
+  - SSH em gha-ubuntu-2404 (Tailscale 100.123.103.106, user emdev)
+    via ~/.ssh/config alias
+  - apt install build-essential curl wget jq git ca-certificates
+  - Go 1.26.3 instalado em /usr/local/go (latest go.dev)
+  - nvm v0.40.4 instalado
+  - Node v24.15.0 LTS Krypton instalado via nvm
+  - systemd timer civmctl-cleanup.timer ENABLED + ACTIVE
+  - actions/runner v2.334.0 baixado e configurado
+  - Runner registrado como vitae-ci-1, label vitae-ci
+  - Service actions.runner.emersonbusson-ci-vm.vitae-ci-1 ativo
+  - Workflow ci.yml ganhou job self-hosted-smoke
+  - Pin de Go atualizado 1.25.9 -> 1.26.3 em internal/specs/specs.go
+  - Pin de Node atualizado 20.20.2 -> 24.15.0
+  - Drift detector ganhou StatusAhead (semver compare)
+  - Bootstrap install_node/docker mudou para nao fazer downgrade
+  - Health Check.LAST mensagem revisada
+- **Validations:**
+  - Run 25630391656 self-hosted-smoke: SUCCESS, 10/10 steps
+    (set up, checkout, show identity, tool parity, civmctl
+    installed, civmctl health, build from source, workspace
+    cleanup, post checkout, complete)
+  - Jobs ubuntu-latest no mesmo run: 0 steps (= billing block
+    GitHub Actions confirmado pela 3a vez nesta sessao)
+  - Comprovacao operacional: vitae-ci serviu 100% mesmo com
+    billing-hosted bloqueado
+  - Coverage: specs 100, bootstrap 84.1, cleanup 84.5, drift
+    88.1, health 88.4 (todos verde com -race)
+- **Commits:**
+  - `09c06e6` feat: StatusAhead + bump Go 1.26.3 + Node 24.15.0
+  - `a5bfa3e` ci: add self-hosted-smoke job
+  - `ea799f5` ci: remove needs (billing-block resilient)
+  - `3c02b01` fix: civmctl health respeita exit code
+- **Open items:**
+  - Testar peer repos rodando na VM (compexhub, vitae, advoq) —
+    requer registrar runners adicionais (1 por repo) ou rodar
+    smoke tests manuais via SSH+clone read-only
+  - Atualizar specs Docker para 29.1.3 quando upstream
+    actions/runner-images publicar
+- **Next step:** decidir entre (a) registrar runners nos peers ou
+  (b) rodar smoke tests via SSH+clone read-only (sem tocar git)
