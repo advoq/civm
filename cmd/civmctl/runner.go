@@ -14,7 +14,7 @@ import (
 
 func runRunner(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "uso: civmctl runner <add|list|remove|restart> [flags]")
+		fmt.Fprintln(os.Stderr, "uso: civmctl runner <add|list|remove|restart|upgrade> [flags]")
 		return exitUsage
 	}
 	sub := args[0]
@@ -28,10 +28,57 @@ func runRunner(args []string) int {
 		return runRunnerRemove(rest)
 	case "restart":
 		return runRunnerRestart(rest)
+	case "upgrade":
+		return runRunnerUpgrade(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "subcomando desconhecido: %s\n", sub)
 		return exitUsage
 	}
+}
+
+func runRunnerUpgrade(args []string) int {
+	fs := flag.NewFlagSet("runner upgrade", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	short := fs.String("short", "", "suffix curto (ex: cmpx, vitae, advoq)")
+	unit := fs.String("unit", "", "unit name explícito (sobreescreve --short)")
+	dir := fs.String("dir", "", "diretorio do runner explicito (override do guess BaseDir/actions-runner-Short)")
+	newVersion := fs.String("new-version", "", "nova versao (ex: 2.335.0)")
+	baseDir := fs.String("base-dir", "", "base dir (default: $HOME)")
+	verifySec := fs.Int("verify-delay", 5, "segundos entre start e is-active check")
+	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")
+	timeoutMin := fs.Int("timeout", 10, "timeout em minutos (download pode demorar)")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, "erro nos args de runner upgrade:", err)
+		return exitUsage
+	}
+	if *baseDir == "" {
+		*baseDir = userHomeOrDefault()
+	}
+	opts := runner.DefaultUpgradeOptions()
+	opts.Short = *short
+	opts.Unit = *unit
+	opts.Dir = *dir
+	opts.NewVersion = *newVersion
+	opts.BaseDir = *baseDir
+	opts.VerifyDelay = time.Duration(*verifySec) * time.Second
+	opts.Execute = *execute
+	if *execute {
+		fmt.Fprintln(os.Stderr, "AVISO: --execute vai parar runner, baixar tarball, sobrescrever binarios e reiniciar.")
+		fmt.Fprintln(os.Stderr, "Job em curso ABORTADO. Pressione Ctrl+C em 5s pra cancelar...")
+		time.Sleep(5 * time.Second)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutMin)*time.Minute)
+	defer cancel()
+	r, err := runner.Upgrade(ctx, opts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "erro:", err)
+		return exitUsage
+	}
+	runner.RenderUpgradeTable(r, opts, os.Stdout)
+	if r.Err != nil {
+		return 1
+	}
+	return 0
 }
 
 func runRunnerRestart(args []string) int {

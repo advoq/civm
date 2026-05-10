@@ -35,6 +35,10 @@ func main() {
 		os.Exit(runDiskWatchdog(args))
 	case "ci":
 		os.Exit(runCI(args))
+	case "reverse-watchdog":
+		os.Exit(runReverseWatchdog(args))
+	case "bootstrap-everything":
+		os.Exit(runBootstrapEverything(args))
 	case "-h", "--help", "help":
 		printHelp()
 		os.Exit(0)
@@ -64,6 +68,8 @@ COMANDOS
   billing-status  Detecta billing-block heuristico (3 runs failure <10s)
   disk-watchdog   Trigger cleanup agressivo se disk >threshold (default 80%%)
   ci              Subcomandos CI cross-peer (local-report)
+  reverse-watchdog Alerta se disk-watchdog nao disparou em >MaxAge (default 2h)
+  bootstrap-everything  Wrapper: cp systemd units + daemon-reload + bootstrap --execute
   help            Esta mensagem
 
 EXEMPLOS
@@ -79,6 +85,9 @@ EXEMPLOS
   civmctl runner remove --short=cmpx --token=$(gh api -X POST .../remove-token) --execute
   civmctl runner list --json | jq '.runners[] | select(.repo == "emersonbusson/ci-vm")'
   civmctl runner restart --short=vitae-ci-1 --execute
+  civmctl runner upgrade --short=cmpx --new-version=2.335.0 --execute
+  civmctl reverse-watchdog --max-age-hours=2
+  sudo civmctl bootstrap-everything --units-source=/opt/ci-vm/deploy/systemd --execute
   civmctl disk-watchdog --threshold-pct=80 --execute
   civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="Local VM CI"
 

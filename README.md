@@ -59,6 +59,9 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl billing-status` | detector heuristico de billing-block (zero-PAT, GITHUB_TOKEN suficiente) |
 | `civmctl runner list` | lista runners systemd na VM (parsed; suporta `--json`) |
 | `civmctl runner restart` | systemctl restart por --short ou --unit; verifica is-active após delay |
+| `civmctl runner upgrade` | upgrade in-place de versão (preserva .runner/.credentials/_work) |
+| `civmctl reverse-watchdog` | alerta se disk-watchdog timer parou de disparar (>2h default) |
+| `civmctl bootstrap-everything` | wrapper: cp systemd units + daemon-reload + bootstrap |
 | `civmctl disk-watchdog` | dispara cleanup agressivo se disk >threshold (default 80%) |
 | `civmctl ci local-report` | posta commit status via gh api (cross-peer manual reporter) |
 
