@@ -72,7 +72,7 @@ Em cada repo > Settings > Secrets and variables > Actions:
 
 ### 5. Refatorar `ci-router` step "Decide runner"
 
-Substituir o passo atual (chamada a `compexhubctl ci billing-status`) por:
+Substituir o passo atual (chamada a `civmctl billing-status`) por:
 
 ```yaml
 - name: Decide runner (GitHub App billing API)
@@ -175,8 +175,8 @@ falhando, App revogado, secrets vazados), reverter para heuristica em
 
 ```bash
 git revert <commit-do-app-migration>
-# Verifica que ci-router voltou a chamar compexhubctl ci billing-status
-go run ./tools/compexhubctl ci billing-status
+# Verifica que ci-router voltou a chamar civmctl billing-status
+civmctl billing-status --repo=<owner>/<repo> --workflow=ci.yml
 ```
 
 Custo de rollback: zero. Heuristica continua funcional como fallback ate

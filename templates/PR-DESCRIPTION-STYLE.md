@@ -4,10 +4,10 @@
 > `<!-- PR-COMMIT-VISIBILITY:BEGIN -->` e `<!-- PR-COMMIT-VISIBILITY:END -->`
 > para o `.github/pull_request_template.md` do repo logo abaixo do
 > heading `## Commits`. Manter os marcadores intactos para o auditor
-> futuro (`compexhubctl audit pr-style`) conseguir verificar.
+> futuro do repo consumidor conseguir verificar.
 >
 > **Por quê este snippet existe:** vários repos do mesmo dono adotaram
-> o template ci-vm com seção `## Commits` em formato tabela
+> o template civm com seção `## Commits` em formato tabela
 > (`Commit | O que fez | Por que fez | Detalhes`). Em PRs com 15+ commits
 > agentes começaram a usar `<details>` agrupador para "esconder" commits
 > considerados secundários, deixando só uma sub-categoria visível na
@@ -41,7 +41,7 @@
 
 ## Como auditar (futuro, todos os repos)
 
-Implementação proposta para `compexhubctl audit pr-style`:
+Implementação proposta para um auditor `pr-style` do repo consumidor:
 
 1. Ler último PR aberto via `gh pr view --json body,number`.
 2. Em `## Commits`, identificar quantas linhas de tabela existem dentro de cada `<details>`.

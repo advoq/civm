@@ -5,7 +5,7 @@
 # em self-hosted, completando mesmo quando billing-hosted está bloqueado.
 #
 # Adoção:
-#   cp ~/codespace/ci-vm/templates/advoq-ci-router.yml.template \
+#   cp ~/codespace/civm/templates/advoq-ci-router.yml.template \
 #      ~/codespace/advoq/.github/workflows/ci-router.yml
 #
 # Branch protection: marcar "Gates (civm fallback)" como required

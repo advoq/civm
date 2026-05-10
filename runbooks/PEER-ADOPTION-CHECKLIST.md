@@ -1,12 +1,12 @@
 # Runbook — peer adoption checklist (manual, per-repo)
 
 > Use este checklist quando um peer repo (vitae, advoq, futuro repo X)
-> for adotar o padrão ci-vm. Cada peer commita independentemente em
+> for adotar o padrão civm. Cada peer commita independentemente em
 > branch isolada.
 
 ## Pré-requisitos
 
-- [ ] ci-vm repo presente em `~/codespace/ci-vm/` (local OK; quando
+- [ ] civm repo presente em `~/codespace/civm/` (local OK; quando
       migrar pra GitHub, ajustar refs)
 - [ ] Working tree do peer está clean OU você sabe o que está
       uncommitted (não vai perder nada)
@@ -24,7 +24,7 @@ git status --short
 ## Passo 1 — Criar branch isolada
 
 ```bash
-git checkout -b chore/adopt-ci-vm
+git checkout -b chore/adopt-civm
 ```
 
 ## Passo 2 — Decidir destino de MEMORY.md vs conversa.md
@@ -49,10 +49,10 @@ do Passo 4 + histórico).
 
 Copiar bloco entre marcadores `<!-- COMMUNICATION-STYLE:BEGIN -->`
 e `<!-- COMMUNICATION-STYLE:END -->` de
-`~/codespace/ci-vm/templates/COMMUNICATION-STYLE.md` para o final
+`~/codespace/civm/templates/COMMUNICATION-STYLE.md` para o final
 de cada arquivo `CLAUDE.md`, `AGENTS.md`, `CODEX.md`.
 
-Adicionar logo abaixo: `> Source canônico: ~/codespace/ci-vm/templates/COMMUNICATION-STYLE.md`
+Adicionar logo abaixo: `> Source canônico: ~/codespace/civm/templates/COMMUNICATION-STYLE.md`
 
 ## Passo 5 — Criar MEMORY.md se não existir
 
@@ -67,11 +67,11 @@ Primeira entrada documenta esta adoção.
 mkdir -p .github/workflows
 
 # Tier 3 (recomendado para repos novos — zero auth, self-healing):
-cp ~/codespace/ci-vm/templates/ci-optimistic.yml.template \
+cp ~/codespace/civm/templates/ci-optimistic.yml.template \
    .github/workflows/ci.yml
 
 # OU Tier 1 (router pattern):
-cp ~/codespace/ci-vm/templates/ci-router.yml.template \
+cp ~/codespace/civm/templates/ci-router.yml.template \
    .github/workflows/ci.yml
 ```
 
@@ -81,7 +81,7 @@ EDITAR: substituir steps "echo PLACEHOLDER" pelos gates reais do peer.
 
 ```bash
 git add CLAUDE.md AGENTS.md CODEX.md MEMORY.md .github/workflows/ci.yml
-git commit -m "chore: adopt ci-vm pattern (style + CODEX/MEMORY + ci workflow)"
+git commit -m "chore: adopt civm pattern (style + CODEX/MEMORY + ci workflow)"
 ```
 
 ## Passo 8 — Restaurar WIP (se houve stash)

@@ -59,7 +59,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
-          go run github.com/emersonbusson/compexhub/tools/compexhubctl@latest ci billing-status
+          civmctl billing-status --repo="${GITHUB_REPOSITORY}" --workflow=ci.yml
           code=$?
           set -e
           case "$code" in

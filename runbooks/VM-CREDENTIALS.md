@@ -2,7 +2,7 @@
 
 > **Princípio absoluto:** **nenhum** secret (SSH private key, senhas,
 > tokens, env values reais) vai pra dentro deste repo. Mesmo sendo
-> ci-vm, mesmo private. Documentamos COMO acessar; valores ficam
+> civm, mesmo private. Documentamos COMO acessar; valores ficam
 > fora.
 
 ## O que vai NESTE repo (público, versionado)
@@ -44,7 +44,7 @@
 No laptop do operador (NÃO no repo):
 
 ```bash
-# ~/.ssh/config (NUNCA commitar; este arquivo NÃO vai pra ci-vm)
+# ~/.ssh/config (NUNCA commitar; este arquivo NÃO vai pra civm)
 Host civm
     HostName <SEU_IP_OU_DOMINIO>
     User <SEU_USER>
