@@ -2,44 +2,48 @@
 
 > **Ver tambem:**
 > - [`MULTI-PROJECT-RUNNER.md`](./MULTI-PROJECT-RUNNER.md) — runner
->   self-hosted compartilhado entre N repos do mesmo dono da VM; setup
->   multi-runner; isolamento por job. **Doc do admin da VM**, nao deste
->   repo: cada repo e' agnostico de quem mais usa o label.
-> - [`LOCAL-CI.md`](./LOCAL-CI.md) — `compexhubctl ci local` para validacao
->   antes de push.
-> - `compexhubctl ci billing-status` — detector Go canonico (chamavel
->   via `go run github.com/<owner>/compexhub/tools/compexhubctl@latest`).
+>   self-hosted compartilhado entre N repos; setup multi-runner;
+>   isolamento por job. **Doc do admin da VM**.
+> - [`ADVOQ-ADOPTION.md`](./ADVOQ-ADOPTION.md) — passo-a-passo "1
+>   comando" pra adotar ci-vm em peer novo (template advoq).
+> - `civmctl billing-status` — detector Go canonico no proprio ci-vm
+>   (zero dep cross-repo, zero PAT, usa GITHUB_TOKEN auto-injetado).
+>   Cada peer pode chamar diretamente sem importar nada externo.
 >
-> **Modelo conceitual (importante):** o gate de verdade do projeto e'
-> `compexhubctl ci local --clean` que voce roda no laptop ANTES de push
-> (ver [`LOCAL-CI.md`](./LOCAL-CI.md) §"Modelo conceitual"). Este runbook
-> NAO descreve gate alternativo de validacao. Descreve **como manter o
-> checkmark verde no PR** quando GitHub Actions billing esta bloqueado,
-> porque branch protection precisa de algo verde mas a validacao real
-> ja aconteceu antes do push.
+> **Modelo conceitual:** o gate de verdade de cada peer roda no laptop
+> ANTES de push (cada projeto define o seu — npm script, devctl Go,
+> compexhubctl, etc). Este runbook NAO descreve gate alternativo de
+> validacao. Descreve **como manter o checkmark verde no PR** quando
+> GitHub Actions billing esta bloqueado, porque branch protection
+> precisa de algo verde mas a validacao real ja aconteceu antes do
+> push.
 >
-> Em outras palavras: vitae-ci e' **mirror visivel no GitHub**, nao
-> "oficina alternativa de teste". O codigo ja foi testado local — o
-> mirror so existe pra postar o resultado onde branch protection olha.
+> Em outras palavras: o runner self-hosted (label `vitae-ci`) e'
+> **mirror visivel no GitHub**, nao "oficina alternativa de teste".
+> O codigo ja foi testado local — o mirror so existe pra postar o
+> resultado onde branch protection olha.
 >
 > **Duas camadas de mirror:**
 >
-> **Camada 1 — automatica (workflow ci.yml refatorado em 2026-05-10):**
+> **Camada 1 — automatica (workflow router pattern):**
 > Job `ci-router` em runner self-hosted `vitae-ci` consulta o detector
-> heuristico (`compexhubctl ci billing-status` via gh run list) e decide
+> heuristico (`civmctl billing-status --repo=<owner>/<repo>`) e decide
 > entre `ubuntu-latest` (GitHub-hosted, custa minutos) ou `vitae-ci`
-> (mirror sem custo). Job final `Gates (typecheck, test, build, invariants)`
-> consolida resultado em vitae-ci e e' o check canonico para branch
-> protection. Zero-touch: PR se beneficia automaticamente.
+> (mirror sem custo). Job final aggregator (`Gates ...`) consolida
+> resultado em vitae-ci e e' o check canonico para branch protection.
+> Zero-touch: PR se beneficia automaticamente. Zero-PAT: usa
+> `secrets.GITHUB_TOKEN` auto-injetado pelo Actions.
 >
-> **Camada 2 — manual (compexhubctl ci):** quando a Camada 1 nao bastar
-> (ex.: vitae-ci offline ou novo repo sem workflow refatorado), comando
-> `compexhubctl ci local --report-pr <N>` posta check `Local VM CI` na PR
-> via gh api manualmente.
+> **Camada 2 — manual:** quando a Camada 1 nao bastar (ex.: vitae-ci
+> offline OU peer novo sem workflow refatorado), o admin posta check
+> `Local VM CI` na PR via gh api manualmente. Cada peer mantem seu
+> "manual reporter" (compexhub: `compexhubctl ci local --report-pr <N>`;
+> advoq: `devctl ...`; vitae: script proprio). Camada 2 NAO e'
+> uniforme entre peers — cada um decide.
 >
-> **O que este runbook NAO entrega:** rotacao automatica do GITHUB_TOKEN
-> (gerenciado pelo GitHub), provisioning do runner vitae-ci (ver secao
-> Pre-requisitos abaixo).
+> **O que este runbook NAO entrega:** rotacao do GITHUB_TOKEN
+> (gerenciado pelo GitHub), provisioning do runner vitae-ci (ver
+> [`MULTI-PROJECT-RUNNER.md`](./MULTI-PROJECT-RUNNER.md)).
 
 ## Decisao de implementacao (Camada 1)
 
