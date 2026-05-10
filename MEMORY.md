@@ -325,3 +325,45 @@ brutos aqui.
   - Criada issue GitHub `#1` ("Hardening das operações do runner civm")
     com labels `type:feature`, `area:civmctl`, `area:runner` e assignee
     `emersonbusson` para linkar a PR.
+
+## 2026-05-10 — civm-v1-finalization-ssd
+
+- **Branch:** main
+- **Scope:** formalizacao SSDV3 da v1 operacional do civm.
+- **Goal:** registrar trilha objetiva para considerar o produto finalizado
+  como v1 operacional: repo limpo, CI verde, VM operacional e `DEFERRED`
+  fora da v1.
+- **Actions:**
+  - Criada issue GitHub `#3` ("Formalizar civm v1.0.0 operacional")
+    com labels `documentation` e `area:civmctl`.
+  - Criados `docs/specs/civm-v1-finalization/PRD.md`,
+    `docs/specs/civm-v1-finalization/SPEC.md` e
+    `docs/specs/civm-v1-finalization/IMPL.md`.
+  - `IMPL.md` registra a base `0fdf543`, CI verde em `main`, validacoes
+    locais e estado da VM.
+- **Validations:**
+  - `go vet ./...` passou.
+  - `go build ./...` passou.
+  - `go test -race -count=1 ./...` passou.
+  - `go test -count=1 -cover ./internal/...` passou; todos os pacotes
+    `internal/**` ficaram acima de 80%.
+  - `git diff --check` passou.
+  - Ultimo CI em `main` (`25641375952`) passou com `Build + test civmctl`,
+    `Validate templates and runbooks` e `Self-hosted runner smoke`.
+  - VM tinha `/usr/local/bin/civmctl` instalado com sha256
+    `cbdc1534a3a89653eae7e5400309dbe39a0925720a8fcd408cdfe5875ff7e9bd`.
+  - VM `health` retornou exit 1 apenas por warning `LAST`; DISK/MEM/RUNNERS
+    e timers estavam OK.
+  - VM `doctor --json` confirmou runners `civm-self`, `civm-compexhub`,
+    `civm-vitae` e `civm-advoq` online.
+- **Follow-up validations:**
+  - `civmctl idle-check` foi revalidado em 2026-05-11T00:05:53Z e retornou
+    `idle`, exit 0.
+  - VM `doctor --json` confirmou os mesmos runners online com `busy=false`.
+  - `civmctl idle-check` foi revalidado novamente em 2026-05-11T00:21:41Z
+    antes da publicacao e retornou `idle`, exit 0.
+- **Commits:** este commit de formalizacao SSDV3.
+- **Open items:**
+  - Aguardar CI remoto do commit de formalizacao depois do push.
+- **Next step:** publicar release `v1.0.0` e fechar issue `#3` se o CI remoto
+  do commit de formalizacao passar.
