@@ -84,7 +84,7 @@ EXEMPLOS
   civmctl runner add --repo=owner/repo --token=... --short=cmpx --execute
   civmctl runner remove --short=cmpx --token=$(gh api -X POST .../remove-token) --execute
   civmctl runner list --json | jq '.runners[] | select(.repo == "emersonbusson/ci-vm")'
-  civmctl runner restart --short=vitae-ci-1 --execute
+  civmctl runner restart --short=civm-1 --execute
   civmctl runner upgrade --short=cmpx --new-version=2.335.0 --execute
   civmctl reverse-watchdog --max-age-hours=2
   sudo civmctl bootstrap-everything --units-source=/opt/ci-vm/deploy/systemd --execute

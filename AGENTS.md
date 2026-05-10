@@ -8,7 +8,7 @@ Resumo terso para CLIs estilo Codex/aider/Jules. Para visão completa, ler `READ
 projetos do mesmo dono (compexhub, vitae, advoq, futuros). Hospeda:
 
 1. **`civmctl`** — Go CLI zero-effort para provisionar e manter a VM
-   self-hosted que serve como GitHub Actions runner com label `vitae-ci`.
+   self-hosted que serve como GitHub Actions runner com label `civm`.
 2. **Templates de workflow** copiáveis pelos peer repos.
 3. **Runbooks operacionais** da VM (provisionamento, cleanup, troubleshooting).
 4. **Disciplinas e regras** portáveis (Kahneman, SSDV3, invariantes).

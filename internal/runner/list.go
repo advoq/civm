@@ -12,7 +12,7 @@ import (
 type Status struct {
 	UnitName    string `json:"unit_name"`
 	Repo        string `json:"repo"`         // extraído do unit name (owner-repo)
-	Name        string `json:"name"`         // ex: vitae-ci-cmpx
+	Name        string `json:"name"`         // ex: civm-cmpx
 	LoadState   string `json:"load_state"`   // loaded, not-found, etc
 	ActiveState string `json:"active_state"` // active, inactive, failed
 	SubState    string `json:"sub_state"`    // running, dead, etc
@@ -77,7 +77,7 @@ func parseSystemctlList(stdout string) []Status {
 }
 
 // parseRunnerUnit extracts repo and runner-name from a unit like
-// "actions.runner.emersonbusson-ci-vm.vitae-ci-1.service".
+// "actions.runner.emersonbusson-ci-vm.civm-1.service".
 func parseRunnerUnit(unit string) (repo, name string) {
 	const prefix = "actions.runner."
 	const suffix = ".service"
@@ -85,7 +85,7 @@ func parseRunnerUnit(unit string) (repo, name string) {
 		return "", ""
 	}
 	rest := strings.TrimSuffix(strings.TrimPrefix(unit, prefix), suffix)
-	// rest = "emersonbusson-ci-vm.vitae-ci-1"
+	// rest = "emersonbusson-ci-vm.civm-1"
 	idx := strings.LastIndex(rest, ".")
 	if idx == -1 {
 		return rest, ""

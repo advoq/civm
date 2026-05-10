@@ -2,7 +2,7 @@
 #
 # Padrao optimistic-retry: sempre tenta ubuntu-latest primeiro; se falhar
 # em <60s (sintoma de billing block ou erro de provisionamento), dispara
-# automaticamente a versao local em vitae-ci. Self-healing, zero auth.
+# automaticamente a versao local em civm. Self-healing, zero auth.
 #
 # Quando usar este template em vez de ci.yml com ci-router:
 #   - Repositorio sem GITHUB_TOKEN auto-injetado (raro, mas possivel)
@@ -22,7 +22,7 @@
 #     (lint, test, build, etc) — nao copiar literalmente os "echo"
 #   3. Ajustar branch protection para exigir o check
 #     "Gates (typecheck, test, build, invariants)" como required
-#   4. Garantir que vitae-ci runner esta registrado e online (ver
+#   4. Garantir que civm runner esta registrado e online (ver
 #      docs/runbooks/MULTI-PROJECT-RUNNER.md)
 
 name: CI
@@ -87,15 +87,15 @@ jobs:
         id: flag
         run: echo "result=success" >> $GITHUB_OUTPUT
 
-  # Fallback em vitae-ci self-hosted. Roda se gates-remote nao concluiu
+  # Fallback em civm self-hosted. Roda se gates-remote nao concluiu
   # success por qualquer motivo (billing block, transient error, code
   # bug). Em billing block, gates-remote morre em ~5s sem step rodar;
   # gates-local completa o trabalho.
   gates-local:
-    name: Gates (local fallback, vitae-ci)
+    name: Gates (local fallback, civm)
     needs: gates-remote
     if: needs.gates-remote.result != 'success'
-    runs-on: [self-hosted, vitae-ci]
+    runs-on: [self-hosted, civm]
     steps:
       - uses: actions/checkout@v4
 
@@ -127,7 +127,7 @@ jobs:
     name: Gates (typecheck, test, build, invariants)
     needs: [gates-remote, gates-local]
     if: always()
-    runs-on: [self-hosted, vitae-ci]
+    runs-on: [self-hosted, civm]
     steps:
       - name: Aggregate
         env:
@@ -141,7 +141,7 @@ jobs:
             exit 0
           fi
           if [ "$LOCAL" = "success" ]; then
-            echo "::notice::Gates passou em vitae-ci (fallback ativado)"
+            echo "::notice::Gates passou em civm (fallback ativado)"
             exit 0
           fi
           echo "::error::Gates falhou em ambos os runners"

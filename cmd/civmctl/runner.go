@@ -123,7 +123,7 @@ func runRunnerAdd(args []string) int {
 	repo := fs.String("repo", "", "owner/repo (ex: emersonbusson/compexhub)")
 	token := fs.String("token", "", "registration token (efemero ~1h via gh api)")
 	short := fs.String("short", "", "suffix curto do diretorio (ex: cmpx, vitae)")
-	label := fs.String("label", "vitae-ci", "labels CSV")
+	label := fs.String("label", "civm", "labels CSV")
 	runnerVersion := fs.String("runner-version", "2.334.0", "versao do actions/runner")
 	baseDir := fs.String("base-dir", "", "base dir (default: \\$HOME do user atual)")
 	runAs := fs.String("run-as", "", "user que vai rodar o service (default: user atual)")

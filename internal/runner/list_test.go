@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-const fakeSystemctlOutput = `  actions.runner.emersonbusson-ci-vm.vitae-ci-1.service        loaded active running GitHub Actions Runner (emersonbusson-ci-vm.vitae-ci-1)
-  actions.runner.emersonbusson-compexhub.vitae-ci-cmpx.service loaded active running GitHub Actions Runner (emersonbusson-compexhub.vitae-ci-cmpx)
-  actions.runner.emersonbusson-vitae.vitae-ci-vitae.service    loaded active running GitHub Actions Runner (emersonbusson-vitae.vitae-ci-vitae)
+const fakeSystemctlOutput = `  actions.runner.emersonbusson-ci-vm.civm-1.service        loaded active running GitHub Actions Runner (emersonbusson-ci-vm.civm-1)
+  actions.runner.emersonbusson-compexhub.civm-cmpx.service loaded active running GitHub Actions Runner (emersonbusson-compexhub.civm-cmpx)
+  actions.runner.emersonbusson-vitae.civm-vitae.service    loaded active running GitHub Actions Runner (emersonbusson-vitae.civm-vitae)
 `
 
 func TestList_ParsesAllThree(t *testing.T) {
@@ -28,9 +28,9 @@ func TestList_ParsesAllThree(t *testing.T) {
 		t.Fatalf("len = %d, want 3", len(items))
 	}
 	wantRepos := map[string]string{
-		"vitae-ci-1":     "emersonbusson/ci-vm",
-		"vitae-ci-cmpx":  "emersonbusson/compexhub",
-		"vitae-ci-vitae": "emersonbusson/vitae",
+		"civm-1":     "emersonbusson/ci-vm",
+		"civm-cmpx":  "emersonbusson/compexhub",
+		"civm-vitae": "emersonbusson/vitae",
 	}
 	for _, s := range items {
 		if want := wantRepos[s.Name]; want != s.Repo {
@@ -105,9 +105,9 @@ func TestParseRunnerUnit(t *testing.T) {
 		wantName string
 	}{
 		{
-			"actions.runner.emersonbusson-ci-vm.vitae-ci-1.service",
+			"actions.runner.emersonbusson-ci-vm.civm-1.service",
 			"emersonbusson/ci-vm",
-			"vitae-ci-1",
+			"civm-1",
 		},
 		{
 			"actions.runner.owner-deep-repo-name.runner-name.service",

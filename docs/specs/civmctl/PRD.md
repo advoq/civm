@@ -8,7 +8,7 @@ nao adjetivo), #5 (lib nova exige entrada).
 ## 1. Resumo
 
 Construir `civmctl`, Go CLI de **zero-effort** que provisiona e mantém a VM
-self-hosted que serve como GitHub Actions runner com label `vitae-ci`.
+self-hosted que serve como GitHub Actions runner com label `civm`.
 Operações idempotentes, paridade com `ubuntu-latest` (Ubuntu 24.04 LTS),
 cleanup automatizado via systemd timer.
 
@@ -62,7 +62,7 @@ Alternativas consideradas e descartadas:
   apt cache. Default `--dry-run`. Reporta bytes recuperados.
 - **RF-4** `civmctl health`: exibe disk free, memória, runners ativos,
   última execução de cleanup. Exit 0 OK, 1 warning, 2 critical.
-- **RF-5** `civmctl runner add --token=X --url=Y --labels=vitae-ci`:
+- **RF-5** `civmctl runner add --token=X --url=Y --labels=civm`:
   registra novo runner GitHub. Idempotente (skip se já existe).
 - **RF-6** Help auto-gerado para todos subcomandos (`civmctl --help`,
   `civmctl <sub> --help`).
@@ -113,7 +113,7 @@ admin@vm $ sudo civmctl bootstrap --execute
 $ civmctl health
 DISK    /home/runner/_work    89 GB free / 128 GB    [OK]
 MEM     8.2 GB free / 32 GB                          [OK]
-RUNNERS vitae-ci-1 (online), vitae-ci-2 (online)    [OK]
+RUNNERS civm-1 (online), civm-2 (online)    [OK]
 LAST    cleanup 6h ago, recovered 14.8 GB            [OK]
 EXIT    0
 ```

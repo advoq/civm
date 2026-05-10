@@ -104,8 +104,8 @@ brutos aqui.
   - Node v24.15.0 LTS Krypton instalado via nvm
   - systemd timer civmctl-cleanup.timer ENABLED + ACTIVE
   - actions/runner v2.334.0 baixado e configurado
-  - Runner registrado como vitae-ci-1, label vitae-ci
-  - Service actions.runner.emersonbusson-ci-vm.vitae-ci-1 ativo
+  - Runner registrado como civm-1, label civm
+  - Service actions.runner.emersonbusson-ci-vm.civm-1 ativo
   - Workflow ci.yml ganhou job self-hosted-smoke
   - Pin de Go atualizado 1.25.9 -> 1.26.3 em internal/specs/specs.go
   - Pin de Node atualizado 20.20.2 -> 24.15.0
@@ -119,7 +119,7 @@ brutos aqui.
     cleanup, post checkout, complete)
   - Jobs ubuntu-latest no mesmo run: 0 steps (= billing block
     GitHub Actions confirmado pela 3a vez nesta sessao)
-  - Comprovacao operacional: vitae-ci serviu 100% mesmo com
+  - Comprovacao operacional: civm serviu 100% mesmo com
     billing-hosted bloqueado
   - Coverage: specs 100, bootstrap 84.1, cleanup 84.5, drift
     88.1, health 88.4 (todos verde com -race)
@@ -144,7 +144,7 @@ brutos aqui.
   gha-ubuntu-2404 para compexhub e vitae, sem mexer nos repos peer
 - **Goal:** completar topologia 1-runner-por-peer descrita em
   runbooks/MULTI-PROJECT-RUNNER.md, deixando todos peers prontos
-  para usar vitae-ci como fallback billing-block.
+  para usar civm como fallback billing-block.
 - **Decisao do usuario (esta sessao):**
   - advoq SKIP (sem ci-router, exigiria modificar repo)
   - compexhub + vitae: 1 runner por repo
@@ -152,15 +152,15 @@ brutos aqui.
   - gh api token de registracao para compexhub e vitae
   - Download actions/runner v2.334.0 em ~/actions-runner-compexhub
     e ~/actions-runner-vitae (diretorios separados)
-  - config.sh --unattended --labels vitae-ci com nomes vitae-ci-cmpx
-    e vitae-ci-vitae
+  - config.sh --unattended --labels civm com nomes civm-cmpx
+    e civm-vitae
   - svc.sh install + start em ambos
   - Atualizado runbooks/MULTI-PROJECT-RUNNER.md com pattern verificado
 - **Validations:**
   - gh api repos/emersonbusson/compexhub/actions/runners ->
-    vitae-ci-cmpx online com label vitae-ci
+    civm-cmpx online com label civm
   - gh api repos/emersonbusson/vitae/actions/runners ->
-    vitae-ci-vitae online com label vitae-ci (alem de
+    civm-vitae online com label civm (alem de
     vitae-local-vm-1 pre-existente)
   - systemctl list-units actions.runner.* na VM mostra 3 services
     active (ci-vm, compexhub, vitae)
@@ -176,7 +176,7 @@ brutos aqui.
   - advoq adoption: fora de escopo desta sessao
 - **Next step:** monitorar primeiro push do usuario em compexhub
   ou vitae apos esta sessao para validar que job entra em
-  vitae-ci-cmpx ou vitae-ci-vitae quando billing block ativo
+  civm-cmpx ou civm-vitae quando billing block ativo
 
 ## 2026-05-10 — port-billing-status-and-advoq-doc
 
@@ -202,7 +202,7 @@ brutos aqui.
     comando civmctl runner add + 1 cp template + push)
   - templates/advoq-ci-router.yml.template: workflow coexiste
     com go.yml e web.yml existentes do advoq, adiciona
-    Gates aggregator em vitae-ci com smoke (go vet, web
+    Gates aggregator em civm com smoke (go vet, web
     typecheck) sem modificar workflows existentes
   - .github/workflows/ci.yml: smoke step civmctl billing-status
     em self-hosted-smoke job (validate end-to-end remoto)

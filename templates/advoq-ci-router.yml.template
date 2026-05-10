@@ -1,21 +1,21 @@
 # advoq-ci-router.yml.template — fallback workflow para advoq
 #
 # Coexiste com go.yml e web.yml existentes. Não os modifica.
-# Adiciona um aggregator "Gates (vitae-ci fallback)" que sempre roda
+# Adiciona um aggregator "Gates (civm fallback)" que sempre roda
 # em self-hosted, completando mesmo quando billing-hosted está bloqueado.
 #
 # Adoção:
 #   cp ~/codespace/ci-vm/templates/advoq-ci-router.yml.template \
 #      ~/codespace/advoq/.github/workflows/ci-router.yml
 #
-# Branch protection: marcar "Gates (vitae-ci fallback)" como required
+# Branch protection: marcar "Gates (civm fallback)" como required
 # OU manter go.yml/web.yml required com este como informativo.
 #
-# Pré-req: runner vitae-ci-advoq online em emersonbusson/advoq (via
+# Pré-req: runner civm-advoq online em emersonbusson/advoq (via
 # `civmctl runner add --repo=emersonbusson/advoq --short=advoq --execute`).
 # Ver runbooks/ADVOQ-ADOPTION.md.
 
-name: CI Router (vitae-ci fallback)
+name: CI Router (civm fallback)
 
 on:
   pull_request:
@@ -34,7 +34,7 @@ permissions:
 jobs:
   ci-router:
     name: CI Router
-    runs-on: [self-hosted, vitae-ci]
+    runs-on: [self-hosted, civm]
     timeout-minutes: 5
     outputs:
       use_local: ${{ steps.decide.outputs.use_local }}
@@ -69,14 +69,14 @@ jobs:
             echo "route_reason=billing-ok (go=$rc_go web=$rc_web)" >> "$GITHUB_OUTPUT"
           fi
 
-  # Gates aggregator. Sempre roda em vitae-ci. Branch protection (opcional)
-  # pode marcar este check como required: "Gates (vitae-ci fallback)".
+  # Gates aggregator. Sempre roda em civm. Branch protection (opcional)
+  # pode marcar este check como required: "Gates (civm fallback)".
   # Não substitui go.yml/web.yml; é informativo + guarantee de check verde
   # quando billing-block ativa fallback.
-  gates-vitae-ci:
-    name: Gates (vitae-ci fallback)
+  gates-civm:
+    name: Gates (civm fallback)
     needs: ci-router
-    runs-on: [self-hosted, vitae-ci]
+    runs-on: [self-hosted, civm]
     steps:
       - uses: actions/checkout@v4
 
@@ -124,7 +124,7 @@ jobs:
 
       - name: Post Local VM CI status to commit (cross-peer reporter)
         # Demonstra padrao civmctl ci local-report. Util quando branch
-        # protection esperar check name fixo "Local VM CI (vitae-ci fallback)"
+        # protection esperar check name fixo "Local VM CI (civm fallback)"
         # mas o job aggregator nao for o source-of-truth do check
         # (ex.: peer adota gradualmente sem mexer em branch protection).
         # Posta status independente do conclusion do job (if: always()).
@@ -144,7 +144,7 @@ jobs:
             --repo="${{ github.repository }}" \
             --sha="${{ github.sha }}" \
             --state="$state" \
-            --context="Local VM CI (vitae-ci fallback)" \
-            --description="advoq smoke + go vet multi-module + web typecheck on vitae-ci runner" \
+            --context="Local VM CI (civm fallback)" \
+            --description="advoq smoke + go vet multi-module + web typecheck on civm runner" \
             --target-url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             || echo "ci local-report falhou (warning, gates ja decidiram)"

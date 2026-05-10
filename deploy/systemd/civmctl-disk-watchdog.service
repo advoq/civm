@@ -1,6 +1,6 @@
 [Unit]
 Description=civmctl disk-watchdog (cleanup agressivo se disk >80%%)
-Documentation=https://github.com/emersonbusson/ci-vm/blob/main/internal/diskwatchdog/
+Documentation=https://github.com/emersonbusson/civm/blob/main/internal/diskwatchdog/
 After=network-online.target
 ConditionPathExists=/usr/local/bin/civmctl
 

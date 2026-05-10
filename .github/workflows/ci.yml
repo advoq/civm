@@ -134,11 +134,11 @@ jobs:
           /tmp/civmctl cleanup --dry-run --no-docker --no-apt --tmp-dir=/tmp --work-dir=/tmp > /dev/null
 
   self-hosted-smoke:
-    name: Self-hosted runner smoke (vitae-ci)
-    runs-on: [self-hosted, vitae-ci]
+    name: Self-hosted runner smoke (civm)
+    runs-on: [self-hosted, civm]
     # Sem needs: roda em paralelo aos jobs ubuntu-latest. Se billing
     # estiver bloqueado e ubuntu-latest morrer, este job ainda valida
-    # vitae-ci sozinho (que e o ponto: garantir que VM serve mesmo sem
+    # civm sozinho (que e o ponto: garantir que VM serve mesmo sem
     # billing).
     steps:
       - uses: actions/checkout@v4

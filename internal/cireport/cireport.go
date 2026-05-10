@@ -1,7 +1,7 @@
 // Package cireport posts a commit status to GitHub via the Statuses API.
 // Designed for "manual reporter" use cases when the automatic Camada 1
 // (router workflow) cannot run — ex.: peer is offline, billing-block
-// AND vitae-ci runner offline. Each peer can invoke from its own
+// AND civm runner offline. Each peer can invoke from its own
 // pre-push gate runner.
 //
 // Stdlib-only (uses gh CLI via os/exec, no SDK).

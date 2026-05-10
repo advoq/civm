@@ -11,7 +11,7 @@ import (
 
 func validUpgradeOpts() UpgradeOptions {
 	return UpgradeOptions{
-		Short:       "vitae-ci-1",
+		Short:       "civm-1",
 		NewVersion:  "2.335.0",
 		BaseDir:     "/home/emdev",
 		Execute:     false,
@@ -36,10 +36,10 @@ func TestUpgrade_DryRun_ResolvesUnitAndDir(t *testing.T) {
 	if r.Err != nil {
 		t.Fatalf("r.Err = %v", r.Err)
 	}
-	if !strings.Contains(r.UnitResolved, "vitae-ci-1") {
+	if !strings.Contains(r.UnitResolved, "civm-1") {
 		t.Errorf("UnitResolved = %q", r.UnitResolved)
 	}
-	if r.Dir != "/home/emdev/actions-runner-vitae-ci-1" {
+	if r.Dir != "/home/emdev/actions-runner-civm-1" {
 		t.Errorf("Dir = %q", r.Dir)
 	}
 	if !strings.Contains(r.WouldDo, "2.335.0") {
@@ -258,7 +258,7 @@ func TestRenderUpgradeTable_DryRun(t *testing.T) {
 	var buf bytes.Buffer
 	RenderUpgradeTable(r, o, &buf)
 	out := buf.String()
-	for _, want := range []string{"DRY-RUN", "2.335.0", "vitae-ci-1", "(seria-aplicado)", "--execute"} {
+	for _, want := range []string{"DRY-RUN", "2.335.0", "civm-1", "(seria-aplicado)", "--execute"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("RenderUpgrade omitiu %q", want)
 		}

@@ -24,9 +24,9 @@ civmctl runner add \
 
 Faz tudo:
 - mkdir `~/actions-runner-advoq` na VM
-- baixa actions/runner v2.334.0 (paridade com vitae-ci-1, vitae-ci-cmpx, vitae-ci-vitae)
+- baixa actions/runner v2.334.0 (paridade com civm-1, civm-cmpx, civm-vitae)
 - extrai
-- `./config.sh --unattended --labels vitae-ci --name vitae-ci-advoq --replace`
+- `./config.sh --unattended --labels civm --name civm-advoq --replace`
 - `sudo ./svc.sh install emdev`
 - `sudo ./svc.sh start`
 
@@ -36,21 +36,21 @@ Token mascarado nos logs. Idempotente (re-rodar substitui).
 
 ```bash
 gh api /repos/emersonbusson/advoq/actions/runners --jq '.runners[]|"\(.name) \(.status) \(.labels[].name)"'
-# Esperado: vitae-ci-advoq online (com label vitae-ci)
+# Esperado: civm-advoq online (com label civm)
 ```
 
 E na VM:
 
 ```bash
-ssh gha-ubuntu-2404 "systemctl is-active actions.runner.emersonbusson-advoq.vitae-ci-advoq.service"
+ssh gha-ubuntu-2404 "systemctl is-active actions.runner.emersonbusson-advoq.civm-advoq.service"
 # Esperado: active
 ```
 
 ## Passo 2 — Adotar workflow (quando você decidir push em advoq)
 
 Advoq atualmente roda 100% em `ubuntu-latest` (workflows `go.yml`,
-`web.yml`). Pra ativar fallback billing-block via vitae-ci, adicione um
-job router que decide entre `ubuntu-latest` e `[self-hosted, vitae-ci]`.
+`web.yml`). Pra ativar fallback billing-block via civm, adicione um
+job router que decide entre `ubuntu-latest` e `[self-hosted, civm]`.
 
 Template pronto:
 
@@ -60,7 +60,7 @@ cp ~/codespace/ci-vm/templates/advoq-ci-router.yml.template \
 ```
 
 O template:
-- Roda `ci-router` em `[self-hosted, vitae-ci]` (decide via `civmctl billing-status`)
+- Roda `ci-router` em `[self-hosted, civm]` (decide via `civmctl billing-status`)
 - Output `use_local` (true se billing-blocked)
 - Gates aggregator condicional (paralelo aos `go.yml`/`web.yml` existentes)
 
@@ -71,7 +71,7 @@ modificar `go.yml`/`web.yml` na primeira iteração — coexistem.
 
 Só adicionar `ci-router.yml` no advoq. Os workflows go.yml e web.yml
 continuam rodando em ubuntu-latest (com risco de billing block matar
-em <10s). O router vai postar `Gates (vitae-ci fallback)` como check
+em <10s). O router vai postar `Gates (civm fallback)` como check
 adicional, sempre verde quando billing-block ativa fallback.
 
 ### Adoção avançada (Tier 2: rotear go.yml e web.yml)
@@ -80,7 +80,7 @@ Editar `go.yml` e `web.yml` pra adicionar `runs-on:` dinâmico igual
 compexhub/vitae fazem:
 
 ```yaml
-runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","vitae-ci"]') || 'ubuntu-latest' }}
+runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
 ```
 
 Nota: jobs `services` matrix de go.yml requer ferramentas Go disponíveis
@@ -94,7 +94,7 @@ Node 24 (já está: v24.15.0 LTS Krypton via nvm).
 | 1 comando registra runner | civmctl encapsula toda a sequência, dry-run default |
 | Template separado em `ci-router.yml` | Não toca workflows existentes; coexiste; rollback trivial via `git rm` |
 | Token efêmero gh api | Sem PAT persistente; sem rotação; sem secret novo |
-| Label `vitae-ci` reuso | Mesmo padrão dos peers já adotados; zero divergência |
+| Label `civm` reuso | Mesmo padrão dos peers já adotados; zero divergência |
 | Push trigger natural | Sem precisar `workflow_dispatch:` adicionado |
 
 ## Rollback (1 comando)
@@ -122,11 +122,11 @@ como antes (com risco de billing-block continuar matando jobs em <10s).
 ## Critério de sucesso
 
 - `gh api /repos/emersonbusson/advoq/actions/runners` retorna
-  `vitae-ci-advoq online`
-- Push em advoq dispara `ci-router` que ELE roda em vitae-ci-advoq
+  `civm-advoq online`
+- Push em advoq dispara `ci-router` que ELE roda em civm-advoq
   (verificar via `gh run view <id> --json jobs --jq '.jobs[] | "\(.name) runner=\(.runnerName)"'`)
-- Em billing-block: jobs `gates-vitae-ci` rodam normalmente em
-  vitae-ci-advoq enquanto go.yml/web.yml morrem em ubuntu-latest;
+- Em billing-block: jobs `gates-civm` rodam normalmente em
+  civm-advoq enquanto go.yml/web.yml morrem em ubuntu-latest;
   pelo menos UM job verde permite branch protection passar (após
   configurar required check)
 

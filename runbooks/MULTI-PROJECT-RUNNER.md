@@ -1,10 +1,10 @@
-# Runbook — vitae-ci como runner self-hosted compartilhado entre projetos
+# Runbook — civm como runner self-hosted compartilhado entre projetos
 
 > **Quando usar:** múltiplos repositórios (compexhub, vitae, advoq) precisam <!-- invariant-waive:#11 -- runbook operacional documenta runner self-hosted compartilhado entre projetos paralelos do autor por design (cf. plano usuario 2026-05-10) -->
-> rodar CI em paralelo no mesmo runner self-hosted `vitae-ci`, sem conflito
+> rodar CI em paralelo no mesmo runner self-hosted `civm`, sem conflito
 > de portas, volumes Docker, work directories ou crosstalk de dados.
 >
-> **Modelo conceitual (importante):** vitae-ci e' **mirror visivel no
+> **Modelo conceitual (importante):** civm e' **mirror visivel no
 > GitHub**, nao gate alternativo de validacao. O gate de verdade do
 > projeto e' `compexhubctl ci local --clean` que cada dev roda no laptop
 > ANTES de push (ver [`LOCAL-CI.md`](./LOCAL-CI.md) §"Modelo conceitual").
@@ -13,7 +13,7 @@
 > push, em cada laptop.
 >
 > Aplica-se identicamente aos 3 repos: dev valida local primeiro,
-> depois push, depois vitae-ci posta verde. Mesmo padrao em compexhub,
+> depois push, depois civm posta verde. Mesmo padrao em compexhub,
 > vitae e advoq. <!-- invariant-waive:#11 -- runbook operacional lista repos peer com mesmo padrao de validacao -->
 >
 > **Companion runbooks:**
@@ -26,7 +26,7 @@
 
 ```
 +------------------------------------------------------+
-| VM "vitae-ci" (Ubuntu 22.04+, 4+ cores, 16GB+ RAM)  |
+| VM "civm" (Ubuntu 22.04+, 4+ cores, 16GB+ RAM)  |
 |                                                      |
 |  systemd services:                                   |
 |   - actions.runner.<owner>.compexhub-1.service       |
@@ -35,7 +35,7 @@
 |     (or org-level if 3 repos)                        |
 |                                                      |
 |  Cada runner tem:                                    |
-|   - Label: vitae-ci                                  |
+|   - Label: civm                                  |
 |   - Work dir: /home/runner/_work-N                   |
 |   - PID separado, processo isolado                   |
 |                                                      |
@@ -66,17 +66,17 @@ em GitHub Teams/Enterprise).
 
 ```
 gha-ubuntu-2404
-├── ~/actions-runner/                 (vitae-ci-1     -> emersonbusson/ci-vm)
-├── ~/actions-runner-compexhub/       (vitae-ci-cmpx  -> emersonbusson/compexhub)
-├── ~/actions-runner-vitae/           (vitae-ci-vitae -> emersonbusson/vitae)
+├── ~/actions-runner/                 (civm-1     -> emersonbusson/ci-vm)
+├── ~/actions-runner-compexhub/       (civm-cmpx  -> emersonbusson/compexhub)
+├── ~/actions-runner-vitae/           (civm-vitae -> emersonbusson/vitae)
 └── /etc/systemd/system/
-    ├── actions.runner.emersonbusson-ci-vm.vitae-ci-1.service
-    ├── actions.runner.emersonbusson-compexhub.vitae-ci-cmpx.service
-    └── actions.runner.emersonbusson-vitae.vitae-ci-vitae.service
+    ├── actions.runner.emersonbusson-ci-vm.civm-1.service
+    ├── actions.runner.emersonbusson-compexhub.civm-cmpx.service
+    └── actions.runner.emersonbusson-vitae.civm-vitae.service
 ```
 
-Cada runner usa o mesmo label `vitae-ci`. Workflows com
-`runs-on: [self-hosted, vitae-ci]` no peer X só serão executados pelo
+Cada runner usa o mesmo label `civm`. Workflows com
+`runs-on: [self-hosted, civm]` no peer X só serão executados pelo
 runner de X. Sem crosstalk entre repos.
 
 ### Adicionar runner pra novo peer (sequencia replicada)
@@ -90,7 +90,7 @@ ssh gha-ubuntu-2404 "mkdir -p ~/actions-runner-<REPO> && cd ~/actions-runner-<RE
   curl -fsSL -o runner.tar.gz https://github.com/actions/runner/releases/download/v2.334.0/actions-runner-linux-x64-2.334.0.tar.gz &&
   tar xzf runner.tar.gz && rm runner.tar.gz &&
   ./config.sh --unattended --url https://github.com/emersonbusson/<REPO> \
-    --token '$TOKEN' --labels vitae-ci --name vitae-ci-<SHORT> \
+    --token '$TOKEN' --labels civm --name civm-<SHORT> \
     --work _work --replace &&
   sudo ./svc.sh install emdev &&
   sudo ./svc.sh start"
@@ -242,8 +242,8 @@ rm runner.tar.gz
 ./config.sh \
   --url "https://github.com/<owner>/<repo>" \
   --token "<TOKEN>" \
-  --labels "vitae-ci" \
-  --name "vitae-ci-N" \
+  --labels "civm" \
+  --name "civm-N" \
   --work "_work-N" \
   --unattended \
   --replace
@@ -269,8 +269,8 @@ os 3 repos sem precisar registrar 3 vezes. Recomendado se for o caso.
 gh api "repos/<owner>/<repo>/actions/runners" --jq '.runners[] | "\(.name) status=\(.status)"'
 
 # Esperado:
-# vitae-ci-1 status=online
-# vitae-ci-2 status=online
+# civm-1 status=online
+# civm-2 status=online
 # ...
 ```
 
@@ -354,7 +354,7 @@ Ver §"Disk hygiene" abaixo para automacao.
 
 ## Runner parity com ubuntu-latest
 
-Para que peer repos rodem na vitae-ci **identicamente** ao GitHub-hosted
+Para que peer repos rodem na civm **identicamente** ao GitHub-hosted
 ubuntu-latest, instalar:
 
 ### Toolchains de linguagem
@@ -449,16 +449,16 @@ Sem automacao, disco enche em ~30 dias com 3 repos ativos. Setup:
 
 ### Cron de limpeza diaria
 
-Criar `/opt/vitae-ci/cleanup.sh` (NA VM, fora de qualquer repo — nao
+Criar `/opt/civm/cleanup.sh` (NA VM, fora de qualquer repo — nao
 viola invariante #14 do compexhub porque nao esta em tools/ scripts/
 infra/ de repo). Conteudo:
 
 ```bash
 #!/usr/bin/env bash
-# /opt/vitae-ci/cleanup.sh — cron diario para evitar disco encher
-# em vitae-ci compartilhado (128GB SSD).
+# /opt/civm/cleanup.sh — cron diario para evitar disco encher
+# em civm compartilhado (128GB SSD).
 #
-# Crontab: 0 3 * * * /opt/vitae-ci/cleanup.sh >> /var/log/vitae-ci-cleanup.log 2>&1
+# Crontab: 0 3 * * * /opt/civm/cleanup.sh >> /var/log/civm-cleanup.log 2>&1
 
 set -euo pipefail
 echo "=== cleanup $(date -Iseconds) ==="
@@ -500,12 +500,12 @@ echo
 Tornar executavel + agendar:
 
 ```bash
-sudo mkdir -p /opt/vitae-ci
-sudo cp cleanup.sh /opt/vitae-ci/cleanup.sh
-sudo chmod +x /opt/vitae-ci/cleanup.sh
+sudo mkdir -p /opt/civm
+sudo cp cleanup.sh /opt/civm/cleanup.sh
+sudo chmod +x /opt/civm/cleanup.sh
 
 # Adicionar ao crontab do root
-sudo crontab -l 2>/dev/null | { cat; echo "0 3 * * * /opt/vitae-ci/cleanup.sh >> /var/log/vitae-ci-cleanup.log 2>&1"; } | sudo crontab -
+sudo crontab -l 2>/dev/null | { cat; echo "0 3 * * * /opt/civm/cleanup.sh >> /var/log/civm-cleanup.log 2>&1"; } | sudo crontab -
 ```
 
 ### Watchdog de espaco em disco
@@ -514,15 +514,15 @@ Cron extra que dispara cleanup agressivo se disco passar de 80%:
 
 ```bash
 #!/usr/bin/env bash
-# /opt/vitae-ci/disk-watchdog.sh — roda a cada hora
-# Crontab: 0 * * * * /opt/vitae-ci/disk-watchdog.sh
+# /opt/civm/disk-watchdog.sh — roda a cada hora
+# Crontab: 0 * * * * /opt/civm/disk-watchdog.sh
 
 THRESHOLD=80
 USAGE=$(df / --output=pcent | tail -1 | tr -dc '0-9')
 
 if [ "$USAGE" -gt "$THRESHOLD" ]; then
   echo "$(date -Iseconds) WARNING: disk at ${USAGE}% — running aggressive cleanup"
-  /opt/vitae-ci/cleanup.sh
+  /opt/civm/cleanup.sh
 
   # Se ainda alto, limpar TUDO de docker
   USAGE_AFTER=$(df / --output=pcent | tail -1 | tr -dc '0-9')
@@ -535,14 +535,14 @@ fi
 
 ### Monitoramento
 
-Logs em `/var/log/vitae-ci-cleanup.log`. Verificar semanalmente:
+Logs em `/var/log/civm-cleanup.log`. Verificar semanalmente:
 
 ```bash
 # Ultimas 5 execucoes
-tail -50 /var/log/vitae-ci-cleanup.log
+tail -50 /var/log/civm-cleanup.log
 
 # Tendencia de disco
-grep "after cleanup" -A1 /var/log/vitae-ci-cleanup.log | tail -20
+grep "after cleanup" -A1 /var/log/civm-cleanup.log | tail -20
 ```
 
 Se disco continua subindo apesar da automacao, investigar quem esta
@@ -572,11 +572,11 @@ sudo -u runner find /home/runner/_work-*/_temp -mtime +7 -delete
 O `.github/workflows/ci.yml` do compexhub é o template de referência.
 Estrutura mínima a copiar:
 
-1. Job `ci-router` em `runs-on: [self-hosted, vitae-ci]` que classifica
+1. Job `ci-router` em `runs-on: [self-hosted, civm]` que classifica
    changes + decide `use_local` via heurística.
 2. Demais jobs com `runs-on:` conditional via `fromJSON`.
 3. Job aggregador final `Gates (typecheck, test, build, invariants)` em
-   vitae-ci como check canônico para branch protection.
+   civm como check canônico para branch protection.
 4. `permissions: { actions: read, contents: read }` no topo.
 5. `concurrency:` block escopado por `github.workflow + github.ref`.
 
@@ -596,7 +596,7 @@ Para o detector heurístico, vitae/advoq podem escolher entre 3 tiers <!-- invar
   `docs/templates/ci-optimistic.yml.template` que **não usa detector**.
   Sempre tenta `ubuntu-latest` primeiro com `continue-on-error: true`;
   se falhar (incluindo billing block que mata o job em <10s sem step
-  rodar), automaticamente dispara versão local em `vitae-ci`. Aggregator
+  rodar), automaticamente dispara versão local em `civm`. Aggregator
   passa se ANY um dos dois roteamentos completou success. Pros: zero
   detection logic, zero auth, self-healing. Cons: ~5-30s de billing
   consumido por run quando ubuntu-latest morre rapido (custo baixo na
@@ -608,7 +608,7 @@ extra. Tier 3 é o único que funciona mesmo se o token estiver indisponível
 
 ## Checklist de adoção (por repo)
 
-Para cada repo (compexhub, vitae, advoq) que vai usar vitae-ci: <!-- invariant-waive:#11 -- checklist enumera repos peer -->
+Para cada repo (compexhub, vitae, advoq) que vai usar civm: <!-- invariant-waive:#11 -- checklist enumera repos peer -->
 
 - [ ] Runner registrado e online (verificar via `gh api repos/<owner>/<repo>/actions/runners`)
 - [ ] Workflow `ci.yml` adota router pattern (template do compexhub)
@@ -631,11 +631,11 @@ Para cada repo (compexhub, vitae, advoq) que vai usar vitae-ci: <!-- invariant-w
 ```bash
 # 1. Ver runners online (em qualquer repo dos 3)
 gh api "repos/<owner>/<repo>/actions/runners" \
-  --jq '.runners[] | select(.labels[] | .name == "vitae-ci") | "\(.name) \(.status)"'
+  --jq '.runners[] | select(.labels[] | .name == "civm") | "\(.name) \(.status)"'
 
 # 2. Forçar concorrência: abrir 3 PRs draft simultâneos (1 por repo)
 #    com mudança trivial. Verificar que todos rodam em paralelo no
-#    vitae-ci sem queue.
+#    civm sem queue.
 
 # 3. Ver histórico de duracao do `Gates` em cada repo:
 gh run list --workflow=ci.yml --limit 5 --json databaseId,status,conclusion,startedAt,updatedAt \

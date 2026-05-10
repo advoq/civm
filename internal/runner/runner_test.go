@@ -159,7 +159,7 @@ func TestRenderTable_DryRun(t *testing.T) {
 	var buf bytes.Buffer
 	RenderTable(results, o, &buf)
 	out := buf.String()
-	for _, want := range []string{"DRY-RUN", "compexhub", "cmpx", "vitae-ci", "(seria-aplicado)", "--execute"} {
+	for _, want := range []string{"DRY-RUN", "compexhub", "cmpx", "civm", "(seria-aplicado)", "--execute"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("RenderTable omitiu %q", want)
 		}
@@ -225,8 +225,8 @@ func TestAdd_InvalidOptions(t *testing.T) {
 func TestDefaultOptions_HasSaneDefaults(t *testing.T) {
 	t.Parallel()
 	d := DefaultOptions()
-	if d.Label != "vitae-ci" {
-		t.Errorf("Label default = %q, want vitae-ci", d.Label)
+	if d.Label != "civm" {
+		t.Errorf("Label default = %q, want civm", d.Label)
 	}
 	if d.RunnerVersion == "" {
 		t.Errorf("RunnerVersion vazio")

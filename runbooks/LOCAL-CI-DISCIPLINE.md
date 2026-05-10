@@ -1,7 +1,7 @@
 # Runbook — Local CI é o gate de verdade
 
 > **Princípio núcleo:** validação real acontece no laptop do dev ANTES
-> de qualquer push. CI remoto (GitHub Actions ou vitae-ci self-hosted)
+> de qualquer push. CI remoto (GitHub Actions ou civm self-hosted)
 > é mirror informativo que posta resultado pro PR — não é onde o código
 > é validado pela primeira vez.
 
@@ -14,12 +14,12 @@
        ├─ Falha → fix loop até passar local
        └─ Passa → autorizado a `git push`
 3. git push + abrir PR
-4. CI remoto roda os mesmos gates em GitHub Actions OU vitae-ci
+4. CI remoto roda os mesmos gates em GitHub Actions OU civm
        │
        ├─ Passa → check verde no PR (esperado, local já validou)
        ├─ Falha com local OK → contexto remoto (env diff, transient).
        │                       Investiga env, NÃO código.
-       └─ Billing bloqueado → router roteia pra vitae-ci OU template
+       └─ Billing bloqueado → router roteia pra civm OU template
              optimistic-retry skipa, PR fica verde, merge libera.
 5. Merge.
 ```
@@ -42,7 +42,7 @@
 - **Latência:** local roda em ~2 min, CI remoto pode levar 5-20 min
   (queue, setup-go, npm ci, etc).
 - **Custo:** GitHub Actions paga por minuto. Local é grátis.
-- **Disponibilidade:** GitHub pode estar fora; vitae-ci pode estar
+- **Disponibilidade:** GitHub pode estar fora; civm pode estar
   offline. Local sempre funciona.
 - **Iteração:** dev no fix loop precisa de feedback em segundos,
   não minutos.

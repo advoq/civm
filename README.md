@@ -6,8 +6,8 @@ projetos do mesmo dono (compexhub, vitae, advoq, etc).
 **O que ci-vm É:**
 
 - Repo de infra que **hospeda configuração da VM self-hosted**
-  registrada como GitHub Actions runner com label `vitae-ci`.
-- Quando GitHub Actions atribui um job ao label `vitae-ci`, o runner
+  registrada como GitHub Actions runner com label `civm`.
+- Quando GitHub Actions atribui um job ao label `civm`, o runner
   na VM executa **exatamente o .yml do peer repo**, igual ubuntu-latest
   faria.
 - **Provisionamento automatico via `civmctl`** (Go binary deste repo):
@@ -93,7 +93,7 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 | `.github/workflows/ci.yml` | próprio CI: yamllint nos templates, link check |
 | `.gitignore` | exclude common artifacts |
 
-### Para quem **administra a VM** (sysadmin do vitae-ci)
+### Para quem **administra a VM** (sysadmin do civm)
 
 | Arquivo | Função |
 |---|---|
@@ -119,24 +119,24 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 | `disciplines/INVARIANTS.md` | catálogo de invariantes (cada peer escolhe quais adotar) |
 | `rules/ssdv3.md`, `rules/testing.md`, `rules/security.md`, `rules/governance.md`, `rules/observability.md` | granular rules `.claude/rules/*` portáveis |
 
-## Como o vitae-ci runner funciona
+## Como o civm runner funciona
 
 1. **Setup uma vez** seguindo `runbooks/MULTI-PROJECT-RUNNER.md`:
    - Provisionar VM Linux (Ubuntu 22.04+, 4+ cores, 128GB SSD)
    - Instalar toolchains (Go, Node, Docker, gh CLI, etc) — parity ubuntu-latest
-   - Registrar N runners GitHub com label `vitae-ci`
+   - Registrar N runners GitHub com label `civm`
    - Configurar cron de cleanup diário (disk hygiene)
 
-2. **Cada peer repo** referencia `runs-on: [self-hosted, vitae-ci]` em
+2. **Cada peer repo** referencia `runs-on: [self-hosted, civm]` em
    seu próprio `.github/workflows/ci.yml`.
 
 3. **Quando billing GitHub OK:** workflow roda em `ubuntu-latest`
    (GitHub-hosted, paga minutos). Quando billing bloqueado: roteia
-   para `vitae-ci` (sem custo). Detector heurístico documentado em
+   para `civm` (sem custo). Detector heurístico documentado em
    `runbooks/CI-BILLING-FALLBACK.md`; templates implementam o roteamento.
 
 4. **PR continua sendo criado** de onde o dev quiser (laptop, gh CLI,
-   GitHub UI). vitae-ci só executa CI; não cria PRs.
+   GitHub UI). civm só executa CI; não cria PRs.
 
 ## Adoção em 1 comando (para peer repos)
 

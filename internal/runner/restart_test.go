@@ -26,15 +26,15 @@ func newRestartRunner(commands map[string][]byte, errs map[string]error) func(co
 	}
 }
 
-const fakeListOutput = `actions.runner.emersonbusson-ci-vm.vitae-ci-1.service        loaded active running GitHub Actions Runner
-actions.runner.emersonbusson-compexhub.vitae-ci-cmpx.service loaded active running GitHub Actions Runner
-actions.runner.emersonbusson-vitae.vitae-ci-vitae.service    loaded active running GitHub Actions Runner
+const fakeListOutput = `actions.runner.emersonbusson-ci-vm.civm-1.service        loaded active running GitHub Actions Runner
+actions.runner.emersonbusson-compexhub.civm-cmpx.service loaded active running GitHub Actions Runner
+actions.runner.emersonbusson-vitae.civm-vitae.service    loaded active running GitHub Actions Runner
 `
 
 func TestRestart_DryRun_ResolvesUnit(t *testing.T) {
 	t.Parallel()
 	o := DefaultRestartOptions()
-	o.Short = "vitae-ci-cmpx"
+	o.Short = "civm-cmpx"
 	o.RunFn = newRestartRunner(map[string][]byte{
 		"systemctl list-units --type=service --no-pager --no-legend --all actions.runner.*": []byte(fakeListOutput),
 	}, nil)
@@ -45,7 +45,7 @@ func TestRestart_DryRun_ResolvesUnit(t *testing.T) {
 	if r.Err != nil {
 		t.Fatalf("r.Err = %v", r.Err)
 	}
-	want := "actions.runner.emersonbusson-compexhub.vitae-ci-cmpx.service"
+	want := "actions.runner.emersonbusson-compexhub.civm-cmpx.service"
 	if r.UnitResolved != want {
 		t.Errorf("UnitResolved = %q, want %q", r.UnitResolved, want)
 	}
@@ -57,7 +57,7 @@ func TestRestart_DryRun_ResolvesUnit(t *testing.T) {
 func TestRestart_Execute_HappyPath(t *testing.T) {
 	t.Parallel()
 	o := DefaultRestartOptions()
-	o.Short = "vitae-ci-1"
+	o.Short = "civm-1"
 	o.Execute = true
 	o.SleepFn = func(time.Duration) {} // no real sleep in tests
 	calls := []string{}
@@ -99,7 +99,7 @@ func TestRestart_Execute_HappyPath(t *testing.T) {
 func TestRestart_Execute_RestartFails(t *testing.T) {
 	t.Parallel()
 	o := DefaultRestartOptions()
-	o.Short = "vitae-ci-1"
+	o.Short = "civm-1"
 	o.Execute = true
 	o.SleepFn = func(time.Duration) {}
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -124,7 +124,7 @@ func TestRestart_Execute_RestartFails(t *testing.T) {
 func TestRestart_Execute_NotActiveAfter(t *testing.T) {
 	t.Parallel()
 	o := DefaultRestartOptions()
-	o.Short = "vitae-ci-1"
+	o.Short = "civm-1"
 	o.Execute = true
 	o.SleepFn = func(time.Duration) {}
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -212,7 +212,7 @@ func TestValidateRestart_RequiresShortOrUnit(t *testing.T) {
 func TestRestart_DefaultsApplied(t *testing.T) {
 	t.Parallel()
 	o := RestartOptions{
-		Short: "vitae-ci-1",
+		Short: "civm-1",
 		RunFn: newRestartRunner(map[string][]byte{
 			"systemctl list-units --type=service --no-pager --no-legend --all actions.runner.*": []byte(fakeListOutput),
 		}, nil),
@@ -241,15 +241,15 @@ func TestRestart_DefaultRestartOptions(t *testing.T) {
 func TestRenderRestartTable_DryRun(t *testing.T) {
 	t.Parallel()
 	o := DefaultRestartOptions()
-	o.Short = "vitae-ci-1"
+	o.Short = "civm-1"
 	r := RestartResult{
-		UnitResolved: "actions.runner.x-y.vitae-ci-1.service",
+		UnitResolved: "actions.runner.x-y.civm-1.service",
 		WouldDo:      "sudo systemctl restart ... && sleep ...",
 	}
 	var buf bytes.Buffer
 	RenderRestartTable(r, o, &buf)
 	out := buf.String()
-	for _, want := range []string{"DRY-RUN", "vitae-ci-1", "(seria-aplicado)", "--execute"} {
+	for _, want := range []string{"DRY-RUN", "civm-1", "(seria-aplicado)", "--execute"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Render dry-run omitiu %q", want)
 		}

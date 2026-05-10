@@ -80,7 +80,7 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (UpgradeResult, error) {
 		r.UnitResolved = unit
 	}
 	// Dir explícito sobreescreve guess. Necessário pra runners legacy
-	// que nao seguem convenção ~/actions-runner-<short>/ (ex: vitae-ci-1
+	// que nao seguem convenção ~/actions-runner-<short>/ (ex: civm-1
 	// historicamente em ~/actions-runner/).
 	if opts.Dir != "" {
 		r.Dir = opts.Dir

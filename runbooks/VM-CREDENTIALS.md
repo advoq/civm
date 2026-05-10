@@ -45,7 +45,7 @@ No laptop do operador (NÃO no repo):
 
 ```bash
 # ~/.ssh/config (NUNCA commitar; este arquivo NÃO vai pra ci-vm)
-Host vitae-ci
+Host civm
     HostName <SEU_IP_OU_DOMINIO>
     User <SEU_USER>
     IdentityFile ~/.ssh/<SUA_KEY>
@@ -55,7 +55,7 @@ Host vitae-ci
 Acesso:
 
 ```bash
-ssh vitae-ci   # usa o alias do ssh/config
+ssh civm   # usa o alias do ssh/config
 ```
 
 ## Rotação se vazar

@@ -16,7 +16,7 @@ type AddOptions struct {
 	Repo          string // "emersonbusson/compexhub"
 	Token         string // registration token (efêmero ~1h)
 	Short         string // suffix do diretorio: ~/actions-runner-<short>
-	Label         string // CSV de labels (default: "vitae-ci")
+	Label         string // CSV de labels (default: "civm")
 	RunnerVersion string // ex: "2.334.0"
 	BaseDir       string // ex: "/home/emdev"
 	RunAsUser     string // ex: "emdev" (passa para svc.sh install)
@@ -25,9 +25,14 @@ type AddOptions struct {
 }
 
 // DefaultOptions returns sane production defaults.
+//
+// Label "civm" alinhado com nome do repo infra (auto-explicativo:
+// `runs-on: [self-hosted, civm]` em qualquer peer aponta pra
+// runner mantido pelo civm). Migracao 2026-05-10 substituiu label
+// legacy "vitae-ci" por "civm" em todos peers + runners.
 func DefaultOptions() AddOptions {
 	return AddOptions{
-		Label:         "vitae-ci",
+		Label:         "civm",
 		RunnerVersion: "2.334.0",
 		Execute:       false,
 		RunFn:         defaultRun,
@@ -63,7 +68,9 @@ func Add(ctx context.Context, opts AddOptions) ([]Result, error) {
 	tarball := fmt.Sprintf("https://github.com/actions/runner/releases/download/v%s/actions-runner-linux-x64-%s.tar.gz",
 		opts.RunnerVersion, opts.RunnerVersion)
 	url := fmt.Sprintf("https://github.com/%s", opts.Repo)
-	name := "vitae-ci-" + opts.Short
+	// Naming padrao: ci-vm-<short>. Ex: ci-vm-compexhub, ci-vm-advoq.
+	// Para o proprio repo ci-vm: convencao --short=self -> ci-vm-self.
+	name := "ci-vm-" + opts.Short
 	steps := []Step{
 		{
 			Name:        "mkdir_dir",

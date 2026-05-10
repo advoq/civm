@@ -217,7 +217,7 @@ func TestRender_Blocked(t *testing.T) {
 	runs := []Run{{DatabaseID: 99, Conclusion: "failure", StartedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour + 5*time.Second)}}
 	var buf bytes.Buffer
 	Render(StatusBlocked, runs, validOpts(), &buf)
-	for _, want := range []string{"blocked", "exit 1", "Settings", "vitae-ci"} {
+	for _, want := range []string{"blocked", "exit 1", "Settings", "civm"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("Render(Blocked) omitiu %q", want)
 		}

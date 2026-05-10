@@ -18,7 +18,7 @@
 > precisa de algo verde mas a validacao real ja aconteceu antes do
 > push.
 >
-> Em outras palavras: o runner self-hosted (label `vitae-ci`) e'
+> Em outras palavras: o runner self-hosted (label `civm`) e'
 > **mirror visivel no GitHub**, nao "oficina alternativa de teste".
 > O codigo ja foi testado local — o mirror so existe pra postar o
 > resultado onde branch protection olha.
@@ -26,15 +26,15 @@
 > **Duas camadas de mirror:**
 >
 > **Camada 1 — automatica (workflow router pattern):**
-> Job `ci-router` em runner self-hosted `vitae-ci` consulta o detector
+> Job `ci-router` em runner self-hosted `civm` consulta o detector
 > heuristico (`civmctl billing-status --repo=<owner>/<repo>`) e decide
-> entre `ubuntu-latest` (GitHub-hosted, custa minutos) ou `vitae-ci`
+> entre `ubuntu-latest` (GitHub-hosted, custa minutos) ou `civm`
 > (mirror sem custo). Job final aggregator (`Gates ...`) consolida
-> resultado em vitae-ci e e' o check canonico para branch protection.
+> resultado em civm e e' o check canonico para branch protection.
 > Zero-touch: PR se beneficia automaticamente. Zero-PAT: usa
 > `secrets.GITHUB_TOKEN` auto-injetado pelo Actions.
 >
-> **Camada 2 — manual:** quando a Camada 1 nao bastar (ex.: vitae-ci
+> **Camada 2 — manual:** quando a Camada 1 nao bastar (ex.: civm
 > offline OU peer novo sem workflow refatorado), o admin posta check
 > `Local VM CI` na PR via gh api manualmente. Cada peer mantem seu
 > "manual reporter" (compexhub: `compexhubctl ci local --report-pr <N>`;
@@ -42,7 +42,7 @@
 > uniforme entre peers — cada um decide.
 >
 > **O que este runbook NAO entrega:** rotacao do GITHUB_TOKEN
-> (gerenciado pelo GitHub), provisioning do runner vitae-ci (ver
+> (gerenciado pelo GitHub), provisioning do runner civm (ver
 > [`MULTI-PROJECT-RUNNER.md`](./MULTI-PROJECT-RUNNER.md)).
 
 ## Decisao de implementacao (Camada 1)
@@ -71,7 +71,7 @@ Kahneman (`docs/KAHNEMAN-DISCIPLINES.md`):
 Trade-off aceito: se o repo e' completamente novo (sem historico de
 runs), heuristica retorna `BillingUnknown` e roteamento e' default-remote
 (ubuntu-latest). Em payment failure no primeiro PR, o ci-router roda em
-vitae-ci, ubuntu-latest tenta e falha em <10s, ci-result aggregator
+civm, ubuntu-latest tenta e falha em <10s, ci-result aggregator
 detecta e gate falha. Operador entao roda `compexhubctl ci local
 --report-pr <N>` (Camada 2). Aceitavel — caso edge, primeira sessao.
 
@@ -159,11 +159,11 @@ Comportamento:
 `--auto-fallback` exige `--report-pr <N>`; sem PR número, comando aborta
 com erro de validação.
 
-## Pre-requisitos do runner vitae-ci (Camada 1)
+## Pre-requisitos do runner civm (Camada 1)
 
-O workflow refatorado depende do runner self-hosted `vitae-ci` estar
+O workflow refatorado depende do runner self-hosted `civm` estar
 registrado e online. **Setup multi-runner** (varios repos do mesmo
-dono da VM compartilhando o label `vitae-ci`) e' detalhe do admin
+dono da VM compartilhando o label `civm`) e' detalhe do admin
 da VM, documentado em [`MULTI-PROJECT-RUNNER.md`](./MULTI-PROJECT-RUNNER.md)
 secao "Setup operacional". Este repo e' agnostico de quem mais usa
 o label.
@@ -180,7 +180,7 @@ Setup minimo (single-runner, single-repo):
    - `curl`, `jq` (default em ubuntu)
 3. **Registrar runner** em GitHub Settings > Actions > Runners > New
    self-hosted runner. Selecionar Linux x64. Seguir o script gerado
-   (download + config + run). Adicionar label `vitae-ci` durante a
+   (download + config + run). Adicionar label `civm` durante a
    config interativa.
 4. **Manter online via systemd unit** (gerada pelo `./svc.sh install`
    apos config). Se cair, ci-router falha e branch protection trava
@@ -204,13 +204,13 @@ Em GitHub Settings > Branches > Branch protection rule de `main`:
    `integration` da lista de required (ja sao consolidados pelo Gates).
 4. Salvar.
 
-Quando billing falhar, `ci-router` roteia para `vitae-ci`, gates rodam
+Quando billing falhar, `ci-router` roteia para `civm`, gates rodam
 la, `Gates` aggregator passa verde e merge desbloqueia automaticamente.
 Quando billing voltar, mesmo workflow roteia para `ubuntu-latest`.
 
 ## Fallback de emergencia (Camada 2): postar Local VM CI manualmente
 
-Se o ci-router nao conseguir rodar (ex.: vitae-ci offline) ou se o
+Se o ci-router nao conseguir rodar (ex.: civm offline) ou se o
 workflow refatorado ainda nao esta presente, usar a Camada 2 manual:
 
 1. Configurar branch protection para aceitar `Local VM CI` como check
@@ -220,7 +220,7 @@ workflow refatorado ainda nao esta presente, usar a Camada 2 manual:
 4. Merge desbloqueia se `Local VM CI` verde.
 
 Esta camada existe como rede de seguranca para casos onde a Camada 1
-nao funciona. Se o vitae-ci voltar online, Camada 1 retoma o controle
+nao funciona. Se o civm voltar online, Camada 1 retoma o controle
 no proximo push.
 
 ## Limitações conhecidas
@@ -257,10 +257,10 @@ em todos os caminhos.
 
 **Camada 1 (router workflow):** se `ci-router` mostrar latencia >30s em
 mais de 3 runs consecutivos (deve ser <5s), inspecionar gh CLI no
-vitae-ci (rede, auth, rate limit). Se vitae-ci ficar offline >1h, abrir
+civm (rede, auth, rate limit). Se civm ficar offline >1h, abrir
 incidente — o gate `Gates` nao consegue rodar e merge fica travado.
 Mitigacao temporaria: usar Camada 2 (`compexhubctl ci local --report-pr`)
-ate vitae-ci voltar OU configurar `Local VM CI` como alternative
+ate civm voltar OU configurar `Local VM CI` como alternative
 required check.
 
 **Falso negativo da heuristica:** se a heuristica reportar `BillingOK`
@@ -293,7 +293,7 @@ gh api repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/commits/$(gh
   contagem do gate Tier-3 de M5. Camada 2 (manual `compexhubctl ci
   local --report-pr`) entregue.
 - **2026-05-10 (mesma sessao)** — Camada 1 entregue: refatoracao do
-  ci.yml com job `ci-router` em vitae-ci usando heuristica via gh
+  ci.yml com job `ci-router` em civm usando heuristica via gh
   run list (sem PAT, sem GitHub App), conditional `runs-on` por
   job (ubuntu-latest vs self-hosted), e job aggregator `Gates
   (typecheck, test, build, invariants)` como check canonico para

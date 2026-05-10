@@ -1,7 +1,7 @@
 # ci-router.yml.template — workflow Tier 1 (router pattern)
 #
-# Roda detector heuristico em vitae-ci self-hosted; decide entre
-# ubuntu-latest (GitHub-hosted, custa minutos) ou vitae-ci (mirror
+# Roda detector heuristico em civm self-hosted; decide entre
+# ubuntu-latest (GitHub-hosted, custa minutos) ou civm (mirror
 # sem custo). Aggregator final `Gates (typecheck, test, build,
 # invariants)` consolida resultado.
 #
@@ -10,7 +10,7 @@
 #   2. Substituir os steps PLACEHOLDER pelos gates reais do projeto
 #   3. Configurar branch protection: Gates (typecheck, test, build, invariants)
 #      como required; remover jobs individuais.
-#   4. Garantir que vitae-ci runner esta registrado e online (ver
+#   4. Garantir que civm runner esta registrado e online (ver
 #      runbooks/MULTI-PROJECT-RUNNER.md)
 #
 # Comparar com ci-optimistic.yml.template (Tier 3 sem detector,
@@ -40,7 +40,7 @@ env:
 jobs:
   ci-router:
     name: CI Router
-    runs-on: [self-hosted, vitae-ci]
+    runs-on: [self-hosted, civm]
     outputs:
       use_local: ${{ steps.decide.outputs.use_local }}
       route_reason: ${{ steps.decide.outputs.route_reason }}
@@ -77,7 +77,7 @@ jobs:
   lint:
     name: Lint
     needs: ci-router
-    runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","vitae-ci"]') || 'ubuntu-latest' }}
+    runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - run: echo "PLACEHOLDER — substituir por lint real (eslint, golangci-lint, etc)"
@@ -85,7 +85,7 @@ jobs:
   test:
     name: Test
     needs: [ci-router, lint]
-    runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","vitae-ci"]') || 'ubuntu-latest' }}
+    runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - run: echo "PLACEHOLDER — substituir por tests reais (go test, vitest, etc)"
@@ -93,18 +93,18 @@ jobs:
   build:
     name: Build
     needs: [ci-router, lint, test]
-    runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","vitae-ci"]') || 'ubuntu-latest' }}
+    runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - run: echo "PLACEHOLDER — substituir por build real"
 
-  # Gates aggregator. Sempre roda em vitae-ci. Branch protection deve
+  # Gates aggregator. Sempre roda em civm. Branch protection deve
   # exigir este check name: "Gates (typecheck, test, build, invariants)"
   gates:
     name: Gates (typecheck, test, build, invariants)
     needs: [ci-router, lint, test, build]
     if: always()
-    runs-on: [self-hosted, vitae-ci]
+    runs-on: [self-hosted, civm]
     steps:
       - name: Aggregate
         env:
@@ -130,4 +130,4 @@ jobs:
               exit 1
             fi
           done
-          echo "::notice::Gates passed (route=$([ "$USE_LOCAL" = "true" ] && echo vitae-ci || echo ubuntu-latest))"
+          echo "::notice::Gates passed (route=$([ "$USE_LOCAL" = "true" ] && echo civm || echo ubuntu-latest))"

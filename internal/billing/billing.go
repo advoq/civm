@@ -158,7 +158,7 @@ func Render(status Status, runs []Run, opts Options, w io.Writer) {
 		fmt.Fprintln(w, "[billing] blocked — 3+ runs consecutivos finalizados em <10s")
 		fmt.Fprintln(w, "[billing]   causa provavel: spending limit ou falha de pagamento")
 		fmt.Fprintln(w, "[billing]   acao: GitHub Settings > Billing & plans")
-		fmt.Fprintln(w, "[billing]   fallback: vitae-ci self-hosted runner pega jobs com label vitae-ci")
+		fmt.Fprintln(w, "[billing]   fallback: civm self-hosted runner pega jobs com label civm")
 	case StatusUnknown:
 		fmt.Fprintln(w, "[billing] unknown — nao foi possivel inspecionar")
 		fmt.Fprintln(w, "[billing]   causa provavel: gh ausente, sem runs, parse falhou ou auth")
