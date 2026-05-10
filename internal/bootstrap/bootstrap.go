@@ -34,22 +34,26 @@ type Step struct {
 // Options control the bootstrap run.
 type Options struct {
 	Execute       bool
-	Spec          specs.RunnerImageSpec
-	UID           int
-	WatchdogTimer bool // habilita civmctl-disk-watchdog.timer alem do cleanup
-	OSReader      func() (string, error)
-	RunFn         func(ctx context.Context, name string, args ...string) ([]byte, error)
+	Spec             specs.RunnerImageSpec
+	UID              int
+	WatchdogTimer    bool   // habilita civmctl-disk-watchdog.timer
+	ReverseWatchdog  bool   // habilita civmctl-reverse-watchdog.timer (alarm-of-alarm)
+	InstallUnitsFrom string // se nao-vazio, copia .service/.timer de PATH para /etc/systemd/system/ antes de enable
+	OSReader         func() (string, error)
+	RunFn            func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
 // DefaultOptions returns sane production defaults.
 func DefaultOptions() Options {
 	return Options{
-		Execute:       false,
-		Spec:          specs.Ubuntu2404(),
-		UID:           defaultUID(),
-		WatchdogTimer: true, // default: install both timers
-		OSReader:      defaultOSReader,
-		RunFn:         defaultRun,
+		Execute:          false,
+		Spec:             specs.Ubuntu2404(),
+		UID:              defaultUID(),
+		WatchdogTimer:    true, // default: install all timers
+		ReverseWatchdog:  true,
+		InstallUnitsFrom: "", // assume admin ja copiou; pode setar pra automatizar
+		OSReader:         defaultOSReader,
+		RunFn:            defaultRun,
 	}
 }
 
@@ -198,12 +202,9 @@ func buildSteps(opts Options) []Step {
 		},
 		{
 			Name:        "install_systemd_timers",
-			Description: "Instala civmctl-cleanup.timer (cron diario) e civmctl-disk-watchdog.timer (hourly)",
+			Description: "Instala timers: cleanup (diario), disk-watchdog (hourly), reverse-watchdog (4h)",
 			Check: func(ctx context.Context) (bool, error) {
-				timers := []string{"civmctl-cleanup.timer"}
-				if opts.WatchdogTimer {
-					timers = append(timers, "civmctl-disk-watchdog.timer")
-				}
+				timers := timerList(opts)
 				for _, t := range timers {
 					out, err := opts.RunFn(ctx, "systemctl", "is-enabled", t)
 					if err != nil || !strings.Contains(string(out), "enabled") {
@@ -213,13 +214,18 @@ func buildSteps(opts Options) []Step {
 				return true, nil
 			},
 			Apply: func(ctx context.Context) error {
+				// Optional: copy units from InstallUnitsFrom antes de enable
+				if opts.InstallUnitsFrom != "" {
+					if _, err := opts.RunFn(ctx, "sh", "-c",
+						fmt.Sprintf("cp %s/civmctl-*.{service,timer} /etc/systemd/system/ 2>&1",
+							opts.InstallUnitsFrom)); err != nil {
+						return fmt.Errorf("cp units from %s: %w", opts.InstallUnitsFrom, err)
+					}
+				}
 				if _, err := opts.RunFn(ctx, "systemctl", "daemon-reload"); err != nil {
 					return err
 				}
-				timers := []string{"civmctl-cleanup.timer"}
-				if opts.WatchdogTimer {
-					timers = append(timers, "civmctl-disk-watchdog.timer")
-				}
+				timers := timerList(opts)
 				for _, t := range timers {
 					// Idempotente: enable --now em timer ja-enabled e no-op
 					if _, err := opts.RunFn(ctx, "systemctl", "enable", "--now", t); err != nil {
@@ -230,6 +236,18 @@ func buildSteps(opts Options) []Step {
 			},
 		},
 	}
+}
+
+// timerList retorna lista de systemd timers a instalar conforme opts.
+func timerList(opts Options) []string {
+	timers := []string{"civmctl-cleanup.timer"}
+	if opts.WatchdogTimer {
+		timers = append(timers, "civmctl-disk-watchdog.timer")
+	}
+	if opts.ReverseWatchdog {
+		timers = append(timers, "civmctl-reverse-watchdog.timer")
+	}
+	return timers
 }
 
 func packagesInstalled(opts Options, names ...string) func(context.Context) (bool, error) {

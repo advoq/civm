@@ -217,9 +217,10 @@ func TestTruncate(t *testing.T) {
 
 func TestRun_WatchdogTimer_OnlyCleanup(t *testing.T) {
 	t.Parallel()
-	// WatchdogTimer=false: só checa civmctl-cleanup.timer, ignora disk-watchdog
+	// WatchdogTimer=false + ReverseWatchdog=false: só checa cleanup
 	opts := okOpts(t)
 	opts.WatchdogTimer = false
+	opts.ReverseWatchdog = false
 	opts.Execute = false
 	calls := []string{}
 	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {

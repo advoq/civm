@@ -39,6 +39,8 @@ func main() {
 		os.Exit(runReverseWatchdog(args))
 	case "bootstrap-everything":
 		os.Exit(runBootstrapEverything(args))
+	case "peer-status":
+		os.Exit(runPeerStatus(args))
 	case "-h", "--help", "help":
 		printHelp()
 		os.Exit(0)
@@ -70,6 +72,7 @@ COMANDOS
   ci              Subcomandos CI cross-peer (local-report)
   reverse-watchdog Alerta se disk-watchdog nao disparou em >MaxAge (default 2h)
   bootstrap-everything  Wrapper: cp systemd units + daemon-reload + bootstrap --execute
+  peer-status     Consolida billing + runners + last run em 1 view por peer-repo
   help            Esta mensagem
 
 EXEMPLOS
@@ -88,6 +91,10 @@ EXEMPLOS
   civmctl runner upgrade --short=cmpx --new-version=2.335.0 --execute
   civmctl reverse-watchdog --max-age-hours=2
   sudo civmctl bootstrap-everything --units-source=/opt/ci-vm/deploy/systemd --execute
+  civmctl peer-status --repo=emersonbusson/compexhub
+  civmctl health --json | jq '.exit'
+  civmctl reverse-watchdog --max-age-hours=4
+  sudo civmctl bootstrap --install-units-from=/opt/ci-vm/deploy/systemd --execute
   civmctl disk-watchdog --threshold-pct=80 --execute
   civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="Local VM CI"
 

@@ -15,6 +15,7 @@ func runHealth(args []string) int {
 	fs := flag.NewFlagSet("health", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	workDir := fs.String("work-dir", "/home/runner/_work", "diretorio do runner para checar disco")
+	jsonOut := fs.Bool("json", false, "saida JSON estruturada (pra Prometheus/dashboards)")
 	timeoutSec := fs.Int("timeout", 5, "timeout em segundos para coleta")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de health:", err)
@@ -24,6 +25,13 @@ func runHealth(args []string) int {
 	defer cancel()
 	c := health.NewDefaultCollector(*workDir)
 	r := c.Collect(ctx)
-	r.Render(os.Stdout)
+	if *jsonOut {
+		if err := r.RenderJSON(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "erro ao gerar JSON:", err)
+			return 2
+		}
+	} else {
+		r.Render(os.Stdout)
+	}
 	return r.Exit()
 }

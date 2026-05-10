@@ -3,6 +3,7 @@ package health
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -138,6 +139,29 @@ func TestRender_ContainsExitLine(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "DISK") {
 		t.Errorf("Render() omitiu DISK row")
+	}
+}
+
+func TestRenderJSON_StructValid(t *testing.T) {
+	t.Parallel()
+	c := okCollector()
+	r := c.Collect(context.Background())
+	var buf bytes.Buffer
+	if err := r.RenderJSON(&buf); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	var parsed struct {
+		Checks []map[string]any `json:"checks"`
+		Exit   int              `json:"exit"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("output nao e JSON valido: %v", err)
+	}
+	if len(parsed.Checks) != 4 {
+		t.Errorf("Checks len = %d, want 4", len(parsed.Checks))
+	}
+	if parsed.Exit != 0 {
+		t.Errorf("Exit = %d, want 0", parsed.Exit)
 	}
 }
 

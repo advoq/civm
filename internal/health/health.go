@@ -5,6 +5,7 @@ package health
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
@@ -13,6 +14,13 @@ import (
 	"syscall"
 	"time"
 )
+
+// jsonEncoder retorna encoder com indent (separado para testabilidade).
+func jsonEncoder(w io.Writer) *json.Encoder {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc
+}
 
 // Status is the severity of a single check.
 type Status int
@@ -177,6 +185,30 @@ func roundDur(d time.Duration) string {
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+// RenderJSON writes the report as machine-readable JSON.
+// Útil para integrações com Prometheus/dashboards que parseiam stdout.
+func (r Report) RenderJSON(w io.Writer) error {
+	type checkOut struct {
+		Name   string `json:"name"`
+		Detail string `json:"detail"`
+		Status string `json:"status"`
+	}
+	type out struct {
+		Checks []checkOut `json:"checks"`
+		Exit   int        `json:"exit"`
+	}
+	o := out{Exit: r.Exit()}
+	for _, c := range r.Checks {
+		o.Checks = append(o.Checks, checkOut{
+			Name:   c.Name,
+			Detail: c.Detail,
+			Status: c.Status.String(),
+		})
+	}
+	enc := jsonEncoder(w)
+	return enc.Encode(o)
 }
 
 // Render writes a fixed-width table.
