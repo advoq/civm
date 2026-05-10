@@ -136,3 +136,44 @@ brutos aqui.
     actions/runner-images publicar
 - **Next step:** decidir entre (a) registrar runners nos peers ou
   (b) rodar smoke tests via SSH+clone read-only (sem tocar git)
+
+## 2026-05-10 — multi-repo-runners
+
+- **Branch:** main
+- **Scope:** registrar runners self-hosted adicionais na VM
+  gha-ubuntu-2404 para compexhub e vitae, sem mexer nos repos peer
+- **Goal:** completar topologia 1-runner-por-peer descrita em
+  runbooks/MULTI-PROJECT-RUNNER.md, deixando todos peers prontos
+  para usar vitae-ci como fallback billing-block.
+- **Decisao do usuario (esta sessao):**
+  - advoq SKIP (sem ci-router, exigiria modificar repo)
+  - compexhub + vitae: 1 runner por repo
+- **Actions:**
+  - gh api token de registracao para compexhub e vitae
+  - Download actions/runner v2.334.0 em ~/actions-runner-compexhub
+    e ~/actions-runner-vitae (diretorios separados)
+  - config.sh --unattended --labels vitae-ci com nomes vitae-ci-cmpx
+    e vitae-ci-vitae
+  - svc.sh install + start em ambos
+  - Atualizado runbooks/MULTI-PROJECT-RUNNER.md com pattern verificado
+- **Validations:**
+  - gh api repos/emersonbusson/compexhub/actions/runners ->
+    vitae-ci-cmpx online com label vitae-ci
+  - gh api repos/emersonbusson/vitae/actions/runners ->
+    vitae-ci-vitae online com label vitae-ci (alem de
+    vitae-local-vm-1 pre-existente)
+  - systemctl list-units actions.runner.* na VM mostra 3 services
+    active (ci-vm, compexhub, vitae)
+  - End-to-end pendente: gh run rerun em runs antigos nao
+    valida (workflow_dispatch ausente nos peers; rerun usa .yml
+    da epoca do run); validacao real acontece no proximo push
+    natural do usuario nos peers
+- **Commits:** (a criar nesta sessao)
+- **Open items:**
+  - End-to-end real do compexhub/vitae self-hosted: aguarda push
+    natural (workflow_dispatch nao configurado, rerun reativa
+    .yml antigo)
+  - advoq adoption: fora de escopo desta sessao
+- **Next step:** monitorar primeiro push do usuario em compexhub
+  ou vitae apos esta sessao para validar que job entra em
+  vitae-ci-cmpx ou vitae-ci-vitae quando billing block ativo

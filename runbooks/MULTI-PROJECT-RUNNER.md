@@ -56,6 +56,80 @@ ficam em queue até runner liberar.
 compexhub, vitae, advoq). Escalar para 5 ou 6 se o gate `Gates (typecheck, <!-- invariant-waive:#11 -- runbook lista repos compartilhando runner -->
 test, build, invariants)` ficar consistentemente em queue >2 minutos.
 
+## Pattern: 1 runner por peer-repo na mesma VM
+
+GitHub Actions roteia jobs do repo X **somente** pro runner registrado
+em X. Não existe runner cross-repo em conta personal (só org-runners
+em GitHub Teams/Enterprise).
+
+**Topologia validada nesta VM:**
+
+```
+gha-ubuntu-2404
+├── ~/actions-runner/                 (vitae-ci-1     -> emersonbusson/ci-vm)
+├── ~/actions-runner-compexhub/       (vitae-ci-cmpx  -> emersonbusson/compexhub)
+├── ~/actions-runner-vitae/           (vitae-ci-vitae -> emersonbusson/vitae)
+└── /etc/systemd/system/
+    ├── actions.runner.emersonbusson-ci-vm.vitae-ci-1.service
+    ├── actions.runner.emersonbusson-compexhub.vitae-ci-cmpx.service
+    └── actions.runner.emersonbusson-vitae.vitae-ci-vitae.service
+```
+
+Cada runner usa o mesmo label `vitae-ci`. Workflows com
+`runs-on: [self-hosted, vitae-ci]` no peer X só serão executados pelo
+runner de X. Sem crosstalk entre repos.
+
+### Adicionar runner pra novo peer (sequencia replicada)
+
+```bash
+# 1. Token de registracao (efemero ~1h, GH escopo "repo")
+TOKEN=$(gh api -X POST /repos/emersonbusson/<REPO>/actions/runners/registration-token --jq .token)
+
+# 2. Diretorio dedicado por peer
+ssh gha-ubuntu-2404 "mkdir -p ~/actions-runner-<REPO> && cd ~/actions-runner-<REPO> &&
+  curl -fsSL -o runner.tar.gz https://github.com/actions/runner/releases/download/v2.334.0/actions-runner-linux-x64-2.334.0.tar.gz &&
+  tar xzf runner.tar.gz && rm runner.tar.gz &&
+  ./config.sh --unattended --url https://github.com/emersonbusson/<REPO> \
+    --token '$TOKEN' --labels vitae-ci --name vitae-ci-<SHORT> \
+    --work _work --replace &&
+  sudo ./svc.sh install emdev &&
+  sudo ./svc.sh start"
+
+# 3. Verificar online
+gh api /repos/emersonbusson/<REPO>/actions/runners --jq '.runners[]|"\(.name) \(.status)"'
+```
+
+### "Do zero sempre" — clean-slate per job
+
+Sem precisar `--ephemeral` (que requer JIT tokens via webhook). O default
+do GitHub Actions ja garante isolamento:
+
+- `GITHUB_WORKSPACE` unico per-job (delete + recreate entre jobs)
+- `actions/checkout@v4` faz fresh git clone (sem state preservado)
+- `civmctl-cleanup.timer` (cron 04:00 UTC) limpa Docker/tmp/_work diariamente
+- Multiplos runners da mesma VM tem `--work _work` separado por runner
+
+Resultado: cada job comeca do zero, sem crosstalk.
+
+### Rollback de runner peer
+
+Se runner quebrar workflow do peer:
+
+```bash
+# Stop + uninstall systemd
+ssh gha-ubuntu-2404 "cd ~/actions-runner-<REPO> &&
+  sudo ./svc.sh stop && sudo ./svc.sh uninstall"
+
+# Remove from GitHub
+TOKEN=$(gh api -X POST /repos/emersonbusson/<REPO>/actions/runners/remove-token --jq .token)
+ssh gha-ubuntu-2404 "cd ~/actions-runner-<REPO> &&
+  ./config.sh remove --token '$TOKEN' &&
+  rm -rf ~/actions-runner-<REPO>"
+```
+
+Workflow do peer volta a rodar 100% em `ubuntu-latest` (com risco de
+billing-block continuar derrubando jobs em <10s).
+
 ## Setup zero-effort (recomendado): civmctl bootstrap
 
 A partir de 2026-05-10, **provisionamento e cleanup são automatizados** via
