@@ -9,7 +9,7 @@
 
 ```
 1. Dev muda código no laptop.
-2. Roda gate local (ex.: ci-local script ou compexhubctl ci local --clean)
+2. Roda gate local do peer (ex.: script `ci-local`; compexhub usa `compexhubctl ci local --clean`)
        │
        ├─ Falha → fix loop até passar local
        └─ Passa → autorizado a `git push`

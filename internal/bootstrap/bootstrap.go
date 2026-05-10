@@ -7,9 +7,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
+	"github.com/emersonbusson/civm/internal/civm"
 	"github.com/emersonbusson/civm/internal/specs"
 )
 
@@ -33,7 +36,7 @@ type Step struct {
 
 // Options control the bootstrap run.
 type Options struct {
-	Execute       bool
+	Execute          bool
 	Spec             specs.RunnerImageSpec
 	UID              int
 	WatchdogTimer    bool   // habilita civmctl-disk-watchdog.timer
@@ -41,6 +44,7 @@ type Options struct {
 	InstallUnitsFrom string // se nao-vazio, copia .service/.timer de PATH para /etc/systemd/system/ antes de enable
 	OSReader         func() (string, error)
 	RunFn            func(ctx context.Context, name string, args ...string) ([]byte, error)
+	WriteFileFn      func(name string, data []byte, perm os.FileMode) error
 }
 
 // DefaultOptions returns sane production defaults.
@@ -54,6 +58,7 @@ func DefaultOptions() Options {
 		InstallUnitsFrom: "", // assume admin ja copiou; pode setar pra automatizar
 		OSReader:         defaultOSReader,
 		RunFn:            defaultRun,
+		WriteFileFn:      os.WriteFile,
 	}
 }
 
@@ -64,6 +69,9 @@ func Run(ctx context.Context, opts Options) []Result {
 	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
+	}
+	if opts.WriteFileFn == nil {
+		opts.WriteFileFn = os.WriteFile
 	}
 	steps := buildSteps(opts)
 	out := make([]Result, 0, len(steps))
@@ -214,12 +222,9 @@ func buildSteps(opts Options) []Step {
 				return true, nil
 			},
 			Apply: func(ctx context.Context) error {
-				// Optional: copy units from InstallUnitsFrom antes de enable
 				if opts.InstallUnitsFrom != "" {
-					if _, err := opts.RunFn(ctx, "sh", "-c",
-						fmt.Sprintf("cp %s/civmctl-*.{service,timer} /etc/systemd/system/ 2>&1",
-							opts.InstallUnitsFrom)); err != nil {
-						return fmt.Errorf("cp units from %s: %w", opts.InstallUnitsFrom, err)
+					if err := copySystemdUnits(ctx, opts); err != nil {
+						return err
 					}
 				}
 				if _, err := opts.RunFn(ctx, "systemctl", "daemon-reload"); err != nil {
@@ -248,6 +253,31 @@ func timerList(opts Options) []string {
 		timers = append(timers, "civmctl-reverse-watchdog.timer")
 	}
 	return timers
+}
+
+func copySystemdUnits(ctx context.Context, opts Options) error {
+	source, err := civm.CleanDir(opts.InstallUnitsFrom, "--install-units-from")
+	if err != nil {
+		return err
+	}
+	var units []string
+	for _, pattern := range []string{"civmctl-*.service", "civmctl-*.timer"} {
+		matches, err := filepath.Glob(filepath.Join(source, pattern))
+		if err != nil {
+			return fmt.Errorf("glob units from %s: %w", source, err)
+		}
+		units = append(units, matches...)
+	}
+	if len(units) == 0 {
+		return fmt.Errorf("nenhuma unit civmctl-*.service/timer em %s", source)
+	}
+	for _, unit := range units {
+		dst := filepath.Join(civm.DefaultSystemdDir, filepath.Base(unit))
+		if _, err := opts.RunFn(ctx, "cp", unit, dst); err != nil {
+			return fmt.Errorf("cp %s %s: %w", unit, dst, err)
+		}
+	}
+	return nil
 }
 
 func packagesInstalled(opts Options, names ...string) func(context.Context) (bool, error) {
@@ -298,15 +328,32 @@ func installNodeViaNodeSource(ctx context.Context, opts Options, version string)
 }
 
 func installDockerCE(ctx context.Context, opts Options) error {
+	arch, err := commandOutputTrimmed(ctx, opts, "dpkg", "--print-architecture")
+	if err != nil {
+		return err
+	}
+	codename, err := ubuntuCodename(opts)
+	if err != nil {
+		return err
+	}
 	steps := [][]string{
 		{"install", "-m", "0755", "-d", "/etc/apt/keyrings"},
-		{"sh", "-c", "curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc"},
+		{"curl", "-fsSL", "https://download.docker.com/linux/ubuntu/gpg", "-o", "/etc/apt/keyrings/docker.asc"},
 		{"chmod", "a+r", "/etc/apt/keyrings/docker.asc"},
-		{"sh", "-c", `echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list`},
-		{"apt-get", "update", "-y"},
-		{"apt-get", "install", "-y", "docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"},
 	}
 	for _, s := range steps {
+		if _, err := opts.RunFn(ctx, s[0], s[1:]...); err != nil {
+			return err
+		}
+	}
+	source := fmt.Sprintf("deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n", arch, codename)
+	if err := opts.WriteFileFn("/etc/apt/sources.list.d/docker.list", []byte(source), 0644); err != nil {
+		return err
+	}
+	for _, s := range [][]string{
+		{"apt-get", "update", "-y"},
+		{"apt-get", "install", "-y", "docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"},
+	} {
 		if _, err := opts.RunFn(ctx, s[0], s[1:]...); err != nil {
 			return err
 		}
@@ -314,19 +361,70 @@ func installDockerCE(ctx context.Context, opts Options) error {
 	return nil
 }
 
+func ubuntuCodename(opts Options) (string, error) {
+	out, err := opts.OSReader()
+	if err != nil {
+		return "", err
+	}
+	if v := osReleaseValue(out, "VERSION_CODENAME"); v != "" {
+		return v, nil
+	}
+	if v := osReleaseValue(out, "UBUNTU_CODENAME"); v != "" {
+		return v, nil
+	}
+	if osReleaseValue(out, "VERSION_ID") == "24.04" {
+		return "noble", nil
+	}
+	return "", fmt.Errorf("nao foi possivel inferir codename Ubuntu em /etc/os-release")
+}
+
+func osReleaseValue(contents, key string) string {
+	prefix := key + "="
+	for _, line := range strings.Split(contents, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		value := strings.TrimPrefix(line, prefix)
+		return strings.Trim(value, `"`)
+	}
+	return ""
+}
+
 func installGHCLI(ctx context.Context, opts Options) error {
-	steps := [][]string{
-		{"sh", "-c", "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg"},
-		{"sh", "-c", `echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list`},
+	source := "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n"
+	arch, err := commandOutputTrimmed(ctx, opts, "dpkg", "--print-architecture")
+	if err != nil {
+		return err
+	}
+	source = strings.ReplaceAll(source, "$(dpkg --print-architecture)", arch)
+	if _, err := opts.RunFn(ctx, "curl", "-fsSL", "https://cli.github.com/packages/githubcli-archive-keyring.gpg", "-o", "/usr/share/keyrings/githubcli-archive-keyring.gpg"); err != nil {
+		return err
+	}
+	if err := opts.WriteFileFn("/etc/apt/sources.list.d/github-cli.list", []byte(source), 0644); err != nil {
+		return err
+	}
+	for _, s := range [][]string{
 		{"apt-get", "update", "-y"},
 		{"apt-get", "install", "-y", "gh"},
-	}
-	for _, s := range steps {
+	} {
 		if _, err := opts.RunFn(ctx, s[0], s[1:]...); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func commandOutputTrimmed(ctx context.Context, opts Options, name string, args ...string) (string, error) {
+	out, err := opts.RunFn(ctx, name, args...)
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(string(out))
+	if value == "" {
+		return "", fmt.Errorf("%s returned empty output", name)
+	}
+	return value, nil
 }
 
 func firstLine(s string) string {

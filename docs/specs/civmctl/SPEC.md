@@ -5,44 +5,61 @@
 **Discipline links:** Kahneman #2 (counterfactual em cada step destrutivo),
 #3 (numero antes de adjetivo nos logs).
 
+## Emenda 2026-05-10 — hardening operacional
+
+Este SPEC nasceu no bootstrap do `civmctl`; o hardening posterior adiciona:
+
+- `cmd/civmctl/doctor.go` + `internal/doctor/`: diagnóstico read-only
+  consolidado de host, timers, systemd runners e GitHub runners.
+- `cmd/civmctl/idlecheck.go` + `internal/idle/`: detector compartilhado de
+  host ocioso, com exit `0=idle`, `1=busy`, `2=unknown`.
+- `internal/runner` passa a usar o detector antes de
+  `restart/remove/upgrade --execute`.
+- `internal/health` valida `civmctl-cleanup.timer`,
+  `civmctl-disk-watchdog.timer` e `civmctl-reverse-watchdog.timer`.
+- `bootstrap`/`bootstrap-everything` expõem `--reverse-watchdog=true` e
+  habilitam o timer quando os unit files estão instalados.
+- Runners legacy offline são apenas reportados; remoção é manual via
+  `gh api -X DELETE`.
+
 ## Arquivos a criar
 
 ### Modulo Go
 
 | Path | LoC alvo | Função |
 |---|---|---|
-| `/home/emdev/codespace/ci-vm/go.mod` | 3 | módulo `github.com/emersonbusson/ci-vm`, Go 1.26 |
-| `/home/emdev/codespace/ci-vm/cmd/civmctl/main.go` | ≤120 | dispatch + help; só roteia |
-| `/home/emdev/codespace/ci-vm/cmd/civmctl/version_pins.go` | ≤40 | comando `version-pins` |
-| `/home/emdev/codespace/ci-vm/cmd/civmctl/health.go` | ≤80 | comando `health` |
-| `/home/emdev/codespace/ci-vm/cmd/civmctl/cleanup.go` | ≤100 | comando `cleanup` |
-| `/home/emdev/codespace/ci-vm/cmd/civmctl/bootstrap.go` | ≤120 | comando `bootstrap` |
-| `/home/emdev/codespace/ci-vm/cmd/civmctl/runner.go` | ≤80 | comando `runner` |
-| `/home/emdev/codespace/ci-vm/internal/specs/specs.go` | ≤120 | versões alvo |
-| `/home/emdev/codespace/ci-vm/internal/specs/specs_test.go` | ≤60 | testes |
-| `/home/emdev/codespace/ci-vm/internal/health/health.go` | ≤180 | lógica health |
-| `/home/emdev/codespace/ci-vm/internal/health/health_test.go` | ≤180 | testes |
-| `/home/emdev/codespace/ci-vm/internal/cleanup/cleanup.go` | ≤200 | lógica cleanup |
-| `/home/emdev/codespace/ci-vm/internal/cleanup/cleanup_test.go` | ≤180 | testes |
-| `/home/emdev/codespace/ci-vm/internal/bootstrap/bootstrap.go` | ≤220 | lógica bootstrap |
-| `/home/emdev/codespace/ci-vm/internal/bootstrap/bootstrap_test.go` | ≤180 | testes |
+| `/home/emdev/codespace/civm/go.mod` | 3 | módulo `github.com/emersonbusson/civm`, Go 1.26 |
+| `/home/emdev/codespace/civm/cmd/civmctl/main.go` | ≤120 | dispatch + help; só roteia |
+| `/home/emdev/codespace/civm/cmd/civmctl/version_pins.go` | ≤40 | comando `version-pins` |
+| `/home/emdev/codespace/civm/cmd/civmctl/health.go` | ≤80 | comando `health` |
+| `/home/emdev/codespace/civm/cmd/civmctl/cleanup.go` | ≤100 | comando `cleanup` |
+| `/home/emdev/codespace/civm/cmd/civmctl/bootstrap.go` | ≤120 | comando `bootstrap` |
+| `/home/emdev/codespace/civm/cmd/civmctl/runner.go` | ≤80 | comando `runner` |
+| `/home/emdev/codespace/civm/internal/specs/specs.go` | ≤120 | versões alvo |
+| `/home/emdev/codespace/civm/internal/specs/specs_test.go` | ≤60 | testes |
+| `/home/emdev/codespace/civm/internal/health/health.go` | ≤180 | lógica health |
+| `/home/emdev/codespace/civm/internal/health/health_test.go` | ≤180 | testes |
+| `/home/emdev/codespace/civm/internal/cleanup/cleanup.go` | ≤200 | lógica cleanup |
+| `/home/emdev/codespace/civm/internal/cleanup/cleanup_test.go` | ≤180 | testes |
+| `/home/emdev/codespace/civm/internal/bootstrap/bootstrap.go` | ≤220 | lógica bootstrap |
+| `/home/emdev/codespace/civm/internal/bootstrap/bootstrap_test.go` | ≤180 | testes |
 
 ### systemd
 
 | Path | Função |
 |---|---|
-| `/home/emdev/codespace/ci-vm/deploy/systemd/civmctl-cleanup.service` | unit que roda `civmctl cleanup --execute` |
-| `/home/emdev/codespace/ci-vm/deploy/systemd/civmctl-cleanup.timer` | timer diário 04:00 UTC |
-| `/home/emdev/codespace/ci-vm/deploy/systemd/README.md` | instalação manual: `cp` + `systemctl enable --now` |
+| `/home/emdev/codespace/civm/deploy/systemd/civmctl-cleanup.service` | unit que roda `civmctl cleanup --execute` |
+| `/home/emdev/codespace/civm/deploy/systemd/civmctl-cleanup.timer` | timer diário 04:00 UTC |
+| `/home/emdev/codespace/civm/deploy/systemd/README.md` | instalação manual: `cp` + `systemctl enable --now` |
 
 ### Documentação
 
 | Path | Mudança |
 |---|---|
-| `/home/emdev/codespace/ci-vm/README.md` | adicionar seção "Bootstrap em 1 comando" |
-| `/home/emdev/codespace/ci-vm/runbooks/MULTI-PROJECT-RUNNER.md` | substituir steps manuais por civmctl; adicionar referência ao PRD |
-| `/home/emdev/codespace/ci-vm/.github/workflows/ci.yml` | adicionar job `build-civmctl` (go vet + go test + go build) |
-| `/home/emdev/codespace/ci-vm/docs/specs/civmctl/IMPL.md` | criar no fim com hashes + métricas |
+| `/home/emdev/codespace/civm/README.md` | adicionar seção "Bootstrap em 1 comando" |
+| `/home/emdev/codespace/civm/runbooks/MULTI-PROJECT-RUNNER.md` | substituir steps manuais por civmctl; adicionar referência ao PRD |
+| `/home/emdev/codespace/civm/.github/workflows/ci.yml` | adicionar job `build-civmctl` (go vet + go test + go build) |
+| `/home/emdev/codespace/civm/docs/specs/civmctl/IMPL.md` | criar no fim com hashes + métricas |
 
 ## Diff conceitual de cada arquivo
 
@@ -106,7 +123,7 @@ type Report struct {
 }
 
 func Collect(ctx context.Context, opts Options) (Report, error) {
-    // 1. df -BG /home/runner/_work (ou path passado)
+    // 1. df -BG / (ou path passado)
     // 2. /proc/meminfo MemAvailable
     // 3. systemctl list-units --type=service "actions.runner.*"
     // 4. journalctl -u civmctl-cleanup --since "24h ago" --reverse -n1
@@ -131,11 +148,12 @@ type Action struct {
 
 type Options struct {
     Execute       bool
-    WorkDir       string  // /home/runner/_work default
+    WorkDir       string  // default legado; autodiscover /home/*/actions-runner-*/_work
     TmpThreshold  time.Duration  // 7d default
     WorkThreshold time.Duration  // 14d default
     DockerPrune   bool  // true default
     AptClean      bool  // true default
+    SkipIdleGuard bool  // false default; execute aborta se host não ocioso
 }
 
 func Run(ctx context.Context, opts Options) ([]Action, error) {
@@ -146,7 +164,16 @@ func Run(ctx context.Context, opts Options) ([]Action, error) {
 func RenderTable(actions []Action, w io.Writer) { ... }
 ```
 
-Comandos reais (execute=true):
+Antes de qualquer comando real, `execute=true` roda o guard de ociosidade:
+
+- `ps -eo pid=,ppid=,comm=,args=` sem shell
+- bloqueia `Runner.Worker`, `Runner.PluginHost`, processo com `/_work/`,
+  `docker build`, `docker compose`, `docker-compose`, `buildx build` e
+  `buildctl`
+- fail-closed se `ps` falhar
+- checa no início e novamente antes de cada mutação
+
+Comandos reais (execute=true, somente host ocioso):
 
 - Docker: `docker system prune -af --volumes`
 - /tmp: `find /tmp -mtime +7 -delete` (filtro por mtime)
@@ -178,7 +205,7 @@ func Run(ctx context.Context, opts Options) ([]Result, error) {
 
 Steps:
 
-1. Verify OS (`/etc/os-release` lsb_release ID=ubuntu VERSION_ID=24.04)
+1. Verify OS (`/etc/os-release` com `ID=ubuntu` e `VERSION_ID=24.04`)
 2. Install base packages (apt: build-essential curl wget jq yq git)
 3. Install Go (download tarball para /usr/local/go-X.Y.Z; symlinks)
 4. Install Node (NodeSource ou nvm-style; preferred 20.20.2 system)
@@ -193,8 +220,8 @@ Steps:
 
 ```
 [Unit]
-Description=civmctl cleanup (disk hygiene da VM ci-vm)
-Documentation=https://github.com/emersonbusson/ci-vm/blob/main/docs/specs/civmctl/PRD.md
+Description=civmctl cleanup (disk hygiene da VM civm)
+Documentation=https://github.com/emersonbusson/civm/blob/main/docs/specs/civmctl/PRD.md
 After=network-online.target
 
 [Service]

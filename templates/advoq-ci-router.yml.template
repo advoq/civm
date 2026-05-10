@@ -5,7 +5,7 @@
 # em self-hosted, completando mesmo quando billing-hosted está bloqueado.
 #
 # Adoção:
-#   cp ~/codespace/ci-vm/templates/advoq-ci-router.yml.template \
+#   cp ~/codespace/civm/templates/advoq-ci-router.yml.template \
 #      ~/codespace/advoq/.github/workflows/ci-router.yml
 #
 # Branch protection: marcar "Gates (civm fallback)" como required
@@ -14,6 +14,9 @@
 # Pré-req: runner civm-advoq online em emersonbusson/advoq (via
 # `civmctl runner add --repo=emersonbusson/advoq --short=advoq --execute`).
 # Ver runbooks/ADVOQ-ADOPTION.md.
+#
+# Seguranca: usar apenas para PR confiavel/same-repo. Evitar
+# pull_request_target e nao expor secrets a codigo de fork em self-hosted.
 
 name: CI Router (civm fallback)
 

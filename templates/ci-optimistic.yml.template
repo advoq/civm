@@ -23,7 +23,11 @@
 #   3. Ajustar branch protection para exigir o check
 #     "Gates (typecheck, test, build, invariants)" como required
 #   4. Garantir que civm runner esta registrado e online (ver
-#      docs/runbooks/MULTI-PROJECT-RUNNER.md)
+#      runbooks/MULTI-PROJECT-RUNNER.md)
+#
+# Seguranca: este template so deve rodar PR confiavel/same-repo em
+# self-hosted. Nao usar com forks nao confiaveis, pull_request_target
+# ou secrets expostos a codigo de PR externo.
 
 name: CI
 

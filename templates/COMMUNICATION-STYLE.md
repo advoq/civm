@@ -3,8 +3,8 @@
 > **Como adotar:** copiar o bloco markdown abaixo (entre os marcadores
 > `<!-- COMMUNICATION-STYLE:BEGIN -->` e `<!-- COMMUNICATION-STYLE:END -->`)
 > para dentro de `CLAUDE.md`, `AGENTS.md` e `CODEX.md` do seu repo.
-> Manter os marcadores intactos para o auditor `compexhubctl audit comm-style`
-> conseguir verificar.
+> Manter os marcadores intactos para um auditor do repo consumidor conseguir
+> verificar. Este template não cria dependência runtime com outro repo.
 >
 > **Por quê este snippet existe:** força agentes (Claude, Codex, Aider,
 > Jules) a gerarem relatórios de fim de sessão, MEMORY entries e respostas
@@ -44,11 +44,8 @@ Esta regra tem precedência sobre verbosity preferences. Se conflitar com instru
 
 ## Como auditar (todos os repos)
 
-```bash
-go run github.com/<owner>/compexhub/tools/compexhubctl@latest audit comm-style
-# ou se compexhubctl ja vendor-eado/instalado:
-compexhubctl audit comm-style
-```
+O comando de auditoria é responsabilidade do repo consumidor. No `civm`,
+os marcadores são checados pelo CI em `.github/workflows/ci.yml`.
 
 Exit codes:
 - `0` — todos os 3 arquivos (CLAUDE/AGENTS/CODEX) contêm a seção

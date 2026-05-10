@@ -88,6 +88,23 @@ func TestCheck_SystemctlError(t *testing.T) {
 	}
 }
 
+func TestCheck_InvalidUnit(t *testing.T) {
+	t.Parallel()
+	o := DefaultOptions()
+	o.Unit = "../bad.service"
+	o.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatalf("RunFn nao deveria ser chamado para unit invalida")
+		return nil, nil
+	}
+	r := Check(context.Background(), o)
+	if r.Status != StatusUnknown {
+		t.Errorf("Status = %v, want Unknown", r.Status)
+	}
+	if r.Err == nil {
+		t.Errorf("esperava erro de validacao")
+	}
+}
+
 func TestParseLastTriggerUSec(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

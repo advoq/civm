@@ -2,17 +2,17 @@
 
 > **Princípio absoluto:** **nenhum** secret (SSH private key, senhas,
 > tokens, env values reais) vai pra dentro deste repo. Mesmo sendo
-> ci-vm, mesmo private. Documentamos COMO acessar; valores ficam
+> civm, mesmo private. Documentamos COMO acessar; valores ficam
 > fora.
 
 ## O que vai NESTE repo (público, versionado)
 
 - **Host pattern operacional:** ex.: "VM rodando Ubuntu 22.04, IP
   privado na rede do dono, acessível via VPN/Tailscale do operador"
-- **User convention:** runner roda como user `runner` em
-  `/home/runner/`
-- **Onde ficam os work dirs:** `/home/runner/_work-N/` (N = número
-  do runner instance)
+- **User convention:** runner roda como usuário operacional dedicado
+  (ex.: `emdev` ou `runner`) sob o próprio `$HOME`.
+- **Onde ficam os work dirs:** `~/actions-runner-<short>/_work` quando
+  criado por `civmctl runner add`.
 - **Comandos exemplos** com placeholders: `ssh <YOUR_USER>@<VM_HOST>`
 - **Permissões esperadas** em arquivos sensíveis: `~/.ssh/id_*` com
   `chmod 600`
@@ -44,7 +44,7 @@
 No laptop do operador (NÃO no repo):
 
 ```bash
-# ~/.ssh/config (NUNCA commitar; este arquivo NÃO vai pra ci-vm)
+# ~/.ssh/config (NUNCA commitar; este arquivo NÃO vai pra civm)
 Host civm
     HostName <SEU_IP_OU_DOMINIO>
     User <SEU_USER>

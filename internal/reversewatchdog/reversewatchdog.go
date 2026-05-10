@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/emersonbusson/civm/internal/civm"
 )
 
 // Status of a single timer's last-fire age.
@@ -18,8 +20,8 @@ type Status int
 
 const (
 	StatusOK      Status = iota // last fire within MaxAge
-	StatusStale                  // last fire too old (timer parado?)
-	StatusUnknown                // journal vazio ou erro
+	StatusStale                 // last fire too old (timer parado?)
+	StatusUnknown               // journal vazio ou erro
 )
 
 func (s Status) String() string {
@@ -47,11 +49,11 @@ func (s Status) ExitCode() int {
 
 // Result captures check outcome.
 type Result struct {
-	Unit       string
-	MaxAge     time.Duration
-	Status     Status
+	Unit        string
+	MaxAge      time.Duration
+	Status      Status
 	LastFireAgo string // "12h", "30m", or "never"
-	Err        error
+	Err         error
 }
 
 // Options control the check.
@@ -65,7 +67,7 @@ type Options struct {
 func DefaultOptions() Options {
 	return Options{
 		Unit:   "civmctl-disk-watchdog.service",
-		MaxAge: 2 * time.Hour,
+		MaxAge: time.Duration(civm.DefaultReverseMaxAgeHours) * time.Hour,
 		RunFn:  defaultRun,
 	}
 }
@@ -78,9 +80,15 @@ func Check(ctx context.Context, opts Options) Result {
 		opts.RunFn = defaultRun
 	}
 	if opts.MaxAge == 0 {
-		opts.MaxAge = 2 * time.Hour
+		opts.MaxAge = time.Duration(civm.DefaultReverseMaxAgeHours) * time.Hour
 	}
 	r := Result{Unit: opts.Unit, MaxAge: opts.MaxAge}
+	if err := civm.ValidateServiceUnit(opts.Unit); err != nil {
+		r.Status = StatusUnknown
+		r.LastFireAgo = "never"
+		r.Err = err
+		return r
+	}
 
 	// Use systemctl show pra LastTriggerUSec do timer (mais confiavel que journal)
 	timerUnit := strings.TrimSuffix(opts.Unit, ".service") + ".timer"

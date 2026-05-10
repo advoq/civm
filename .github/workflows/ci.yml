@@ -16,7 +16,7 @@ permissions:
 jobs:
   validate-templates:
     name: Validate templates and runbooks
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, civm]
     steps:
       - uses: actions/checkout@v4
 
@@ -26,7 +26,7 @@ jobs:
           for f in templates/*.yml.template; do
             python3 -c "import yaml; yaml.safe_load(open('$f'))" || exit 1
           done
-          # Workflow do proprio ci-vm
+          # Workflow do proprio civm
           python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"
           # systemd unit files (basico: existe e nao vazio)
           [ -s deploy/systemd/civmctl-cleanup.service ] || exit 1
@@ -76,7 +76,7 @@ jobs:
 
   build-civmctl:
     name: Build + test civmctl
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, civm]
     steps:
       - uses: actions/checkout@v4
 
@@ -92,23 +92,23 @@ jobs:
 
       - name: Coverage threshold (>=80% no internal/**)
         run: |
-          go tool cover -func=coverage.out | tee coverage.txt
-          # Cada linha de internal/<pkg> deve estar acima do threshold.
+          go test -count=1 -cover ./internal/... | tee coverage-packages.txt
           fail=0
-          while IFS= read -r line; do
-            pct=$(printf '%s' "$line" | awk '{print $3}' | tr -d '%')
-            pkg=$(printf '%s' "$line" | awk '{print $1}')
-            case "$pkg" in
-              github.com/emersonbusson/ci-vm/internal/*)
-                # Compara como inteiro (truncado).
-                int=$(printf '%.0f' "$pct")
-                if [ "$int" -lt 80 ]; then
-                  echo "BELOW 80%: $pkg ($pct)"
-                  fail=1
-                fi
-                ;;
-            esac
-          done < <(grep -E '^github.com/emersonbusson/ci-vm/internal/[^/]+\s' coverage.txt | grep -v ':' || true)
+          while IFS= read -r pkg; do
+            line=$(grep -E "^ok[[:space:]]+${pkg}[[:space:]]+" coverage-packages.txt || true)
+            if [ -z "$line" ]; then
+              echo "MISSING COVERAGE: $pkg"
+              fail=1
+              continue
+            fi
+            pct=$(printf '%s' "$line" | sed -E 's/.*coverage: ([0-9.]+)%.*/\1/')
+            awk -v pct="$pct" -v pkg="$pkg" 'BEGIN {
+              if (pct + 0 < 80) {
+                printf "BELOW 80%%: %s (%s%%)\n", pkg, pct
+                exit 1
+              }
+            }' || fail=1
+          done < <(go list ./internal/...)
           [ "$fail" -eq 0 ] || exit 1
 
       - name: go build
@@ -128,7 +128,7 @@ jobs:
           /tmp/civmctl --help > /dev/null
           /tmp/civmctl version-pins > /dev/null
           /tmp/civmctl version-pins --json > /dev/null
-          # health pode retornar exit 1 (sem actions.runner.* em ubuntu-latest)
+          # health pode retornar exit 1 se algum check operacional estiver em warn
           /tmp/civmctl health || true
           # cleanup --dry-run em path vazio nao deve mutar nada
           /tmp/civmctl cleanup --dry-run --no-docker --no-apt --tmp-dir=/tmp --work-dir=/tmp > /dev/null
@@ -136,10 +136,8 @@ jobs:
   self-hosted-smoke:
     name: Self-hosted runner smoke (civm)
     runs-on: [self-hosted, civm]
-    # Sem needs: roda em paralelo aos jobs ubuntu-latest. Se billing
-    # estiver bloqueado e ubuntu-latest morrer, este job ainda valida
-    # civm sozinho (que e o ponto: garantir que VM serve mesmo sem
-    # billing).
+    # Sem needs: roda em paralelo aos gates principais e prova o host
+    # operacionalmente enquanto o build/test valida o binario.
     steps:
       - uses: actions/checkout@v4
 
@@ -170,7 +168,7 @@ jobs:
           civmctl drift --timeout=15 || true
           # billing-status: zero-PAT, usa GITHUB_TOKEN auto
           # exit 0=ok, 1=blocked, 2=unknown — aceitar todos no smoke
-          civmctl billing-status --repo=emersonbusson/ci-vm --workflow=ci.yml --timeout=15 || true
+          civmctl billing-status --repo=emersonbusson/civm --workflow=ci.yml --timeout=15 || true
 
       - name: civmctl health on self
         run: |

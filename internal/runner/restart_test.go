@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/emersonbusson/civm/internal/idle"
 )
 
 func newRestartRunner(commands map[string][]byte, errs map[string]error) func(context.Context, string, ...string) ([]byte, error) {
@@ -26,7 +28,7 @@ func newRestartRunner(commands map[string][]byte, errs map[string]error) func(co
 	}
 }
 
-const fakeListOutput = `actions.runner.emersonbusson-ci-vm.civm-1.service        loaded active running GitHub Actions Runner
+const fakeListOutput = `actions.runner.emersonbusson-civm.civm-1.service        loaded active running GitHub Actions Runner
 actions.runner.emersonbusson-compexhub.civm-cmpx.service loaded active running GitHub Actions Runner
 actions.runner.emersonbusson-vitae.civm-vitae.service    loaded active running GitHub Actions Runner
 `
@@ -59,6 +61,8 @@ func TestRestart_Execute_HappyPath(t *testing.T) {
 	o := DefaultRestartOptions()
 	o.Short = "civm-1"
 	o.Execute = true
+	o.IdleProbeDelay = 0
+	o.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
 	o.SleepFn = func(time.Duration) {} // no real sleep in tests
 	calls := []string{}
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -101,6 +105,8 @@ func TestRestart_Execute_RestartFails(t *testing.T) {
 	o := DefaultRestartOptions()
 	o.Short = "civm-1"
 	o.Execute = true
+	o.IdleProbeDelay = 0
+	o.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
 	o.SleepFn = func(time.Duration) {}
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		key := name + " " + strings.Join(args, " ")
@@ -121,11 +127,42 @@ func TestRestart_Execute_RestartFails(t *testing.T) {
 	}
 }
 
+func TestRestart_ExecuteBlocksWhenHostBusy(t *testing.T) {
+	t.Parallel()
+	o := DefaultRestartOptions()
+	o.Short = "civm-1"
+	o.Execute = true
+	o.IdleProbeDelay = 0
+	o.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		return []idle.Activity{{PID: 99, Command: "Runner.Worker run"}}, nil
+	}
+	calls := []string{}
+	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		key := name + " " + strings.Join(args, " ")
+		calls = append(calls, key)
+		if strings.Contains(key, "list-units") {
+			return []byte(fakeListOutput), nil
+		}
+		return nil, nil
+	}
+	r, _ := Restart(context.Background(), o)
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "host nao esta ocioso") {
+		t.Fatalf("Err = %v, want busy guard", r.Err)
+	}
+	for _, c := range calls {
+		if strings.Contains(c, "systemctl restart") {
+			t.Fatalf("systemctl restart called despite busy host: %v", calls)
+		}
+	}
+}
+
 func TestRestart_Execute_NotActiveAfter(t *testing.T) {
 	t.Parallel()
 	o := DefaultRestartOptions()
 	o.Short = "civm-1"
 	o.Execute = true
+	o.IdleProbeDelay = 0
+	o.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
 	o.SleepFn = func(time.Duration) {}
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		key := name + " " + strings.Join(args, " ")
@@ -206,6 +243,12 @@ func TestValidateRestart_RequiresShortOrUnit(t *testing.T) {
 	}
 	if err := validateRestartOptions(RestartOptions{Unit: "x.service"}); err != nil {
 		t.Errorf("Unit presente nao deveria erro: %v", err)
+	}
+	if err := validateRestartOptions(RestartOptions{Short: "x/y"}); err == nil {
+		t.Errorf("esperava erro para short inseguro")
+	}
+	if err := validateRestartOptions(RestartOptions{Unit: "../x.service"}); err == nil {
+		t.Errorf("esperava erro para unit insegura")
 	}
 }
 

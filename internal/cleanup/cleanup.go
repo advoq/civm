@@ -1,4 +1,4 @@
-// Package cleanup implements disk hygiene for the ci-vm runner host.
+// Package cleanup implements disk hygiene for the civm runner host.
 // All actions are dry-run by default; --execute flag flips to mutating.
 package cleanup
 
@@ -7,11 +7,39 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/emersonbusson/civm/internal/civm"
+	"github.com/emersonbusson/civm/internal/idle"
 )
+
+type deleteCandidate struct {
+	path string
+	size int64
+}
+
+// Activity is evidence that a CI job or build is currently active on the host.
+type Activity = idle.Activity
+
+var dangerousAbsoluteRoots = map[string]struct{}{
+	"/":     {},
+	"/home": {},
+	"/root": {},
+}
+
+var allowedTopLevelCleanupRoots = map[string]struct{}{
+	civm.DefaultTmpDir: {},
+}
+
+var protectedWorkCacheDirs = map[string]struct{}{
+	"_actions": {},
+	"_tool":    {},
+}
 
 // Action is one cleanup step result.
 type Action struct {
@@ -25,55 +53,60 @@ type Action struct {
 
 // Options control which steps run.
 type Options struct {
-	Execute       bool
-	WorkDir       string
-	TmpDir        string
-	TmpThreshold  time.Duration
-	WorkThreshold time.Duration
-	DockerPrune   bool
-	AptClean      bool
-	Now           time.Time
+	Execute        bool
+	WorkDir        string
+	TmpDir         string
+	TmpThreshold   time.Duration
+	WorkThreshold  time.Duration
+	DockerPrune    bool
+	AptClean       bool
+	SkipIdleGuard  bool
+	IdleProbeDelay time.Duration
+	Now            time.Time
 
-	WalkFn func(root string, fn fs.WalkDirFunc) error
-	StatFn func(path string) (fs.FileInfo, error)
-	RunFn  func(ctx context.Context, name string, args ...string) ([]byte, error)
+	WalkFn     func(root string, fn fs.WalkDirFunc) error
+	StatFn     func(path string) (fs.FileInfo, error)
+	GlobFn     func(pattern string) ([]string, error)
+	RunFn      func(ctx context.Context, name string, args ...string) ([]byte, error)
+	ActivityFn func(ctx context.Context) ([]Activity, error)
 }
 
 // DefaultOptions returns sane defaults: dry-run, 7d /tmp, 14d _work.
 func DefaultOptions() Options {
 	return Options{
-		Execute:       false,
-		WorkDir:       "/home/runner/_work",
-		TmpDir:        "/tmp",
-		TmpThreshold:  7 * 24 * time.Hour,
-		WorkThreshold: 14 * 24 * time.Hour,
-		DockerPrune:   true,
-		AptClean:      true,
-		Now:           time.Now(),
-		WalkFn:        filepath.WalkDir,
-		StatFn:        defaultStat,
-		RunFn:         defaultRun,
+		Execute:        false,
+		WorkDir:        civm.DefaultWorkDir,
+		TmpDir:         civm.DefaultTmpDir,
+		TmpThreshold:   7 * 24 * time.Hour,
+		WorkThreshold:  14 * 24 * time.Hour,
+		DockerPrune:    true,
+		AptClean:       true,
+		IdleProbeDelay: 2 * time.Second,
+		Now:            time.Now(),
+		WalkFn:         filepath.WalkDir,
+		StatFn:         defaultStat,
+		GlobFn:         filepath.Glob,
+		RunFn:          defaultRun,
+		ActivityFn:     defaultActivities,
 	}
 }
 
 // Run executes every enabled step and returns one Action per step.
 // Errors are captured per-Action; the function itself returns nil.
 func Run(ctx context.Context, opts Options) []Action {
-	if opts.WalkFn == nil {
-		opts.WalkFn = filepath.WalkDir
-	}
-	if opts.StatFn == nil {
-		opts.StatFn = defaultStat
-	}
-	if opts.RunFn == nil {
-		opts.RunFn = defaultRun
-	}
-	if opts.Now.IsZero() {
-		opts.Now = time.Now()
+	applyDefaults(&opts)
+	if opts.Execute && !opts.SkipIdleGuard {
+		if err := ensureIdle(ctx, opts); err != nil {
+			return []Action{{
+				Name: "host_idle",
+				Path: "(runner/build activity)",
+				Err:  err,
+			}}
+		}
 	}
 	var out []Action
 	out = append(out, scanAndMaybeDelete(ctx, opts, "tmp_old", opts.TmpDir, opts.TmpThreshold))
-	out = append(out, scanAndMaybeDelete(ctx, opts, "work_old", opts.WorkDir, opts.WorkThreshold))
+	out = append(out, scanWorkAndMaybeDelete(ctx, opts))
 	if opts.DockerPrune {
 		out = append(out, dockerPrune(ctx, opts))
 	}
@@ -83,15 +116,80 @@ func Run(ctx context.Context, opts Options) []Action {
 	return out
 }
 
+func applyDefaults(opts *Options) {
+	if opts.WalkFn == nil {
+		opts.WalkFn = filepath.WalkDir
+	}
+	if opts.StatFn == nil {
+		opts.StatFn = defaultStat
+	}
+	if opts.GlobFn == nil {
+		opts.GlobFn = filepath.Glob
+	}
+	if opts.RunFn == nil {
+		opts.RunFn = defaultRun
+	}
+	if opts.ActivityFn == nil {
+		opts.ActivityFn = defaultActivities
+	}
+	if opts.Now.IsZero() {
+		opts.Now = time.Now()
+	}
+}
+
+func scanWorkAndMaybeDelete(ctx context.Context, opts Options) Action {
+	roots := workCleanupRoots(opts)
+	if len(roots) == 1 {
+		return scanAndMaybeDelete(ctx, opts, "work_old", roots[0], opts.WorkThreshold)
+	}
+	a := Action{Name: "work_old", Path: strings.Join(roots, ", ")}
+	for _, root := range roots {
+		part := scanAndMaybeDelete(ctx, opts, "work_old", root, opts.WorkThreshold)
+		a.BytesFound += part.BytesFound
+		a.BytesFreed += part.BytesFreed
+		a.Executed = a.Executed || part.Executed
+		if part.Err != nil && a.Err == nil {
+			a.Err = part.Err
+		}
+	}
+	return a
+}
+
+func workCleanupRoots(opts Options) []string {
+	workDir := filepath.Clean(opts.WorkDir)
+	if workDir != filepath.Clean(civm.DefaultWorkDir) {
+		return []string{opts.WorkDir}
+	}
+	matches, err := opts.GlobFn("/home/*/actions-runner-*/_work")
+	if err != nil || len(matches) == 0 {
+		return []string{opts.WorkDir}
+	}
+	sort.Strings(matches)
+	return matches
+}
+
 func scanAndMaybeDelete(ctx context.Context, opts Options, name, root string, threshold time.Duration) Action {
 	a := Action{Name: name, Path: root}
+	cleanRoot, err := validateCleanupRoot(root)
+	if err != nil {
+		a.Err = err
+		return a
+	}
+	root = cleanRoot
+	a.Path = cleanRoot
 	cutoff := opts.Now.Add(-threshold)
-	var toDelete []string
-	err := opts.WalkFn(root, func(path string, d fs.DirEntry, err error) error {
+	var toDelete []deleteCandidate
+	err = opts.WalkFn(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if path == root {
+			return nil
+		}
+		if name == "work_old" && isProtectedWorkCacheDir(root, path) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		info, err := d.Info()
@@ -107,7 +205,7 @@ func scanAndMaybeDelete(ctx context.Context, opts Options, name, root string, th
 		}
 		size := dirSize(opts, path, info)
 		a.BytesFound += size
-		toDelete = append(toDelete, path)
+		toDelete = append(toDelete, deleteCandidate{path: path, size: size})
 		if d.IsDir() {
 			return filepath.SkipDir
 		}
@@ -120,15 +218,52 @@ func scanAndMaybeDelete(ctx context.Context, opts Options, name, root string, th
 	if !opts.Execute {
 		return a
 	}
-	for _, p := range toDelete {
-		if _, err := opts.RunFn(ctx, "rm", "-rf", p); err != nil {
+	if err := ensureIdle(ctx, opts); err != nil {
+		a.Err = err
+		return a
+	}
+	for _, candidate := range toDelete {
+		if _, err := opts.RunFn(ctx, "rm", "-rf", candidate.path); err != nil {
 			a.Err = err
 			break
 		}
-		a.BytesFreed += a.BytesFound // approximated; precise per-path freed not tracked
+		a.BytesFreed += candidate.size
 	}
 	a.Executed = true
 	return a
+}
+
+func isProtectedWorkCacheDir(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == "" {
+		return false
+	}
+	first := strings.Split(filepath.ToSlash(rel), "/")[0]
+	_, ok := protectedWorkCacheDirs[first]
+	return ok
+}
+
+func validateCleanupRoot(root string) (string, error) {
+	clean, err := civm.CleanDir(root, "cleanup root")
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(clean) {
+		return clean, nil
+	}
+	if _, ok := allowedTopLevelCleanupRoots[clean]; ok {
+		return clean, nil
+	}
+	if _, ok := dangerousAbsoluteRoots[clean]; ok {
+		return "", fmt.Errorf("cleanup root perigoso: %s", clean)
+	}
+	if home, err := os.UserHomeDir(); err == nil && clean == filepath.Clean(home) {
+		return "", fmt.Errorf("cleanup root nao pode ser home inteiro: %s", clean)
+	}
+	if strings.HasPrefix(clean, "/home/") && strings.Count(strings.Trim(clean, "/"), "/") == 1 {
+		return "", fmt.Errorf("cleanup root nao pode ser home inteiro: %s", clean)
+	}
+	return clean, nil
 }
 
 func dirSize(opts Options, root string, info fs.FileInfo) int64 {
@@ -162,6 +297,10 @@ func dockerPrune(ctx context.Context, opts Options) Action {
 		}
 		return a
 	}
+	if err := ensureIdle(ctx, opts); err != nil {
+		a.Err = err
+		return a
+	}
 	out, err := opts.RunFn(ctx, "docker", "system", "prune", "-af", "--volumes")
 	if err != nil {
 		a.Err = err
@@ -177,6 +316,10 @@ func aptClean(ctx context.Context, opts Options) Action {
 	if !opts.Execute {
 		return a
 	}
+	if err := ensureIdle(ctx, opts); err != nil {
+		a.Err = err
+		return a
+	}
 	if _, err := opts.RunFn(ctx, "apt-get", "clean"); err != nil {
 		a.Err = err
 		return a
@@ -187,6 +330,39 @@ func aptClean(ctx context.Context, opts Options) Action {
 	}
 	a.Executed = true
 	return a
+}
+
+func ensureIdle(ctx context.Context, opts Options) error {
+	if opts.SkipIdleGuard || !opts.Execute {
+		return nil
+	}
+	idleOpts := idle.DefaultOptions()
+	idleOpts.ActivityFn = opts.ActivityFn
+	idleOpts.ProbeDelay = opts.IdleProbeDelay
+	return idle.Ensure(ctx, idleOpts, "cleanup")
+}
+
+func assertIdle(ctx context.Context, activityFn func(context.Context) ([]Activity, error)) error {
+	idleOpts := idle.DefaultOptions()
+	idleOpts.ActivityFn = activityFn
+	idleOpts.ProbeDelay = 0
+	return idle.Ensure(ctx, idleOpts, "cleanup")
+}
+
+func formatActivities(activities []Activity) string {
+	return idle.FormatActivities(activities)
+}
+
+func defaultActivities(ctx context.Context) ([]Activity, error) {
+	return idle.DefaultActivities(ctx)
+}
+
+func parseActiveProcesses(psOutput string, currentPID int) []Activity {
+	return idle.ParseActiveProcesses(psOutput, currentPID)
+}
+
+func isActiveBuildProcess(comm, args string) bool {
+	return idle.IsActiveBuildProcess(comm, args)
 }
 
 // parseReclaimable parses output of `docker system df --format {{.Reclaimable}}`.

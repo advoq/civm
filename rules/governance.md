@@ -37,18 +37,13 @@ paths:
 
 ## Proteção automática
 
-`.github/workflows/pr-governance.yml` roda em `pull_request_target` e faz
-checkout do repositório base. A workflow não executa código vindo da branch do
-PR; ela chama apenas:
+O `civm` ainda não tem `pr-governance.yml` ativo. Enquanto esse guard não
+existir, a governança de PR é regra operacional revisada por humano.
 
-```bash
-go run ./tools/compexhubctl pr-guard --event "$GITHUB_EVENT_PATH"
-```
-
-O guard valida descrição, tabela de commits com detalhes clicáveis, link de
-issue, assignee compartilhado e labels. Se a regra precisar mudar, altere
-primeiro o comando em
-`tools/compexhubctl/cmd/prguard` com teste focado.
+Se o guard for implementado, deve ficar neste repo, ser stdlib-only quando
+possível e ter testes focados. Evitar `pull_request_target`; se ele for
+inevitavel, o job nao pode fazer checkout nem executar codigo vindo da branch
+do PR e nao pode expor secrets a fork.
 
 ## Issues
 

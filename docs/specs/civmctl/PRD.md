@@ -40,9 +40,11 @@ cleanup automatizado via systemd timer.
 
 ## 3. Opção recomendada
 
-**Opção A (escolhida)**: civmctl Go stdlib-only com 5 subcomandos:
-`version-pins`, `bootstrap`, `cleanup`, `health`, `runner`. Idempotente.
-Dry-run por padrão em mutações destrutivas. systemd timer para cleanup.
+**Opção A (escolhida)**: civmctl Go stdlib-only com subcomandos de
+provisionamento, manutenção e diagnóstico (`version-pins`, `bootstrap`,
+`cleanup`, `health`, `doctor`, `idle-check`, `runner`, watchdogs e CI
+helpers). Idempotente. Dry-run por padrão em mutações destrutivas. Timers
+systemd para cleanup, disk-watchdog e reverse-watchdog.
 
 Alternativas consideradas e descartadas:
 
@@ -59,12 +61,24 @@ Alternativas consideradas e descartadas:
 - **RF-2** `civmctl bootstrap [--dry-run]`: provisiona Ubuntu 24.04 com tools
   na versão alvo. Idempotente. `--dry-run` é default; `--execute` aplica.
 - **RF-3** `civmctl cleanup [--execute]`: limpa Docker, /tmp, _work caches,
-  apt cache. Default `--dry-run`. Reporta bytes recuperados.
+  apt cache. Default `--dry-run`. Reporta bytes recuperados. Em `--execute`,
+  aborta se detectar job/build ativo ou se não conseguir provar host ocioso.
 - **RF-4** `civmctl health`: exibe disk free, memória, runners ativos,
-  última execução de cleanup. Exit 0 OK, 1 warning, 2 critical.
+  timers cleanup/disk/reverse e última execução de cleanup. Exit 0 OK, 1
+  warning, 2 critical. Cleanup/disk-watchdog ausente é crítico;
+  reverse-watchdog ausente é warning.
 - **RF-5** `civmctl runner add --token=X --url=Y --labels=civm`:
   registra novo runner GitHub. Idempotente (skip se já existe).
-- **RF-6** Help auto-gerado para todos subcomandos (`civmctl --help`,
+- **RF-6** `civmctl doctor [--repos=a/b,c/d] [--workflow=ci.yml] [--json]`:
+  visão read-only consolidada de host, timers, systemd runners e GitHub
+  runners. Classifica `civm-*` online como canônico, `vitae-ci-*` offline
+  como legacy/stale e runner online sem label `civm` como ambíguo.
+- **RF-7** `civmctl idle-check [--json]`: read-only; exit `0=idle`,
+  `1=busy`, `2=unknown`.
+- **RF-8** `runner restart/remove/upgrade --execute`: bloqueia fail-closed
+  se o host estiver ocupado ou desconhecido antes de mutar systemd, arquivos
+  ou registro GitHub.
+- **RF-9** Help auto-gerado para todos subcomandos (`civmctl --help`,
   `civmctl <sub> --help`).
 
 ## 5. Requisitos não-funcionais (RNF)
@@ -77,6 +91,9 @@ Alternativas consideradas e descartadas:
 - **RNF-4** `civmctl` sem args ou com `--help` responde em <100 ms.
 - **RNF-5** Mutações destrutivas (cleanup, bootstrap) são **dry-run por
   default**. `--execute` exige flag explícita.
+- **RNF-8** Cleanup, disk-watchdog e mutações de runner são fail-closed:
+  não deletam, prunam, param runner nem fazem upgrade quando há
+  `Runner.Worker`, processo dentro de `_work` ou build Docker ativo.
 - **RNF-6** Logs em PT-BR para usuário; identifiers/comments em inglês.
 - **RNF-7** Exit codes consistentes: 0 OK, 1 warning, 2 critical, 64+ erro
   de uso (sysexits.h).
@@ -100,6 +117,7 @@ admin@vm $ sudo civmctl bootstrap --execute
 
 ```
 [systemd] Trigger civmctl-cleanup.service
+[civmctl] Host idle guard: nenhum Runner.Worker/processo _work/build ativo
 [civmctl] Docker prune: liberados 4.2 GB
 [civmctl] /tmp older than 7d: liberados 1.1 GB
 [civmctl] _work caches older than 14d: liberados 8.7 GB
@@ -111,7 +129,7 @@ admin@vm $ sudo civmctl bootstrap --execute
 
 ```
 $ civmctl health
-DISK    /home/runner/_work    89 GB free / 128 GB    [OK]
+DISK    /    89 GB free / 128 GB                     [OK]
 MEM     8.2 GB free / 32 GB                          [OK]
 RUNNERS civm-1 (online), civm-2 (online)    [OK]
 LAST    cleanup 6h ago, recovered 14.8 GB            [OK]
@@ -140,8 +158,8 @@ instalado pelo bootstrap) ou `curl` direto, não via SDK.
 **Riscos:**
 
 - R1: cleanup deleta arquivo em uso por job ativo. **Mitigação**: cleanup
-  só remove arquivos older than threshold; jobs ativos têm <1h de idade
-  (default).
+  usa guard de ociosidade fail-closed antes de qualquer mutação e revalida
+  antes de `rm -rf`, Docker prune e apt clean; mtime <2h é segunda camada.
 - R2: bootstrap quebra estado prévio da VM. **Mitigação**: idempotente; cada
   step verifica antes de instalar; `--dry-run` default.
 - R3: kernel atualizado pelo provedor diverge de 6.17.0-azure. **Mitigação**:
@@ -157,7 +175,7 @@ Fases sequenciais, cada uma comitavel:
 4. `internal/cleanup/` + `cmd/civmctl/cleanup.go`
 5. `internal/bootstrap/` + `cmd/civmctl/bootstrap.go`
 6. `cmd/civmctl/runner.go` (gh CLI wrapper)
-7. `deploy/systemd/civmctl-cleanup.{service,timer}`
+7. `deploy/systemd/civmctl-{cleanup,disk-watchdog,reverse-watchdog}.{service,timer}`
 8. Update `runbooks/MULTI-PROJECT-RUNNER.md` e `README.md`
 9. Update `.github/workflows/ci.yml` para build + test
 10. Update `MEMORY.md` com hashes finais

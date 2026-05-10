@@ -8,15 +8,16 @@ import (
 	"os"
 	"time"
 
+	"github.com/emersonbusson/civm/internal/civm"
 	"github.com/emersonbusson/civm/internal/health"
 )
 
 func runHealth(args []string) int {
 	fs := flag.NewFlagSet("health", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	workDir := fs.String("work-dir", "/home/runner/_work", "diretorio do runner para checar disco")
+	workDir := fs.String("work-dir", civm.DefaultHealthDiskPath, "path/filesystem para checar disco")
 	jsonOut := fs.Bool("json", false, "saida JSON estruturada (pra Prometheus/dashboards)")
-	timeoutSec := fs.Int("timeout", 5, "timeout em segundos para coleta")
+	timeoutSec := fs.Int("timeout", civm.DefaultHealthTimeoutSeconds, "timeout em segundos para coleta")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de health:", err)
 		return exitUsage

@@ -5,8 +5,8 @@
 >   self-hosted compartilhado entre N repos; setup multi-runner;
 >   isolamento por job. **Doc do admin da VM**.
 > - [`ADVOQ-ADOPTION.md`](./ADVOQ-ADOPTION.md) — passo-a-passo "1
->   comando" pra adotar ci-vm em peer novo (template advoq).
-> - `civmctl billing-status` — detector Go canonico no proprio ci-vm
+>   comando" pra adotar civm em peer novo (template advoq).
+> - `civmctl billing-status` — detector Go canonico no proprio civm
 >   (zero dep cross-repo, zero PAT, usa GITHUB_TOKEN auto-injetado).
 >   Cada peer pode chamar diretamente sem importar nada externo.
 >
@@ -95,7 +95,7 @@ para GitHub App (nao PAT classico) — ver secao Rollback trigger.
 Comando dedicado:
 
 ```bash
-go run ./tools/compexhubctl ci billing-status
+civmctl billing-status --repo=<owner>/<repo> --workflow=ci.yml
 ```
 
 Output e exit code:
@@ -106,7 +106,7 @@ Output e exit code:
 - `[billing] unknown` → exit 2, sem dados suficientes (gh ausente,
   workflow novo sem histórico, JSON corrompido).
 
-Heurística (em `tools/compexhubctl/cmd/ci/billing.go`): considera
+Heurística (em `internal/billing/billing.go`): considera
 apenas runs com `startedAt` não-zero (efetivamente despachados pelo
 GitHub) e classifica `blocked` quando os 3 mais recentes têm
 `conclusion=failure` E `updatedAt - startedAt < 10 segundos`. Qualquer
@@ -187,11 +187,12 @@ Setup minimo (single-runner, single-repo):
    merge — single point of failure aceitado (mitigado em multi-runner
    setup; ver MULTI-PROJECT-RUNNER.md).
 
-**Nota de seguranca:** runner self-hosted pode executar codigo de PRs
-(dependendo de settings). Para repo publico ou aceitando PRs externos,
-configurar `Settings > Actions > General > Fork pull request workflows`
-para "Require approval for all outside collaborators" ou desabilitar PRs
-externos completamente. Para repo solo (caso atual), risco minimo.
+**Nota de seguranca:** runner self-hosted deve executar apenas PR confiavel
+ou same-repo. Para repo publico ou aceitando PRs externos, configurar
+`Settings > Actions > General > Fork pull request workflows` para
+"Require approval for all outside collaborators" ou desabilitar PRs externos
+completamente. Evitar `pull_request_target` em workflows que possam tocar
+codigo do PR e nunca expor secrets a codigo de fork em runner self-hosted.
 
 ## Configurar branch protection para aceitar Gates como required
 
@@ -274,7 +275,7 @@ Migracao seria nova SPEC + ADR justificando o trade-off.
 
 ```bash
 # Detectar status
-go run ./tools/compexhubctl ci billing-status
+civmctl billing-status --repo=<owner>/<repo> --workflow=ci.yml
 
 # Posting manual de check
 go run ./tools/compexhubctl ci local --report-pr 42

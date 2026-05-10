@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -26,29 +27,41 @@ func runVersionPins(args []string) int {
 }
 
 func renderSpecJSON(s specs.RunnerImageSpec, w io.Writer) int {
-	fmt.Fprintln(w, "{")
-	fmt.Fprintf(w, "  \"os_distro\": %q,\n", s.OSDistro)
-	fmt.Fprintf(w, "  \"os_version\": %q,\n", s.OSVersion)
-	fmt.Fprintf(w, "  \"kernel\": %q,\n", s.Kernel)
-	fmt.Fprintf(w, "  \"image_version\": %q,\n", s.ImageVersion)
-	fmt.Fprintf(w, "  \"upstream_url\": %q,\n", s.UpstreamURL)
-	fmt.Fprintln(w, "  \"tools\": [")
-	for i, t := range s.Tools {
-		fmt.Fprintf(w, "    {\"name\": %q, \"preferred\": %q, \"versions\": [", t.Name, t.Preferred())
-		for j, v := range t.Versions {
-			if j > 0 {
-				fmt.Fprint(w, ", ")
-			}
-			fmt.Fprintf(w, "%q", v)
-		}
-		fmt.Fprintf(w, "], \"source\": %q}", t.Source)
-		if i < len(s.Tools)-1 {
-			fmt.Fprintln(w, ",")
-		} else {
-			fmt.Fprintln(w)
-		}
+	type toolOut struct {
+		Name      string   `json:"name"`
+		Preferred string   `json:"preferred"`
+		Versions  []string `json:"versions"`
+		Source    string   `json:"source"`
 	}
-	fmt.Fprintln(w, "  ]")
-	fmt.Fprintln(w, "}")
+	type specOut struct {
+		OSDistro     string    `json:"os_distro"`
+		OSVersion    string    `json:"os_version"`
+		Kernel       string    `json:"kernel"`
+		ImageVersion string    `json:"image_version"`
+		UpstreamURL  string    `json:"upstream_url"`
+		Tools        []toolOut `json:"tools"`
+	}
+	out := specOut{
+		OSDistro:     s.OSDistro,
+		OSVersion:    s.OSVersion,
+		Kernel:       s.Kernel,
+		ImageVersion: s.ImageVersion,
+		UpstreamURL:  s.UpstreamURL,
+		Tools:        make([]toolOut, 0, len(s.Tools)),
+	}
+	for _, t := range s.Tools {
+		out.Tools = append(out.Tools, toolOut{
+			Name:      t.Name,
+			Preferred: t.Preferred(),
+			Versions:  t.Versions,
+			Source:    t.Source,
+		})
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(out); err != nil {
+		fmt.Fprintln(os.Stderr, "erro ao gerar JSON:", err)
+		return 2
+	}
 	return 0
 }

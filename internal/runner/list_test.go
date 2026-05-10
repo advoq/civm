@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-const fakeSystemctlOutput = `  actions.runner.emersonbusson-ci-vm.civm-1.service        loaded active running GitHub Actions Runner (emersonbusson-ci-vm.civm-1)
+const fakeSystemctlOutput = `  actions.runner.emersonbusson-civm.civm-1.service        loaded active running GitHub Actions Runner (emersonbusson-civm.civm-1)
   actions.runner.emersonbusson-compexhub.civm-cmpx.service loaded active running GitHub Actions Runner (emersonbusson-compexhub.civm-cmpx)
   actions.runner.emersonbusson-vitae.civm-vitae.service    loaded active running GitHub Actions Runner (emersonbusson-vitae.civm-vitae)
 `
@@ -28,7 +28,7 @@ func TestList_ParsesAllThree(t *testing.T) {
 		t.Fatalf("len = %d, want 3", len(items))
 	}
 	wantRepos := map[string]string{
-		"civm-1":     "emersonbusson/ci-vm",
+		"civm-1":     "emersonbusson/civm",
 		"civm-cmpx":  "emersonbusson/compexhub",
 		"civm-vitae": "emersonbusson/vitae",
 	}
@@ -105,8 +105,8 @@ func TestParseRunnerUnit(t *testing.T) {
 		wantName string
 	}{
 		{
-			"actions.runner.emersonbusson-ci-vm.civm-1.service",
-			"emersonbusson/ci-vm",
+			"actions.runner.emersonbusson-civm.civm-1.service",
+			"emersonbusson/civm",
 			"civm-1",
 		},
 		{

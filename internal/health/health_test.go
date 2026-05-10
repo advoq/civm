@@ -23,6 +23,9 @@ func okCollector() *Collector {
 	c.LastCleanupFn = func(context.Context) (*time.Time, string, error) {
 		return &now, "liberados 4.2 GB", nil
 	}
+	c.TimerStateFn = func(context.Context, string) (TimerState, error) {
+		return TimerState{Enabled: "enabled", Active: "active"}, nil
+	}
 	return c
 }
 
@@ -33,8 +36,8 @@ func TestCollect_AllOK(t *testing.T) {
 	if r.Exit() != 0 {
 		t.Errorf("Exit = %d, want 0", r.Exit())
 	}
-	if len(r.Checks) != 4 {
-		t.Errorf("len(Checks) = %d, want 4", len(r.Checks))
+	if len(r.Checks) != 7 {
+		t.Errorf("len(Checks) = %d, want 7", len(r.Checks))
 	}
 }
 
@@ -128,6 +131,65 @@ func TestCollect_OldCleanupIsWarn(t *testing.T) {
 	}
 }
 
+func TestCollect_TimersMissingAndStale(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		timer     string
+		state     TimerState
+		err       error
+		wantExit  int
+		wantCheck string
+	}{
+		{
+			name:      "cleanup missing is critical",
+			timer:     "civmctl-cleanup.timer",
+			err:       errors.New("not found"),
+			wantExit:  int(StatusCritical),
+			wantCheck: "TIMER_CLEANUP",
+		},
+		{
+			name:      "disk stale is critical",
+			timer:     "civmctl-disk-watchdog.timer",
+			state:     TimerState{Enabled: "enabled", Active: "inactive"},
+			wantExit:  int(StatusCritical),
+			wantCheck: "TIMER_DISK",
+		},
+		{
+			name:      "reverse missing is warning",
+			timer:     "civmctl-reverse-watchdog.timer",
+			err:       errors.New("not found"),
+			wantExit:  int(StatusWarn),
+			wantCheck: "TIMER_REVERSE",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := okCollector()
+			c.TimerStateFn = func(_ context.Context, timer string) (TimerState, error) {
+				if timer == tt.timer {
+					return tt.state, tt.err
+				}
+				return TimerState{Enabled: "enabled", Active: "active"}, nil
+			}
+			r := c.Collect(context.Background())
+			if r.Exit() != tt.wantExit {
+				t.Fatalf("Exit = %d, want %d", r.Exit(), tt.wantExit)
+			}
+			found := false
+			for _, ch := range r.Checks {
+				if ch.Name == tt.wantCheck && ch.Status == Status(tt.wantExit) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("check %s with status %d not found: %+v", tt.wantCheck, tt.wantExit, r.Checks)
+			}
+		})
+	}
+}
+
 func TestRender_ContainsExitLine(t *testing.T) {
 	t.Parallel()
 	c := okCollector()
@@ -157,8 +219,8 @@ func TestRenderJSON_StructValid(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
 		t.Fatalf("output nao e JSON valido: %v", err)
 	}
-	if len(parsed.Checks) != 4 {
-		t.Errorf("Checks len = %d, want 4", len(parsed.Checks))
+	if len(parsed.Checks) != 7 {
+		t.Errorf("Checks len = %d, want 7", len(parsed.Checks))
 	}
 	if parsed.Exit != 0 {
 		t.Errorf("Exit = %d, want 0", parsed.Exit)

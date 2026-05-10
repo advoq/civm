@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/emersonbusson/civm/internal/civm"
 	"github.com/emersonbusson/civm/internal/cleanup"
 )
 
@@ -16,11 +17,11 @@ func runCleanup(args []string) int {
 	fs.SetOutput(io.Discard)
 	execute := fs.Bool("execute", false, "aplicar mudancas (default: dry-run)")
 	dryRun := fs.Bool("dry-run", false, "explicito dry-run (default ja e dry-run)")
-	workDir := fs.String("work-dir", "/home/runner/_work", "diretorio do runner")
-	tmpDir := fs.String("tmp-dir", "/tmp", "diretorio /tmp")
+	workDir := fs.String("work-dir", civm.DefaultWorkDir, "diretorio do runner")
+	tmpDir := fs.String("tmp-dir", civm.DefaultTmpDir, "diretorio /tmp")
 	noDocker := fs.Bool("no-docker", false, "nao rodar docker prune")
 	noApt := fs.Bool("no-apt", false, "nao rodar apt clean")
-	timeoutMin := fs.Int("timeout", 30, "timeout em minutos")
+	timeoutMin := fs.Int("timeout", civm.DefaultCleanupTimeoutMinutes, "timeout em minutos")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de cleanup:", err)
 		return exitUsage

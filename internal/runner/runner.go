@@ -8,7 +8,11 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"strings"
+	"path/filepath"
+	"time"
+
+	"github.com/emersonbusson/civm/internal/civm"
+	"github.com/emersonbusson/civm/internal/idle"
 )
 
 // AddOptions controls a single runner installation.
@@ -33,7 +37,7 @@ type AddOptions struct {
 func DefaultOptions() AddOptions {
 	return AddOptions{
 		Label:         "civm",
-		RunnerVersion: "2.334.0",
+		RunnerVersion: civm.DefaultRunnerVersion,
 		Execute:       false,
 		RunFn:         defaultRun,
 	}
@@ -64,13 +68,13 @@ func Add(ctx context.Context, opts AddOptions) ([]Result, error) {
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
 	}
-	dir := fmt.Sprintf("%s/actions-runner-%s", opts.BaseDir, opts.Short)
+	dir := filepath.Join(opts.BaseDir, "actions-runner-"+opts.Short)
 	tarball := fmt.Sprintf("https://github.com/actions/runner/releases/download/v%s/actions-runner-linux-x64-%s.tar.gz",
 		opts.RunnerVersion, opts.RunnerVersion)
 	url := fmt.Sprintf("https://github.com/%s", opts.Repo)
-	// Naming padrao: ci-vm-<short>. Ex: ci-vm-compexhub, ci-vm-advoq.
-	// Para o proprio repo ci-vm: convencao --short=self -> ci-vm-self.
-	name := "ci-vm-" + opts.Short
+	// Naming padrao: civm-<short>. Ex: civm-compexhub, civm-advoq.
+	// Para o proprio repo civm: convencao --short=self -> civm-self.
+	name := "civm-" + opts.Short
 	steps := []Step{
 		{
 			Name:        "mkdir_dir",
@@ -107,9 +111,9 @@ func Add(ctx context.Context, opts AddOptions) ([]Result, error) {
 			Description: "config.sh --unattended --labels " + opts.Label + " --name " + name,
 			WouldDo:     fmt.Sprintf("(cd %s && ./config.sh --unattended --url %s --token *** --labels %s --name %s --work _work --replace)", dir, url, opts.Label, name),
 			Apply: func(ctx context.Context) error {
-				_, err := opts.RunFn(ctx, "sh", "-c",
-					fmt.Sprintf("cd %s && ./config.sh --unattended --url %s --token %s --labels %s --name %s --work _work --replace",
-						shellQuote(dir), shellQuote(url), shellQuote(opts.Token), shellQuote(opts.Label), shellQuote(name)))
+				_, err := opts.RunFn(ctx, filepath.Join(dir, "config.sh"),
+					"--unattended", "--url", url, "--token", opts.Token,
+					"--labels", opts.Label, "--name", name, "--work", "_work", "--replace")
 				return err
 			},
 		},
@@ -118,8 +122,7 @@ func Add(ctx context.Context, opts AddOptions) ([]Result, error) {
 			Description: "sudo svc.sh install " + opts.RunAsUser,
 			WouldDo:     fmt.Sprintf("(cd %s && sudo ./svc.sh install %s)", dir, opts.RunAsUser),
 			Apply: func(ctx context.Context) error {
-				_, err := opts.RunFn(ctx, "sh", "-c",
-					fmt.Sprintf("cd %s && sudo ./svc.sh install %s", shellQuote(dir), shellQuote(opts.RunAsUser)))
+				_, err := opts.RunFn(ctx, "sudo", filepath.Join(dir, "svc.sh"), "install", opts.RunAsUser)
 				return err
 			},
 		},
@@ -128,8 +131,7 @@ func Add(ctx context.Context, opts AddOptions) ([]Result, error) {
 			Description: "sudo svc.sh start",
 			WouldDo:     fmt.Sprintf("(cd %s && sudo ./svc.sh start)", dir),
 			Apply: func(ctx context.Context) error {
-				_, err := opts.RunFn(ctx, "sh", "-c",
-					fmt.Sprintf("cd %s && sudo ./svc.sh start", shellQuote(dir)))
+				_, err := opts.RunFn(ctx, "sudo", filepath.Join(dir, "svc.sh"), "start")
 				return err
 			},
 		},
@@ -153,26 +155,30 @@ func Add(ctx context.Context, opts AddOptions) ([]Result, error) {
 }
 
 func validateOptions(opts AddOptions) error {
-	if opts.Repo == "" {
-		return fmt.Errorf("--repo obrigatorio (formato: owner/repo)")
-	}
-	if !strings.Contains(opts.Repo, "/") {
-		return fmt.Errorf("--repo deve ter formato owner/repo")
+	if err := civm.ValidateRepo(opts.Repo); err != nil {
+		return err
 	}
 	if opts.Token == "" {
 		return fmt.Errorf("--token obrigatorio")
 	}
-	if opts.Short == "" {
-		return fmt.Errorf("--short obrigatorio (suffix curto, ex: cmpx, vitae)")
+	if err := civm.ValidateShort(opts.Short); err != nil {
+		return err
 	}
-	if opts.RunnerVersion == "" {
-		return fmt.Errorf("--runner-version obrigatorio")
+	if err := civm.ValidateLabels(opts.Label); err != nil {
+		return err
 	}
-	if opts.BaseDir == "" {
-		return fmt.Errorf("--base-dir obrigatorio")
+	if err := civm.ValidateSemver(opts.RunnerVersion, "--runner-version"); err != nil {
+		return err
 	}
-	if opts.RunAsUser == "" {
-		return fmt.Errorf("--run-as obrigatorio (user que vai rodar o service)")
+	cleanBase, err := civm.CleanDir(opts.BaseDir, "--base-dir")
+	if err != nil {
+		return err
+	}
+	if cleanBase != opts.BaseDir {
+		return fmt.Errorf("--base-dir deve estar normalizado, got %q want %q", opts.BaseDir, cleanBase)
+	}
+	if err := civm.ValidateUserName(opts.RunAsUser); err != nil {
+		return err
 	}
 	return nil
 }
@@ -205,11 +211,6 @@ func RenderTable(results []Result, opts AddOptions, w io.Writer) {
 	}
 }
 
-// shellQuote escapes single quotes for safe shell embedding.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 func defaultRun(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
@@ -218,18 +219,22 @@ func defaultRun(ctx context.Context, name string, args ...string) ([]byte, error
 
 // RemoveOptions controls a runner removal.
 type RemoveOptions struct {
-	Short     string // suffix do diretorio: ~/actions-runner-<short>
-	Token     string // remove-token (efemero, gh api .../runners/remove-token)
-	BaseDir   string // ex: "/home/emdev"
-	Execute   bool   // false = dry-run
-	RunFn     func(ctx context.Context, name string, args ...string) ([]byte, error)
+	Short          string // suffix do diretorio: ~/actions-runner-<short>
+	Token          string // remove-token (efemero, gh api .../runners/remove-token)
+	BaseDir        string // ex: "/home/emdev"
+	Execute        bool   // false = dry-run
+	IdleProbeDelay time.Duration
+	RunFn          func(ctx context.Context, name string, args ...string) ([]byte, error)
+	ActivityFn     func(ctx context.Context) ([]idle.Activity, error)
 }
 
 // DefaultRemoveOptions returns sane defaults.
 func DefaultRemoveOptions() RemoveOptions {
 	return RemoveOptions{
-		Execute: false,
-		RunFn:   defaultRun,
+		Execute:        false,
+		IdleProbeDelay: 2 * time.Second,
+		RunFn:          defaultRun,
+		ActivityFn:     idle.DefaultActivities,
 	}
 }
 
@@ -243,7 +248,19 @@ func Remove(ctx context.Context, opts RemoveOptions) ([]Result, error) {
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
 	}
-	dir := fmt.Sprintf("%s/actions-runner-%s", opts.BaseDir, opts.Short)
+	if opts.ActivityFn == nil {
+		opts.ActivityFn = idle.DefaultActivities
+	}
+	dir := filepath.Join(opts.BaseDir, "actions-runner-"+opts.Short)
+	if opts.Execute {
+		if err := ensureMutationIdle(ctx, opts.ActivityFn, opts.IdleProbeDelay); err != nil {
+			return []Result{{
+				Name:        "host_idle",
+				Description: "Confirma host sem job/build ativo",
+				Err:         err,
+			}}, nil
+		}
+	}
 	steps := []Step{
 		{
 			Name:        "stop_service",
@@ -251,8 +268,7 @@ func Remove(ctx context.Context, opts RemoveOptions) ([]Result, error) {
 			WouldDo:     fmt.Sprintf("(cd %s && sudo ./svc.sh stop) || true (idempotente)", dir),
 			Apply: func(ctx context.Context) error {
 				// best-effort; ignore error if not installed
-				_, _ = opts.RunFn(ctx, "sh", "-c",
-					fmt.Sprintf("cd %s 2>/dev/null && sudo ./svc.sh stop 2>&1 || true", shellQuote(dir)))
+				_, _ = opts.RunFn(ctx, "sudo", filepath.Join(dir, "svc.sh"), "stop")
 				return nil
 			},
 		},
@@ -261,20 +277,17 @@ func Remove(ctx context.Context, opts RemoveOptions) ([]Result, error) {
 			Description: "sudo svc.sh uninstall",
 			WouldDo:     fmt.Sprintf("(cd %s && sudo ./svc.sh uninstall) || true", dir),
 			Apply: func(ctx context.Context) error {
-				_, _ = opts.RunFn(ctx, "sh", "-c",
-					fmt.Sprintf("cd %s 2>/dev/null && sudo ./svc.sh uninstall 2>&1 || true", shellQuote(dir)))
+				_, _ = opts.RunFn(ctx, "sudo", filepath.Join(dir, "svc.sh"), "uninstall")
 				return nil
 			},
 		},
 		{
 			Name:        "config_remove",
 			Description: "config.sh remove --token=*** (deregister no GitHub)",
-			WouldDo:     fmt.Sprintf("(cd %s && ./config.sh remove --token=***) || true", dir),
+			WouldDo:     fmt.Sprintf("%s remove --token=***", filepath.Join(dir, "config.sh")),
 			Apply: func(ctx context.Context) error {
-				_, _ = opts.RunFn(ctx, "sh", "-c",
-					fmt.Sprintf("cd %s 2>/dev/null && ./config.sh remove --token %s 2>&1 || true",
-						shellQuote(dir), shellQuote(opts.Token)))
-				return nil
+				_, err := opts.RunFn(ctx, filepath.Join(dir, "config.sh"), "remove", "--token", opts.Token)
+				return err
 			},
 		},
 		{
@@ -296,6 +309,8 @@ func Remove(ctx context.Context, opts RemoveOptions) ([]Result, error) {
 		}
 		if err := s.Apply(ctx); err != nil {
 			r.Err = err
+			results = append(results, r)
+			break
 		} else {
 			r.Executed = true
 		}
@@ -305,11 +320,15 @@ func Remove(ctx context.Context, opts RemoveOptions) ([]Result, error) {
 }
 
 func validateRemoveOptions(opts RemoveOptions) error {
-	if opts.Short == "" {
-		return fmt.Errorf("--short obrigatorio (suffix curto, ex: cmpx, vitae)")
+	if err := civm.ValidateShort(opts.Short); err != nil {
+		return err
 	}
-	if opts.BaseDir == "" {
-		return fmt.Errorf("--base-dir obrigatorio")
+	cleanBase, err := civm.CleanDir(opts.BaseDir, "--base-dir")
+	if err != nil {
+		return err
+	}
+	if cleanBase != opts.BaseDir {
+		return fmt.Errorf("--base-dir deve estar normalizado, got %q want %q", opts.BaseDir, cleanBase)
 	}
 	if opts.Token == "" {
 		return fmt.Errorf("--token obrigatorio (gh api -X POST .../actions/runners/remove-token)")

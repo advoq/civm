@@ -1,4 +1,4 @@
-# Runbook — adotar ci-vm no advoq (sem atrito)
+# Runbook — adotar civm no advoq (sem atrito)
 
 > **Audiência**: você (admin) ou qualquer agente futuro que receba pedido
 > "rodar advoq na VM". Este runbook deixa adoção em 1 comando + cópia
@@ -51,11 +51,13 @@ ssh gha-ubuntu-2404 "systemctl is-active actions.runner.emersonbusson-advoq.civm
 Advoq atualmente roda 100% em `ubuntu-latest` (workflows `go.yml`,
 `web.yml`). Pra ativar fallback billing-block via civm, adicione um
 job router que decide entre `ubuntu-latest` e `[self-hosted, civm]`.
+Seguranca: usar o self-hosted apenas para PR confiavel/same-repo; evitar
+`pull_request_target` e secrets em jobs que executem codigo de fork.
 
 Template pronto:
 
 ```bash
-cp ~/codespace/ci-vm/templates/advoq-ci-router.yml.template \
+cp ~/codespace/civm/templates/advoq-ci-router.yml.template \
    ~/codespace/advoq/.github/workflows/ci-router.yml
 ```
 
@@ -133,6 +135,6 @@ como antes (com risco de billing-block continuar matando jobs em <10s).
 ## Histórico
 
 - **2026-05-10** — Runbook criado. Sessão de migração peers para
-  padrão ci-vm/civmctl. advoq decidiu adoção minimal (apenas runner +
+  padrão civm/civmctl. advoq decidiu adoção minimal (apenas runner +
   template, sem modificar workflows existentes do advoq) por filosofia
   "senior, sem atrito" do usuário.

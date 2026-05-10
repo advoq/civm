@@ -7,15 +7,21 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/emersonbusson/civm/internal/idle"
 )
 
 func validUpgradeOpts() UpgradeOptions {
 	return UpgradeOptions{
-		Short:       "civm-1",
-		NewVersion:  "2.335.0",
-		BaseDir:     "/home/emdev",
-		Execute:     false,
-		VerifyDelay: 0,
+		Short:          "civm-1",
+		NewVersion:     "2.335.0",
+		BaseDir:        "/home/emdev",
+		Execute:        false,
+		VerifyDelay:    0,
+		IdleProbeDelay: 0,
+		ActivityFn: func(context.Context) ([]idle.Activity, error) {
+			return nil, nil
+		},
 		RunFn: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			key := name + " " + strings.Join(args, " ")
 			if strings.Contains(key, "list-units") {
@@ -155,6 +161,33 @@ func TestUpgrade_StopFails(t *testing.T) {
 	}
 }
 
+func TestUpgrade_ExecuteBlocksWhenHostBusy(t *testing.T) {
+	t.Parallel()
+	o := validUpgradeOpts()
+	o.Execute = true
+	o.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		return []idle.Activity{{PID: 44, Command: "docker build ."}}, nil
+	}
+	calls := []string{}
+	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		key := name + " " + strings.Join(args, " ")
+		calls = append(calls, key)
+		if strings.Contains(key, "list-units") {
+			return []byte(fakeListOutput), nil
+		}
+		return nil, nil
+	}
+	r, _ := Upgrade(context.Background(), o)
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "host nao esta ocioso") {
+		t.Fatalf("Err = %v, want busy guard", r.Err)
+	}
+	for _, c := range calls {
+		if strings.Contains(c, "systemctl stop") {
+			t.Fatalf("systemctl stop called despite busy host: %v", calls)
+		}
+	}
+}
+
 func TestUpgrade_ExtractFails_RollbackStart(t *testing.T) {
 	t.Parallel()
 	o := validUpgradeOpts()
@@ -217,7 +250,12 @@ func TestValidateUpgrade_Required(t *testing.T) {
 	}{
 		{"no short/unit", func(o *UpgradeOptions) { o.Short = ""; o.Unit = "" }},
 		{"no new-version", func(o *UpgradeOptions) { o.NewVersion = "" }},
+		{"bad new-version", func(o *UpgradeOptions) { o.NewVersion = "2.335" }},
+		{"bad short", func(o *UpgradeOptions) { o.Short = "../x" }},
+		{"bad unit", func(o *UpgradeOptions) { o.Short = ""; o.Unit = "../x.service" }},
 		{"no base-dir", func(o *UpgradeOptions) { o.BaseDir = "" }},
+		{"base-dir not clean", func(o *UpgradeOptions) { o.BaseDir = "/home/emdev/.." }},
+		{"dir not clean", func(o *UpgradeOptions) { o.Dir = "/home/emdev/../runner" }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

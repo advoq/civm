@@ -4,30 +4,38 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/emersonbusson/civm/internal/civm"
+	"github.com/emersonbusson/civm/internal/idle"
 )
 
 // UpgradeOptions controls a runner version upgrade.
 type UpgradeOptions struct {
-	Short         string // suffix curto
-	Unit          string // unit name explícito (sobreescreve Short)
-	Dir           string // diretorio do runner explicito (sobreescreve guess de Short)
-	NewVersion    string // ex: "2.335.0"
-	BaseDir       string // ex: "/home/emdev"
-	Execute       bool
-	VerifyDelay   time.Duration
-	RunFn         func(ctx context.Context, name string, args ...string) ([]byte, error)
-	SleepFn       func(d time.Duration)
+	Short          string // suffix curto
+	Unit           string // unit name explícito (sobreescreve Short)
+	Dir            string // diretorio do runner explicito (sobreescreve guess de Short)
+	NewVersion     string // ex: "2.335.0"
+	BaseDir        string // ex: "/home/emdev"
+	Execute        bool
+	VerifyDelay    time.Duration
+	IdleProbeDelay time.Duration
+	RunFn          func(ctx context.Context, name string, args ...string) ([]byte, error)
+	ActivityFn     func(ctx context.Context) ([]idle.Activity, error)
+	SleepFn        func(d time.Duration)
 }
 
 // DefaultUpgradeOptions returns sane defaults.
 func DefaultUpgradeOptions() UpgradeOptions {
 	return UpgradeOptions{
-		VerifyDelay: 5 * time.Second,
-		Execute:     false,
-		RunFn:       defaultRun,
-		SleepFn:     time.Sleep,
+		VerifyDelay:    time.Duration(civm.DefaultUpgradeVerifySeconds) * time.Second,
+		IdleProbeDelay: 2 * time.Second,
+		Execute:        false,
+		RunFn:          defaultRun,
+		ActivityFn:     idle.DefaultActivities,
+		SleepFn:        time.Sleep,
 	}
 }
 
@@ -60,11 +68,14 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (UpgradeResult, error) {
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
 	}
+	if opts.ActivityFn == nil {
+		opts.ActivityFn = idle.DefaultActivities
+	}
 	if opts.SleepFn == nil {
 		opts.SleepFn = time.Sleep
 	}
 	if opts.VerifyDelay == 0 {
-		opts.VerifyDelay = 5 * time.Second
+		opts.VerifyDelay = time.Duration(civm.DefaultUpgradeVerifySeconds) * time.Second
 	}
 	r := UpgradeResult{NewVersion: opts.NewVersion}
 
@@ -89,9 +100,7 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (UpgradeResult, error) {
 	}
 
 	// 2. Detect old version (best-effort, ignore errors)
-	if oldOut, err := opts.RunFn(ctx, "sh", "-c",
-		fmt.Sprintf("cat %s/bin/Runner.Listener.runtimeconfig.json 2>/dev/null | head -3 || echo unknown",
-			shellQuote(r.Dir))); err == nil {
+	if oldOut, err := opts.RunFn(ctx, "head", "-3", filepath.Join(r.Dir, "bin/Runner.Listener.runtimeconfig.json")); err == nil {
 		r.OldVersion = strings.TrimSpace(string(oldOut))
 		if len(r.OldVersion) > 80 {
 			r.OldVersion = r.OldVersion[:80] + "..."
@@ -106,6 +115,10 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (UpgradeResult, error) {
 		r.UnitResolved, tarPath, tarball, r.Dir, tarPath, r.UnitResolved, opts.VerifyDelay, r.UnitResolved)
 
 	if !opts.Execute {
+		return r, nil
+	}
+	if err := ensureMutationIdle(ctx, opts.ActivityFn, opts.IdleProbeDelay); err != nil {
+		r.Err = err
 		return r, nil
 	}
 
@@ -155,11 +168,34 @@ func validateUpgradeOptions(opts UpgradeOptions) error {
 	if opts.Short == "" && opts.Unit == "" {
 		return fmt.Errorf("--short ou --unit obrigatorio")
 	}
-	if opts.NewVersion == "" {
-		return fmt.Errorf("--new-version obrigatorio (ex: 2.335.0)")
+	if opts.Short != "" {
+		if err := civm.ValidateShort(opts.Short); err != nil {
+			return err
+		}
 	}
-	if opts.BaseDir == "" {
-		return fmt.Errorf("--base-dir obrigatorio")
+	if opts.Unit != "" {
+		if err := civm.ValidateServiceUnit(opts.Unit); err != nil {
+			return err
+		}
+	}
+	if err := civm.ValidateSemver(opts.NewVersion, "--new-version"); err != nil {
+		return err
+	}
+	cleanBase, err := civm.CleanDir(opts.BaseDir, "--base-dir")
+	if err != nil {
+		return err
+	}
+	if cleanBase != opts.BaseDir {
+		return fmt.Errorf("--base-dir deve estar normalizado, got %q want %q", opts.BaseDir, cleanBase)
+	}
+	if opts.Dir != "" {
+		cleanDir, err := civm.CleanDir(opts.Dir, "--dir")
+		if err != nil {
+			return err
+		}
+		if cleanDir != opts.Dir {
+			return fmt.Errorf("--dir deve estar normalizado, got %q want %q", opts.Dir, cleanDir)
+		}
 	}
 	return nil
 }
