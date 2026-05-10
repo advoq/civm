@@ -155,7 +155,7 @@ func (c *Collector) checkLastCleanup(ctx context.Context) Check {
 		return Check{Name: "LAST", Detail: err.Error(), Status: StatusWarn}
 	}
 	if when == nil {
-		return Check{Name: "LAST", Detail: "cleanup nunca rodou (timer nao instalado?)", Status: StatusWarn}
+		return Check{Name: "LAST", Detail: "cleanup nunca rodou (timer pode nao ter disparado ainda)", Status: StatusWarn}
 	}
 	age := time.Since(*when)
 	st := StatusOK

@@ -30,6 +30,7 @@ type Status int
 const (
 	StatusInSync Status = iota
 	StatusBehind
+	StatusAhead
 	StatusUpstreamMissing
 )
 
@@ -39,6 +40,8 @@ func (s Status) String() string {
 		return "in-sync"
 	case StatusBehind:
 		return "behind"
+	case StatusAhead:
+		return "ahead"
 	case StatusUpstreamMissing:
 		return "missing-upstream"
 	}
@@ -53,10 +56,21 @@ type Report struct {
 	UpstreamRaw    string // raw markdown fetched (truncated to first 16KB for traceability)
 }
 
-// HasBehind returns true if any tool is behind upstream.
+// HasBehind returns true if any tool is behind upstream. "Ahead" e
+// "missing-upstream" nao contam — apenas behind real e problema.
 func (r Report) HasBehind() bool {
 	for _, d := range r.Diffs {
 		if d.Status == StatusBehind {
+			return true
+		}
+	}
+	return false
+}
+
+// HasAhead reports whether any pinned tool is newer than upstream.
+func (r Report) HasAhead() bool {
+	for _, d := range r.Diffs {
+		if d.Status == StatusAhead {
 			return true
 		}
 	}
@@ -124,6 +138,13 @@ func Detect(ctx context.Context, opts Options) (Report, error) {
 				Upstream: upstreamCSV,
 				Status:   StatusInSync,
 			})
+		case isSemverAhead(t.Preferred(), upstreamList):
+			report.Diffs = append(report.Diffs, Diff{
+				Tool:     t.Name,
+				Pinned:   t.Preferred(),
+				Upstream: upstreamCSV,
+				Status:   StatusAhead,
+			})
 		default:
 			report.Diffs = append(report.Diffs, Diff{
 				Tool:     t.Name,
@@ -149,10 +170,14 @@ func (r Report) Render(w io.Writer) {
 		fmt.Fprintf(w, "%-16s %-14s %-14s %s\n", d.Tool, d.Pinned, d.Upstream, d.Status)
 	}
 	fmt.Fprintln(w, strings.Repeat("-", 60))
-	if r.HasBehind() {
+	switch {
+	case r.HasBehind():
 		fmt.Fprintln(w, "ATENCAO: pelo menos uma ferramenta esta atras do upstream.")
 		fmt.Fprintln(w, "Editar internal/specs/specs.go com as versoes upstream + commit.")
-	} else {
+	case r.HasAhead():
+		fmt.Fprintln(w, "INFO: pelo menos uma ferramenta esta a frente do upstream (VM atualizada).")
+		fmt.Fprintln(w, "Aguarde upstream actions/runner-images publicar nova imagem.")
+	default:
 		fmt.Fprintln(w, "OK: todas as ferramentas estao em sync com upstream.")
 	}
 }
@@ -274,6 +299,61 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// isSemverAhead returns true when pinned is semver-greater than every
+// version in upstreamList. Used to detect "VM ahead of GitHub-hosted",
+// which is OK (not behind, not in-sync — informational).
+func isSemverAhead(pinned string, upstreamList []string) bool {
+	pParts := splitVersion(pinned)
+	if len(pParts) == 0 {
+		return false
+	}
+	for _, u := range upstreamList {
+		uParts := splitVersion(u)
+		if compareVersion(pParts, uParts) <= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func splitVersion(s string) []int {
+	var out []int
+	for _, p := range strings.Split(s, ".") {
+		n := 0
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				break
+			}
+			n = n*10 + int(c-'0')
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+func compareVersion(a, b []int) int {
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		ai, bi := 0, 0
+		if i < len(a) {
+			ai = a[i]
+		}
+		if i < len(b) {
+			bi = b[i]
+		}
+		if ai != bi {
+			if ai < bi {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
 }
 
 func normalizeName(s string) string {

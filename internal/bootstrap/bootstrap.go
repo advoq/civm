@@ -92,7 +92,6 @@ func Run(ctx context.Context, opts Options) []Result {
 func buildSteps(opts Options) []Step {
 	goVersion, _ := opts.Spec.FindTool("go")
 	nodeVersion, _ := opts.Spec.FindTool("node")
-	dockerVersion, _ := opts.Spec.FindTool("docker")
 	ghVersion, _ := opts.Spec.FindTool("gh")
 
 	return []Step{
@@ -157,14 +156,12 @@ func buildSteps(opts Options) []Step {
 		},
 		{
 			Name:        "install_node",
-			Description: "Instala Node " + nodeVersion.Preferred() + " via NodeSource",
+			Description: "Instala Node (any version; setup-node sobrepoe no job)",
 			Check: func(ctx context.Context) (bool, error) {
-				out, err := opts.RunFn(ctx, "node", "--version")
-				if err != nil {
-					return false, nil
-				}
-				want := "v" + nodeVersion.Preferred()
-				return strings.HasPrefix(strings.TrimSpace(string(out)), want), nil
+				// Aceita qualquer versao instalada — peer workflows usam
+				// actions/setup-node@v5 que sobrepoe no /opt/hostedtoolcache.
+				_, err := opts.RunFn(ctx, "node", "--version")
+				return err == nil, nil
 			},
 			Apply: func(ctx context.Context) error {
 				return installNodeViaNodeSource(ctx, opts, nodeVersion.Preferred())
@@ -172,13 +169,12 @@ func buildSteps(opts Options) []Step {
 		},
 		{
 			Name:        "install_docker",
-			Description: "Instala Docker CE " + dockerVersion.Preferred(),
+			Description: "Instala Docker CE (any version; nunca downgrade)",
 			Check: func(ctx context.Context) (bool, error) {
-				out, err := opts.RunFn(ctx, "docker", "--version")
-				if err != nil {
-					return false, nil
-				}
-				return strings.Contains(string(out), dockerVersion.Preferred()), nil
+				// Aceita qualquer Docker funcional. Nunca fazer downgrade
+				// se ja existe (poderia matar containers em execucao).
+				_, err := opts.RunFn(ctx, "docker", "--version")
+				return err == nil, nil
 			},
 			Apply: func(ctx context.Context) error {
 				return installDockerCE(ctx, opts)

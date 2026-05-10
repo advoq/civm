@@ -44,13 +44,13 @@ func Ubuntu2404() RunnerImageSpec {
 		Tools: []ToolVersion{
 			{
 				Name:     "go",
-				Versions: []string{"1.25.9", "1.24.13", "1.23.12", "1.22.12"},
+				Versions: []string{"1.26.3", "1.25.9", "1.24.13", "1.23.12", "1.22.12"},
 				Source:   "go.dev/dl",
 			},
 			{
 				Name:     "node",
-				Versions: []string{"20.20.2", "22.22.2", "24.14.1"},
-				Source:   "deb.nodesource.com",
+				Versions: []string{"24.15.0", "24.14.1", "22.22.2", "20.20.2"},
+				Source:   "lts/krypton via nvm; apt nodejs",
 			},
 			{
 				Name:     "python",

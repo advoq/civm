@@ -44,7 +44,7 @@ const upstreamWithBumps = `
 - **yq:** 4.52.5
 `
 
-func TestDetect_AllInSync(t *testing.T) {
+func TestDetect_AllInSyncOrAhead(t *testing.T) {
 	t.Parallel()
 	opts := DefaultOptions()
 	opts.Fetcher = func(context.Context, string) (string, error) {
@@ -55,12 +55,68 @@ func TestDetect_AllInSync(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	if r.HasBehind() {
-		t.Errorf("HasBehind() = true; esperava false (specs match upstream fixture)")
+		t.Errorf("HasBehind() = true; esperava in-sync ou ahead apenas")
 	}
 	for _, d := range r.Diffs {
 		if d.Status == StatusBehind {
 			t.Errorf("%s behind: pinned=%s upstream=%s", d.Tool, d.Pinned, d.Upstream)
 		}
+	}
+}
+
+func TestStatusAhead(t *testing.T) {
+	t.Parallel()
+	if !isSemverAhead("1.26.3", []string{"1.25.9", "1.22.12"}) {
+		t.Errorf("1.26.3 deveria ser ahead de [1.25.9, 1.22.12]")
+	}
+	if isSemverAhead("1.25.9", []string{"1.25.9", "1.26.0"}) {
+		t.Errorf("1.25.9 nao deveria ser ahead se 1.26.0 esta na lista")
+	}
+	if isSemverAhead("", []string{"1.0.0"}) {
+		t.Errorf("string vazia nao deveria ser ahead")
+	}
+}
+
+func TestCompareVersion(t *testing.T) {
+	t.Parallel()
+	if compareVersion([]int{1, 26, 3}, []int{1, 25, 9}) != 1 {
+		t.Errorf("1.26.3 vs 1.25.9 deveria ser 1")
+	}
+	if compareVersion([]int{1, 25, 9}, []int{1, 26, 3}) != -1 {
+		t.Errorf("1.25.9 vs 1.26.3 deveria ser -1")
+	}
+	if compareVersion([]int{1, 26, 3}, []int{1, 26, 3}) != 0 {
+		t.Errorf("igual deveria ser 0")
+	}
+	if compareVersion([]int{1, 26}, []int{1, 26, 0}) != 0 {
+		t.Errorf("1.26 vs 1.26.0 deveria ser 0")
+	}
+}
+
+func TestSplitVersion(t *testing.T) {
+	t.Parallel()
+	got := splitVersion("1.26.3")
+	if len(got) != 3 || got[0] != 1 || got[1] != 26 || got[2] != 3 {
+		t.Errorf("splitVersion(1.26.3) = %v", got)
+	}
+	got = splitVersion("1.7.1-3ubuntu0.24.04.1") // jq apt format
+	if len(got) == 0 || got[0] != 1 {
+		t.Errorf("splitVersion com sufixo = %v", got)
+	}
+}
+
+func TestRender_AheadShowsInfo(t *testing.T) {
+	t.Parallel()
+	r := Report{
+		Generated: time.Now(),
+		Diffs: []Diff{
+			{Tool: "go", Pinned: "1.26.3", Upstream: "1.25.9", Status: StatusAhead},
+		},
+	}
+	var buf bytes.Buffer
+	r.Render(&buf)
+	if !strings.Contains(buf.String(), "INFO:") {
+		t.Errorf("Ahead deveria mostrar INFO, output:\n%s", buf.String())
 	}
 }
 

@@ -36,8 +36,8 @@ func TestUbuntu2404_ConcreteVersions(t *testing.T) {
 	t.Parallel()
 	s := Ubuntu2404()
 	cases := map[string]string{
-		"go":     "1.25.9",
-		"node":   "20.20.2",
+		"go":     "1.26.3",
+		"node":   "24.15.0",
 		"docker": "28.0.4",
 		"gh":     "2.89.0",
 	}
