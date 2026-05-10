@@ -53,8 +53,24 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl bootstrap [--execute]` | provisiona VM (default: dry-run) |
 | `civmctl cleanup [--execute]` | limpa Docker, /tmp, _work, apt cache |
 | `civmctl health` | health check (disk, mem, runners, ultimo cleanup) |
-| `civmctl runner add` | registra runner GitHub Actions self-hosted |
+| `civmctl runner add` | registra runner GitHub Actions self-hosted (mkdir + curl + tar + config.sh + svc.sh install + start) |
 | `civmctl drift` | compara pins locais vs upstream actions/runner-images (HTTP fetch) |
+
+### Adicionar runner pra novo peer (1 comando)
+
+```bash
+TOKEN=$(gh api -X POST /repos/<owner>/<repo>/actions/runners/registration-token --jq .token)
+
+# Dry-run primeiro:
+civmctl runner add --repo=<owner>/<repo> --token=$TOKEN --short=<short>
+
+# Aplicar:
+civmctl runner add --repo=<owner>/<repo> --token=$TOKEN --short=<short> --execute
+```
+
+Substitui sequencia manual de mkdir + curl + tar + config.sh + svc.sh.
+Token mascarado nos logs (mostrado como `***`). Detalhes em
+`runbooks/MULTI-PROJECT-RUNNER.md` §"Pattern: 1 runner por peer-repo".
 
 PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 

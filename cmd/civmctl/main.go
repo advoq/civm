@@ -62,7 +62,9 @@ EXEMPLOS
   civmctl health
   civmctl cleanup --dry-run
   sudo civmctl bootstrap --execute
-  civmctl runner add --token=ghp_xxx --url=https://github.com/owner/repo
+  civmctl drift
+  civmctl runner add --repo=owner/repo --token=$(gh api ...) --short=cmpx
+  civmctl runner add --repo=owner/repo --token=... --short=cmpx --execute
 
 DOCUMENTACAO
   PRD/SPEC: docs/specs/civmctl/

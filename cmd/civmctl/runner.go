@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
+	"time"
+
+	"github.com/emersonbusson/ci-vm/internal/runner"
 )
 
 func runRunner(args []string) int {
@@ -31,40 +36,52 @@ func runRunner(args []string) int {
 func runRunnerAdd(args []string) int {
 	fs := flag.NewFlagSet("runner add", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	url := fs.String("url", "", "URL do repositorio (https://github.com/owner/repo)")
-	token := fs.String("token", "", "registration token (gere em Settings > Actions > Runners)")
-	labels := fs.String("labels", "vitae-ci", "labels CSV")
+	repo := fs.String("repo", "", "owner/repo (ex: emersonbusson/compexhub)")
+	token := fs.String("token", "", "registration token (efemero ~1h via gh api)")
+	short := fs.String("short", "", "suffix curto do diretorio (ex: cmpx, vitae)")
+	label := fs.String("label", "vitae-ci", "labels CSV")
+	runnerVersion := fs.String("runner-version", "2.334.0", "versao do actions/runner")
+	baseDir := fs.String("base-dir", "", "base dir (default: \\$HOME do user atual)")
+	runAs := fs.String("run-as", "", "user que vai rodar o service (default: user atual)")
+	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")
+	timeoutMin := fs.Int("timeout", 10, "timeout total em minutos")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de runner add:", err)
 		return exitUsage
 	}
-	if *url == "" || *token == "" {
-		fmt.Fprintln(os.Stderr, "erro: --url e --token sao obrigatorios")
-		fmt.Fprintln(os.Stderr, "obtenha o token em: <repo>/settings/actions/runners/new")
+	if *baseDir == "" {
+		*baseDir = userHomeOrDefault()
+	}
+	if *runAs == "" {
+		*runAs = userNameOrDefault()
+	}
+	opts := runner.DefaultOptions()
+	opts.Repo = *repo
+	opts.Token = *token
+	opts.Short = *short
+	opts.Label = *label
+	opts.RunnerVersion = *runnerVersion
+	opts.BaseDir = *baseDir
+	opts.RunAsUser = *runAs
+	opts.Execute = *execute
+	if *execute {
+		fmt.Fprintln(os.Stderr, "AVISO: --execute vai modificar o sistema (mkdir, curl, tar, sudo svc.sh).")
+		fmt.Fprintln(os.Stderr, "Pressione Ctrl+C em 3s para abortar...")
+		time.Sleep(3 * time.Second)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutMin)*time.Minute)
+	defer cancel()
+	results, err := runner.Add(ctx, opts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "erro:", err)
 		return exitUsage
 	}
-	fmt.Println("Configurando runner self-hosted...")
-	fmt.Println("Esta operacao requer que ./config.sh do actions/runner esteja no PATH")
-	fmt.Printf("URL:    %s\n", *url)
-	fmt.Printf("Labels: %s\n", *labels)
-
-	cmd := exec.Command("./config.sh",
-		"--unattended",
-		"--url", *url,
-		"--token", *token,
-		"--labels", *labels,
-		"--name", hostnameOrDefault(),
-		"--work", "_work",
-		"--replace",
-	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "erro: config.sh falhou: %v\n", err)
-		fmt.Fprintln(os.Stderr, "verifique que voce esta no diretorio do runner extraido")
-		return 1
+	runner.RenderTable(results, opts, os.Stdout)
+	for _, r := range results {
+		if r.Err != nil {
+			return 1
+		}
 	}
-	fmt.Println("OK. Para iniciar: sudo ./svc.sh install && sudo ./svc.sh start")
 	return 0
 }
 
@@ -84,10 +101,22 @@ func runRunnerRemove(args []string) int {
 	return 1
 }
 
-func hostnameOrDefault() string {
-	h, err := os.Hostname()
-	if err != nil {
-		return "ci-vm-runner"
+func userHomeOrDefault() string {
+	if u, err := user.Current(); err == nil && u.HomeDir != "" {
+		return u.HomeDir
 	}
-	return h
+	if h := os.Getenv("HOME"); h != "" {
+		return h
+	}
+	return "/home/runner"
+}
+
+func userNameOrDefault() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	if h := os.Getenv("USER"); h != "" {
+		return h
+	}
+	return "runner"
 }
