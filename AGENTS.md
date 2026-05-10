@@ -113,7 +113,9 @@ civm **detecta**, nunca corrige automaticamente. **Nunca**:
   packages de sistema; é destinado a VM dedicada).
 - Não usar `civmctl cleanup --execute` sem revisar primeiro com `--dry-run`.
   O execute também aborta se detectar `Runner.Worker`, processo em `_work`
-  ou build Docker ativo; não contornar esse guard durante CI.
+  ou build Docker ativo; não contornar esse guard durante CI. O cleanup preserva
+  `_work/_tool` e `_work/_actions` para não rebaixar a VM a downloads frios em
+  todo job.
 - Não usar `civmctl runner restart/remove/upgrade --execute` durante job em
   curso. Esses comandos agora também abortam fail-closed se `idle-check`
   encontrar `Runner.Worker`, `_work` ou build Docker ativo.

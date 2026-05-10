@@ -200,7 +200,7 @@ Cleanup automatico (cron diario 04:00 UTC via systemd timer):
 | Action | O que limpa | Threshold |
 |---|---|---|
 | `tmp_old` | `/tmp` antigos | mtime >7 dias E >2h |
-| `work_old` | `/home/*/actions-runner-*/_work` quando `--work-dir` default é usado | mtime >14 dias E >2h |
+| `work_old` | artefatos antigos em `/home/*/actions-runner-*/_work`; preserva `_tool` e `_actions` | mtime >14 dias E >2h |
 | `docker_prune` | `docker system prune -af --volumes` | (sem threshold; remove tudo nao usado) |
 | `apt_cache` | `apt-get clean && apt-get autoremove -y` | (libera /var/cache/apt) |
 
@@ -214,6 +214,8 @@ Garantias anti-crosstalk:
 - fail-closed se o detector não conseguir ler processos
 - checa no início e revalida antes de cada mutação (`rm -rf`, Docker prune,
   apt clean/autoremove)
+- preserva `_work/_tool` e `_work/_actions`, evitando download frio de
+  toolchains/actions em todo job
 - `flock /run/civmctl-cleanup.lock` impede cleanup diário e disk-watchdog
   de rodarem ao mesmo tempo
 - mtime <2h continua como segunda camada para arquivos recentes

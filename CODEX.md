@@ -38,6 +38,11 @@ Docker build/compose/buildctl ativo ou se não conseguirem provar o host
 ocioso, abortam antes de deletar/prunar. Não adicionar flag ou runbook para
 contornar esse guard sem nova SPEC e validação em VM.
 
+O cleanup de `_work` preserva caches de runner em `_work/_tool` e
+`_work/_actions`. Esses diretórios evitam downloads repetidos de toolchains e
+actions; só devem ser removidos manualmente depois de medir pressão real de
+disco e confirmar host ocioso.
+
 `civmctl runner restart/remove/upgrade --execute` usa a mesma checagem
 compartilhada (`civmctl idle-check`). Mutação de runner deve abortar antes de
 `systemctl restart/stop`, `config.sh remove`, `rm -rf` ou upgrade de tarball

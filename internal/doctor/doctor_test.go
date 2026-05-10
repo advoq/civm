@@ -44,6 +44,24 @@ func TestClassifyRunner(t *testing.T) {
 				Status: "online", Busy: true, Labels: []string{"self-hosted", "civm"}},
 			class: "canonical", sev: SeverityWarning,
 		},
+		{
+			name: "compatible civm label with noncanonical name",
+			runner: GitHubRunner{Repo: "emersonbusson/vitae", Name: "custom-vm",
+				Status: "online", Labels: []string{"self-hosted", "civm"}},
+			class: "compatible", sev: SeverityOK,
+		},
+		{
+			name: "offline generic",
+			runner: GitHubRunner{Repo: "emersonbusson/vitae", Name: "custom-vm",
+				Status: "offline", Labels: []string{"self-hosted", "civm"}},
+			class: "offline", sev: SeverityWarning,
+		},
+		{
+			name: "unknown state",
+			runner: GitHubRunner{Repo: "emersonbusson/vitae", Name: "custom-vm",
+				Status: "draining", Labels: []string{"self-hosted", "civm"}},
+			class: "unknown", sev: SeverityWarning,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -56,6 +74,58 @@ func TestClassifyRunner(t *testing.T) {
 				t.Fatalf("manual remove command missing runner id: %+v", got)
 			}
 		})
+	}
+}
+
+func TestListGitHubRunnersParsesLabels(t *testing.T) {
+	t.Parallel()
+	runFn := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "gh" {
+			t.Fatalf("name = %q, want gh", name)
+		}
+		gotArgs := strings.Join(args, " ")
+		if gotArgs != "api /repos/emersonbusson/vitae/actions/runners" {
+			t.Fatalf("args = %q", gotArgs)
+		}
+		return []byte(`{
+			"runners": [{
+				"id": 123,
+				"name": "civm-vitae",
+				"status": "online",
+				"busy": true,
+				"labels": [{"name": "self-hosted"}, {"name": "civm"}]
+			}]
+		}`), nil
+	}
+
+	got, err := listGitHubRunners(context.Background(), "emersonbusson/vitae", runFn)
+	if err != nil {
+		t.Fatalf("listGitHubRunners err = %v", err)
+	}
+	if len(got) != 1 || got[0].ID != 123 || got[0].Repo != "emersonbusson/vitae" || !got[0].Busy {
+		t.Fatalf("runners = %+v", got)
+	}
+	if strings.Join(got[0].Labels, ",") != "self-hosted,civm" {
+		t.Fatalf("labels = %+v", got[0].Labels)
+	}
+}
+
+func TestListGitHubRunnersErrors(t *testing.T) {
+	t.Parallel()
+	_, err := listGitHubRunners(context.Background(), "emersonbusson/vitae",
+		func(context.Context, string, ...string) ([]byte, error) {
+			return nil, errors.New("network")
+		})
+	if err == nil || !strings.Contains(err.Error(), "gh api actions/runners") {
+		t.Fatalf("run error = %v", err)
+	}
+
+	_, err = listGitHubRunners(context.Background(), "emersonbusson/vitae",
+		func(context.Context, string, ...string) ([]byte, error) {
+			return []byte(`{bad-json`), nil
+		})
+	if err == nil || !strings.Contains(err.Error(), "parse gh runners") {
+		t.Fatalf("json error = %v", err)
 	}
 }
 

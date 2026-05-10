@@ -137,6 +137,51 @@ func TestRun_DefaultWorkDirDiscoversRunnerWorkDirs(t *testing.T) {
 	}
 }
 
+func TestRun_WorkCleanupPreservesRunnerToolAndActionCaches(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-30 * 24 * time.Hour)
+	mfs := fstest.MapFS{
+		"work/_actions":                       {Mode: fs.ModeDir | 0755, ModTime: old},
+		"work/_actions/actions/checkout/main": {Data: []byte("aaaaaaaaaa"), ModTime: old},
+		"work/_temp":                          {Mode: fs.ModeDir | 0755, ModTime: old},
+		"work/_temp/old.tmp":                  {Data: []byte("bbbb"), ModTime: old},
+		"work/_tool":                          {Mode: fs.ModeDir | 0755, ModTime: old},
+		"work/_tool/go/1.26.3/bin/go":         {Data: []byte("cccccc"), ModTime: old},
+		"work/repo":                           {Mode: fs.ModeDir | 0755, ModTime: old},
+		"work/repo/file.txt":                  {Data: []byte("ddddd"), ModTime: old},
+	}
+	var rmTargets []string
+	opts := testExecuteOptions()
+	opts.Now = now
+	opts.WalkFn = walkFS(mfs)
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "rm" && len(args) == 2 {
+			rmTargets = append(rmTargets, args[1])
+		}
+		return nil, nil
+	}
+
+	a := scanAndMaybeDelete(context.Background(), opts, "work_old", "work", 14*24*time.Hour)
+	if a.Err != nil {
+		t.Fatalf("work_old err = %v", a.Err)
+	}
+	if a.BytesFound != 9 || a.BytesFreed != 9 {
+		t.Fatalf("BytesFound=%d BytesFreed=%d, want 9", a.BytesFound, a.BytesFreed)
+	}
+	joined := strings.Join(rmTargets, "\n")
+	for _, protected := range []string{"work/_tool", "work/_actions"} {
+		if strings.Contains(joined, protected) {
+			t.Fatalf("protected cache %s removido: %v", protected, rmTargets)
+		}
+	}
+	for _, want := range []string{"work/_temp", "work/repo"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("rm targets omitiu %s: %v", want, rmTargets)
+		}
+	}
+}
+
 func TestRun_Execute_CallsRm(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)

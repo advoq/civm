@@ -36,6 +36,11 @@ var allowedTopLevelCleanupRoots = map[string]struct{}{
 	civm.DefaultTmpDir: {},
 }
 
+var protectedWorkCacheDirs = map[string]struct{}{
+	"_actions": {},
+	"_tool":    {},
+}
+
 // Action is one cleanup step result.
 type Action struct {
 	Name       string
@@ -181,6 +186,12 @@ func scanAndMaybeDelete(ctx context.Context, opts Options, name, root string, th
 		if path == root {
 			return nil
 		}
+		if name == "work_old" && isProtectedWorkCacheDir(root, path) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		info, err := d.Info()
 		if err != nil {
 			return nil
@@ -220,6 +231,16 @@ func scanAndMaybeDelete(ctx context.Context, opts Options, name, root string, th
 	}
 	a.Executed = true
 	return a
+}
+
+func isProtectedWorkCacheDir(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == "" {
+		return false
+	}
+	first := strings.Split(filepath.ToSlash(rel), "/")[0]
+	_, ok := protectedWorkCacheDirs[first]
+	return ok
 }
 
 func validateCleanupRoot(root string) (string, error) {

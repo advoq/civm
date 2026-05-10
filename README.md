@@ -51,7 +51,7 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 |---|---|
 | `civmctl version-pins` | imprime versoes alvo (paridade com `ubuntu-latest`) |
 | `civmctl bootstrap [--execute]` | provisiona VM (default: dry-run) |
-| `civmctl cleanup [--execute]` | limpa Docker, /tmp, _work, apt cache; em `--execute` aborta se detectar job/build ativo |
+| `civmctl cleanup [--execute]` | limpa Docker, /tmp, artefatos antigos de _work e apt cache; preserva `_work/_tool` e `_work/_actions`; em `--execute` aborta se detectar job/build ativo |
 | `civmctl health` | health check (disk, mem, runners, ultimo cleanup) |
 | `civmctl doctor [--json]` | visão read-only consolidada: host, timers, systemd runners e GitHub runners |
 | `civmctl idle-check [--json]` | detector read-only de ociosidade: exit `0=idle`, `1=busy`, `2=unknown` |
