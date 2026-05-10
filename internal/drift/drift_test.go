@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emersonbusson/ci-vm/internal/specs"
+	"github.com/emersonbusson/civm/internal/specs"
 )
 
 const fakeUpstreamReadme = `

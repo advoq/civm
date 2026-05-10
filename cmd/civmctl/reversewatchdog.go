@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/emersonbusson/ci-vm/internal/reversewatchdog"
+	"github.com/emersonbusson/civm/internal/reversewatchdog"
 )
 
 func runReverseWatchdog(args []string) int {

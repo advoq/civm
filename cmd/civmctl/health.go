@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/emersonbusson/ci-vm/internal/health"
+	"github.com/emersonbusson/civm/internal/health"
 )
 
 func runHealth(args []string) int {

@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/emersonbusson/ci-vm/internal/cleanup"
+	"github.com/emersonbusson/civm/internal/cleanup"
 )
 
 func runCleanup(args []string) int {

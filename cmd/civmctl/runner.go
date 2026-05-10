@@ -9,7 +9,7 @@ import (
 	"os/user"
 	"time"
 
-	"github.com/emersonbusson/ci-vm/internal/runner"
+	"github.com/emersonbusson/civm/internal/runner"
 )
 
 func runRunner(args []string) int {

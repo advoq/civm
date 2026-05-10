@@ -1,3 +1,3 @@
-module github.com/emersonbusson/ci-vm
+module github.com/emersonbusson/civm
 
 go 1.26

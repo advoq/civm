@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emersonbusson/ci-vm/internal/specs"
+	"github.com/emersonbusson/civm/internal/specs"
 )
 
 // Diff is one tool whose pinned version differs from upstream.

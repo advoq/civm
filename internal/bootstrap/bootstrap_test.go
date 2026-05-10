@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emersonbusson/ci-vm/internal/specs"
+	"github.com/emersonbusson/civm/internal/specs"
 )
 
 type runCall struct {

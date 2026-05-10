@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emersonbusson/ci-vm/internal/billing"
+	"github.com/emersonbusson/civm/internal/billing"
 )
 
 // Status agrega informação operacional de um peer-repo.

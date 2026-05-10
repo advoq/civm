@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/emersonbusson/ci-vm/internal/cireport"
+	"github.com/emersonbusson/civm/internal/cireport"
 )
 
 func runCI(args []string) int {

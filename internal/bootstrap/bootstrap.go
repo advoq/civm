@@ -10,7 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/emersonbusson/ci-vm/internal/specs"
+	"github.com/emersonbusson/civm/internal/specs"
 )
 
 // Result is the outcome of one Step.

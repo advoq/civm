@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/emersonbusson/ci-vm/internal/billing"
+	"github.com/emersonbusson/civm/internal/billing"
 )
 
 func runBilling(args []string) int {
