@@ -27,6 +27,8 @@ func main() {
 		os.Exit(runBootstrap(args))
 	case "runner":
 		os.Exit(runRunner(args))
+	case "drift":
+		os.Exit(runDrift(args))
 	case "-h", "--help", "help":
 		printHelp()
 		os.Exit(0)
@@ -52,6 +54,7 @@ COMANDOS
   cleanup         Limpa Docker, /tmp, _work, apt cache (cron diario)
   health          Health check (disk, mem, runners, ultimo cleanup)
   runner          Gerencia runners GitHub Actions self-hosted
+  drift           Detecta versoes pinadas vs upstream actions/runner-images
   help            Esta mensagem
 
 EXEMPLOS
