@@ -2,9 +2,10 @@
 
 2 timers systemd disponíveis:
 - `civmctl-cleanup.timer` — diário 04:00 UTC, full cleanup (Docker, /tmp,
-  _work, apt). Idempotente.
+  _work, apt). Idempotente e fail-closed quando há job/build ativo.
 - `civmctl-disk-watchdog.timer` — hourly, dispara cleanup agressivo se
-  disk >80%. Reativo a picos de uso entre execuções diárias.
+  disk >80%. Reativo a picos de uso entre execuções diárias e usa o mesmo
+  guard de ociosidade do cleanup.
 
 Instalação manual após `civmctl bootstrap` ter colocado o binário em
 `/usr/local/bin/civmctl`.
@@ -72,7 +73,14 @@ simultâneo se múltiplas VMs convergirem.
 - `IOSchedulingClass=idle` → I/O do cleanup só roda quando o sistema está
   ocioso; jobs de CI ativos têm prioridade.
 - `Nice=15` → CPU baixa prioridade.
-- `civmctl cleanup --execute` skip arquivos com mtime <2h (anti-jobs-em-curso).
+- `flock /run/civmctl-cleanup.lock` impede cleanup diário e disk-watchdog
+  de rodarem ao mesmo tempo.
+- `civmctl cleanup --execute` aborta antes de mutar se detectar
+  `Runner.Worker`, processo dentro de `_work`, Docker build/compose/buildctl
+  ativo, ou se o detector não conseguir provar host ocioso.
+- O guard roda no início e novamente antes de cada mutação (`rm -rf`,
+  Docker prune, apt clean/autoremove).
+- Arquivos com mtime <2h continuam pulados como segunda camada anti-job.
 - `TimeoutStartSec=30min` → se cleanup ficar travado, systemd mata.
 
 ## Rollback se quebrar disco

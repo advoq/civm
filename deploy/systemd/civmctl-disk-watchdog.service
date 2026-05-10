@@ -6,7 +6,7 @@ ConditionPathExists=/usr/local/bin/civmctl
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/civmctl disk-watchdog --threshold-pct=80 --execute
+ExecStart=/usr/bin/flock -n /run/civmctl-cleanup.lock /usr/local/bin/civmctl disk-watchdog --threshold-pct=80 --execute
 User=root
 Nice=15
 IOSchedulingClass=idle

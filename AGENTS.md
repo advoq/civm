@@ -1,10 +1,10 @@
-# AGENTS.md — ci-vm
+# AGENTS.md — civm
 
 Resumo terso para CLIs estilo Codex/aider/Jules. Para visão completa, ler `README.md`.
 
 ## Propósito do repo
 
-`ci-vm` é o repo de infraestrutura compartilhada de CI/CD que serve múltiplos
+`civm` é o repo de infraestrutura compartilhada de CI/CD que serve múltiplos
 projetos do mesmo dono (compexhub, vitae, advoq, futuros). Hospeda:
 
 1. **`civmctl`** — Go CLI zero-effort para provisionar e manter a VM
@@ -17,7 +17,7 @@ A VM roda **paridade com `ubuntu-latest` do GitHub Actions** (Ubuntu 24.04 LTS,
 mesmas versões de Go/Node/Python/Docker/gh) com mais hardware (4+ cores,
 128GB SSD, 32GB+ RAM) para builds mais rápidos durante desenvolvimento.
 
-## O que ci-vm NÃO é
+## O que civm NÃO é
 
 - ❌ Não é uma plataforma de orquestração custom (orquestração = GitHub Actions).
 - ❌ Não é uma ferramenta de "audit" (cada peer audita-se com a própria stack).
@@ -97,7 +97,7 @@ PR e issue compartilham assignee.
 
 ## Anti-skynet
 
-ci-vm **detecta**, nunca corrige automaticamente. **Nunca**:
+civm **detecta**, nunca corrige automaticamente. **Nunca**:
 
 - Auto-commit, auto-revert, auto-push, auto-merge sem aprovação humana
 - Trigger deploy ou rollback automático
@@ -110,6 +110,8 @@ ci-vm **detecta**, nunca corrige automaticamente. **Nunca**:
 - Não usar `civmctl bootstrap` em máquina de desenvolvimento (instala
   packages de sistema; é destinado a VM dedicada).
 - Não usar `civmctl cleanup --execute` sem revisar primeiro com `--dry-run`.
+  O execute também aborta se detectar `Runner.Worker`, processo em `_work`
+  ou build Docker ativo; não contornar esse guard durante CI.
 - Não usar `civmctl runner add` sem token GitHub válido (peer repo precisa
   registrar seu próprio runner).
 
@@ -146,4 +148,4 @@ Sem floreio. Sem emoji a menos que o usuário use primeiro. Sem agradecimento
 performativo. Sem repetir o pedido do usuário antes de responder.
 <!-- COMMUNICATION-STYLE:END -->
 
-> Source canônico: `~/codespace/ci-vm/templates/COMMUNICATION-STYLE.md`
+> Source canônico: `~/codespace/civm/templates/COMMUNICATION-STYLE.md`

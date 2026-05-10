@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/emersonbusson/civm/internal/cleanup"
 )
 
 func TestCheck_OK_BelowThreshold(t *testing.T) {
@@ -68,6 +70,30 @@ func TestCheck_StatfsError(t *testing.T) {
 	}
 	if r.ExitCode() != 2 {
 		t.Errorf("Exit = %d, want 2", r.ExitCode())
+	}
+}
+
+func TestCheck_ExecuteFailsClosedWhenCleanupSeesActiveJob(t *testing.T) {
+	t.Parallel()
+	o := DefaultOptions()
+	o.StatfsFn = func(string) (uint64, uint64, error) {
+		return 100 * (1 << 30), 5 * (1 << 30), nil // 95% used
+	}
+	o.ThresholdPct = 80
+	o.Execute = true
+	o.ActivityFn = func(context.Context) ([]cleanup.Activity, error) {
+		return []cleanup.Activity{{PID: 4321, Command: "/home/emdev/actions-runner/bin/Runner.Worker run"}}, nil
+	}
+	o.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatalf("RunFn nao deveria ser chamado quando job ativo bloqueia cleanup")
+		return nil, nil
+	}
+	r := Check(context.Background(), o)
+	if r.Decision != DecisionError {
+		t.Fatalf("Decision = %v, want error", r.Decision)
+	}
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "host nao esta ocioso") {
+		t.Fatalf("Err = %v", r.Err)
 	}
 }
 

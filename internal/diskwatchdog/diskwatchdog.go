@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/emersonbusson/civm/internal/civm"
 	"github.com/emersonbusson/civm/internal/cleanup"
 )
 
@@ -18,9 +19,9 @@ import (
 type Decision int
 
 const (
-	DecisionOK            Decision = iota // disk OK, nothing done
-	DecisionCleanupTriggered              // disk above threshold, cleanup ran
-	DecisionError                         // erro lendo disk OR rodando cleanup
+	DecisionOK               Decision = iota // disk OK, nothing done
+	DecisionCleanupTriggered                 // disk above threshold, cleanup ran
+	DecisionError                            // erro lendo disk OR rodando cleanup
 )
 
 func (d Decision) String() string {
@@ -37,14 +38,14 @@ func (d Decision) String() string {
 
 // Result captures watchdog execution outcome.
 type Result struct {
-	Decision     Decision
-	Path         string
-	UsedPct      int
-	UsedGB       int64
-	TotalGB      int64
-	ThresholdPct int
+	Decision       Decision
+	Path           string
+	UsedPct        int
+	UsedGB         int64
+	TotalGB        int64
+	ThresholdPct   int
 	CleanupActions []cleanup.Action // populated when DecisionCleanupTriggered
-	Err          error
+	Err            error
 }
 
 // Options control the watchdog.
@@ -56,16 +57,17 @@ type Options struct {
 	TmpDir       string // passado para cleanup.Options.TmpDir
 	StatfsFn     func(path string) (totalBytes, freeBytes uint64, err error)
 	RunFn        func(ctx context.Context, name string, args ...string) ([]byte, error)
+	ActivityFn   func(ctx context.Context) ([]cleanup.Activity, error)
 }
 
 // DefaultOptions returns sane production defaults.
 func DefaultOptions() Options {
 	return Options{
 		Path:         "/",
-		ThresholdPct: 80,
+		ThresholdPct: civm.DefaultWatchdogThresholdPct,
 		Execute:      false,
-		WorkDir:      "/home/runner/_work",
-		TmpDir:       "/tmp",
+		WorkDir:      civm.DefaultWorkDir,
+		TmpDir:       civm.DefaultTmpDir,
 		StatfsFn:     defaultStatfs,
 		RunFn:        defaultRun,
 	}
@@ -83,7 +85,15 @@ func Check(ctx context.Context, opts Options) Result {
 		opts.Path = "/"
 	}
 	if opts.ThresholdPct == 0 {
-		opts.ThresholdPct = 80
+		opts.ThresholdPct = civm.DefaultWatchdogThresholdPct
+	}
+	if opts.ThresholdPct < 1 || opts.ThresholdPct > 99 {
+		return Result{
+			Decision:     DecisionError,
+			Path:         opts.Path,
+			ThresholdPct: opts.ThresholdPct,
+			Err:          fmt.Errorf("threshold-pct deve ficar entre 1 e 99, got %d", opts.ThresholdPct),
+		}
 	}
 	r := Result{Path: opts.Path, ThresholdPct: opts.ThresholdPct}
 	total, free, err := opts.StatfsFn(opts.Path)
@@ -114,6 +124,7 @@ func Check(ctx context.Context, opts Options) Result {
 	cleanOpts.TmpThreshold = 24 * time.Hour
 	cleanOpts.WorkThreshold = 7 * 24 * time.Hour
 	cleanOpts.RunFn = opts.RunFn
+	cleanOpts.ActivityFn = opts.ActivityFn
 	r.CleanupActions = cleanup.Run(ctx, cleanOpts)
 	r.Decision = DecisionCleanupTriggered
 	for _, a := range r.CleanupActions {

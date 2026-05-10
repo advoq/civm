@@ -1,9 +1,9 @@
-# ci-vm — infraestrutura de CI compartilhada
+# civm — infraestrutura de CI compartilhada
 
 Repo dedicado para a infraestrutura de CI/CD que serve múltiplos
 projetos do mesmo dono (compexhub, vitae, advoq, etc).
 
-**O que ci-vm É:**
+**O que civm É:**
 
 - Repo de infra que **hospeda configuração da VM self-hosted**
   registrada como GitHub Actions runner com label `civm`.
@@ -17,12 +17,12 @@ projetos do mesmo dono (compexhub, vitae, advoq, etc).
   metodológicas + regras granulares que peers podem **copiar** para
   seus próprios repos.
 
-**O que ci-vm NÃO é:**
+**O que civm NÃO é:**
 
 - ❌ Não é uma camada de "audit". GitHub Actions não audita código por
   si só — só roda o que está no .yml. Se um peer quer audit de estilo,
   adiciona step `eslint .` ou ferramenta-do-projeto no próprio .yml.
-- ❌ Não é uma plataforma de orquestração custom. ci-vm é só onde a
+- ❌ Não é uma plataforma de orquestração custom. civm é só onde a
   VM mora; orquestração é GitHub Actions padrão.
 - ❌ `civmctl` **não faz audit**. Faz provisioning + maintenance da VM
   (bootstrap idempotente, cleanup automatizado, health check, runner
@@ -33,8 +33,8 @@ projetos do mesmo dono (compexhub, vitae, advoq, etc).
 Numa VM Ubuntu 24.04 LTS limpa, como root:
 
 ```bash
-git clone https://github.com/emersonbusson/ci-vm.git /opt/ci-vm
-cd /opt/ci-vm
+git clone https://github.com/emersonbusson/civm.git /opt/civm
+cd /opt/civm
 go build -o /usr/local/bin/civmctl ./cmd/civmctl
 sudo civmctl bootstrap --execute
 sudo cp deploy/systemd/civmctl-cleanup.{service,timer} /etc/systemd/system/
@@ -51,7 +51,7 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 |---|---|
 | `civmctl version-pins` | imprime versoes alvo (paridade com `ubuntu-latest`) |
 | `civmctl bootstrap [--execute]` | provisiona VM (default: dry-run) |
-| `civmctl cleanup [--execute]` | limpa Docker, /tmp, _work, apt cache |
+| `civmctl cleanup [--execute]` | limpa Docker, /tmp, _work, apt cache; em `--execute` aborta se detectar job/build ativo |
 | `civmctl health` | health check (disk, mem, runners, ultimo cleanup) |
 | `civmctl runner add` | registra runner GitHub Actions self-hosted (mkdir + curl + tar + config.sh + svc.sh install + start) |
 | `civmctl runner remove` | desregistra runner (svc.sh stop + uninstall + config.sh remove + rm -rf dir) |
@@ -62,7 +62,7 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl runner upgrade` | upgrade in-place de versão (preserva .runner/.credentials/_work) |
 | `civmctl reverse-watchdog` | alerta se disk-watchdog timer parou de disparar (>2h default) |
 | `civmctl bootstrap-everything` | wrapper: cp systemd units + daemon-reload + bootstrap |
-| `civmctl disk-watchdog` | dispara cleanup agressivo se disk >threshold (default 80%) |
+| `civmctl disk-watchdog` | dispara cleanup agressivo se disk >threshold (default 80%); fail-closed se a VM não estiver ociosa |
 | `civmctl ci local-report` | posta commit status via gh api (cross-peer manual reporter) |
 
 ### Adicionar runner pra novo peer (1 comando)
@@ -85,7 +85,7 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 
 ## Estrutura por audiência
 
-### Para quem **mantém ci-vm** (admin do repo)
+### Para quem **mantém civm** (admin do repo)
 
 | Arquivo | Função |
 |---|---|
@@ -145,13 +145,13 @@ faz sentido:
 
 ```bash
 # 1. Copiar template de workflow (escolher tier)
-cp ~/codespace/ci-vm/templates/ci-optimistic.yml.template \
+cp ~/codespace/civm/templates/ci-optimistic.yml.template \
    <peer>/.github/workflows/ci.yml
 # Editar para substituir placeholders pelos gates reais do peer
 
 # 2. Copiar snippet COMMUNICATION-STYLE
 # (copiar bloco entre marcadores BEGIN/END em
-#  ~/codespace/ci-vm/templates/COMMUNICATION-STYLE.md
+#  ~/codespace/civm/templates/COMMUNICATION-STYLE.md
 #  pra CLAUDE.md, AGENTS.md, CODEX.md do peer)
 
 # 3. Configurar branch protection no GitHub

@@ -59,7 +59,8 @@ Alternativas consideradas e descartadas:
 - **RF-2** `civmctl bootstrap [--dry-run]`: provisiona Ubuntu 24.04 com tools
   na versão alvo. Idempotente. `--dry-run` é default; `--execute` aplica.
 - **RF-3** `civmctl cleanup [--execute]`: limpa Docker, /tmp, _work caches,
-  apt cache. Default `--dry-run`. Reporta bytes recuperados.
+  apt cache. Default `--dry-run`. Reporta bytes recuperados. Em `--execute`,
+  aborta se detectar job/build ativo ou se não conseguir provar host ocioso.
 - **RF-4** `civmctl health`: exibe disk free, memória, runners ativos,
   última execução de cleanup. Exit 0 OK, 1 warning, 2 critical.
 - **RF-5** `civmctl runner add --token=X --url=Y --labels=civm`:
@@ -77,6 +78,8 @@ Alternativas consideradas e descartadas:
 - **RNF-4** `civmctl` sem args ou com `--help` responde em <100 ms.
 - **RNF-5** Mutações destrutivas (cleanup, bootstrap) são **dry-run por
   default**. `--execute` exige flag explícita.
+- **RNF-8** Cleanup e disk-watchdog são fail-closed: não deletam nem prunam
+  quando há `Runner.Worker`, processo dentro de `_work` ou build Docker ativo.
 - **RNF-6** Logs em PT-BR para usuário; identifiers/comments em inglês.
 - **RNF-7** Exit codes consistentes: 0 OK, 1 warning, 2 critical, 64+ erro
   de uso (sysexits.h).
@@ -100,6 +103,7 @@ admin@vm $ sudo civmctl bootstrap --execute
 
 ```
 [systemd] Trigger civmctl-cleanup.service
+[civmctl] Host idle guard: nenhum Runner.Worker/processo _work/build ativo
 [civmctl] Docker prune: liberados 4.2 GB
 [civmctl] /tmp older than 7d: liberados 1.1 GB
 [civmctl] _work caches older than 14d: liberados 8.7 GB
@@ -140,8 +144,8 @@ instalado pelo bootstrap) ou `curl` direto, não via SDK.
 **Riscos:**
 
 - R1: cleanup deleta arquivo em uso por job ativo. **Mitigação**: cleanup
-  só remove arquivos older than threshold; jobs ativos têm <1h de idade
-  (default).
+  usa guard de ociosidade fail-closed antes de qualquer mutação e revalida
+  antes de `rm -rf`, Docker prune e apt clean; mtime <2h é segunda camada.
 - R2: bootstrap quebra estado prévio da VM. **Mitigação**: idempotente; cada
   step verifica antes de instalar; `--dry-run` default.
 - R3: kernel atualizado pelo provedor diverge de 6.17.0-azure. **Mitigação**:

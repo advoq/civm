@@ -12,10 +12,10 @@ import (
 )
 
 type fakeEntry struct {
-	name    string
-	mtime   time.Time
-	isDir   bool
-	size    int64
+	name  string
+	mtime time.Time
+	isDir bool
+	size  int64
 }
 
 func (f fakeEntry) Name() string       { return f.name }
@@ -30,11 +30,11 @@ func mkFS(now time.Time) fstest.MapFS {
 	recent := now.Add(-1 * time.Hour)
 	mid := now.Add(-10 * 24 * time.Hour)
 	return fstest.MapFS{
-		"tmp/old.txt":     {Data: []byte("xxxxxxxxxx"), ModTime: old},     // delete (>7d, >2h)
-		"tmp/mid.log":     {Data: []byte("yyyy"), ModTime: mid},            // delete (>7d, >2h)
-		"tmp/recent.txt":  {Data: []byte("zz"), ModTime: recent},           // skip (<2h, <7d)
-		"work/x/_actions": {Data: []byte("aaaaaa"), ModTime: old},          // delete (>14d, >2h)
-		"work/y/_actions": {Data: []byte("b"), ModTime: recent},            // skip (<2h)
+		"tmp/old.txt":     {Data: []byte("xxxxxxxxxx"), ModTime: old}, // delete (>7d, >2h)
+		"tmp/mid.log":     {Data: []byte("yyyy"), ModTime: mid},       // delete (>7d, >2h)
+		"tmp/recent.txt":  {Data: []byte("zz"), ModTime: recent},      // skip (<2h, <7d)
+		"work/x/_actions": {Data: []byte("aaaaaa"), ModTime: old},     // delete (>14d, >2h)
+		"work/y/_actions": {Data: []byte("b"), ModTime: recent},       // skip (<2h)
 	}
 }
 
@@ -42,6 +42,18 @@ func walkFS(testFS fstest.MapFS) func(root string, fn fs.WalkDirFunc) error {
 	return func(root string, fn fs.WalkDirFunc) error {
 		return fs.WalkDir(testFS, root, fn)
 	}
+}
+
+func noActivity(context.Context) ([]Activity, error) {
+	return nil, nil
+}
+
+func testExecuteOptions() Options {
+	opts := DefaultOptions()
+	opts.Execute = true
+	opts.ActivityFn = noActivity
+	opts.IdleProbeDelay = 0
+	return opts
 }
 
 func TestRun_DryRun_DetectsOldFiles(t *testing.T) {
@@ -84,10 +96,9 @@ func TestRun_Execute_CallsRm(t *testing.T) {
 	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
 	mfs := mkFS(now)
 	rmCalls := 0
-	opts := DefaultOptions()
+	opts := testExecuteOptions()
 	opts.WorkDir = "work"
 	opts.TmpDir = "tmp"
-	opts.Execute = true
 	opts.Now = now
 	opts.WalkFn = walkFS(mfs)
 	opts.DockerPrune = false
@@ -110,6 +121,49 @@ func TestRun_Execute_CallsRm(t *testing.T) {
 	}
 	if !executedAny {
 		t.Errorf("nenhuma action ficou Executed")
+	}
+}
+
+func TestRun_Execute_BytesFreedTracksEachPathOnce(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	mfs := fstest.MapFS{
+		"tmp/a.txt": {Data: []byte("aaaa"), ModTime: now.Add(-30 * 24 * time.Hour)},
+		"tmp/b.txt": {Data: []byte("bb"), ModTime: now.Add(-30 * 24 * time.Hour)},
+	}
+	opts := testExecuteOptions()
+	opts.TmpDir = "tmp"
+	opts.WorkDir = "tmp"
+	opts.Now = now
+	opts.WalkFn = walkFS(mfs)
+	opts.DockerPrune = false
+	opts.AptClean = false
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+
+	actions := Run(context.Background(), opts)
+	for _, a := range actions {
+		if a.BytesFound != a.BytesFreed {
+			t.Fatalf("%s BytesFound=%d BytesFreed=%d, want equal", a.Name, a.BytesFound, a.BytesFreed)
+		}
+		if a.BytesFreed != 6 {
+			t.Fatalf("%s BytesFreed=%d, want 6", a.Name, a.BytesFreed)
+		}
+	}
+}
+
+func TestRun_RejectsDangerousCleanupRoots(t *testing.T) {
+	t.Parallel()
+	for _, root := range []string{"", "/", "/home", "/root", "/home/runner"} {
+		opts := DefaultOptions()
+		opts.TmpDir = root
+		opts.WorkDir = "work"
+		opts.DockerPrune = false
+		opts.AptClean = false
+		opts.WalkFn = func(string, fs.WalkDirFunc) error { return nil }
+		actions := Run(context.Background(), opts)
+		if actions[0].Err == nil {
+			t.Fatalf("root %q sem erro", root)
+		}
 	}
 }
 
@@ -157,8 +211,7 @@ func TestDockerPrune_DryRun(t *testing.T) {
 
 func TestDockerPrune_Execute(t *testing.T) {
 	t.Parallel()
-	opts := DefaultOptions()
-	opts.Execute = true
+	opts := testExecuteOptions()
 	opts.RunFn = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return []byte("Total reclaimed space: 3.5GB\n"), nil
 	}
@@ -173,8 +226,7 @@ func TestDockerPrune_Execute(t *testing.T) {
 
 func TestDockerPrune_Error(t *testing.T) {
 	t.Parallel()
-	opts := DefaultOptions()
-	opts.Execute = true
+	opts := testExecuteOptions()
 	opts.RunFn = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return nil, errors.New("docker daemon not running")
 	}
@@ -186,8 +238,7 @@ func TestDockerPrune_Error(t *testing.T) {
 
 func TestAptClean(t *testing.T) {
 	t.Parallel()
-	opts := DefaultOptions()
-	opts.Execute = true
+	opts := testExecuteOptions()
 	calls := []string{}
 	opts.RunFn = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		calls = append(calls, name+" "+strings.Join(args, " "))
@@ -356,5 +407,150 @@ func TestRun_WalkError(t *testing.T) {
 		if a.Err == nil {
 			t.Errorf("%s sem erro propagado", a.Name)
 		}
+	}
+}
+
+func TestRun_ExecuteBlocksWhenRunnerWorkerActive(t *testing.T) {
+	t.Parallel()
+	opts := testExecuteOptions()
+	opts.WorkDir = "work"
+	opts.TmpDir = "tmp"
+	opts.DockerPrune = true
+	opts.AptClean = true
+	opts.ActivityFn = func(context.Context) ([]Activity, error) {
+		return []Activity{{PID: 1234, Command: "/home/emdev/actions-runner/bin/Runner.Worker run"}}, nil
+	}
+	calls := 0
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		calls++
+		return nil, nil
+	}
+
+	actions := Run(context.Background(), opts)
+	if len(actions) != 1 || actions[0].Name != "host_idle" {
+		t.Fatalf("actions = %+v, want host_idle guard only", actions)
+	}
+	if actions[0].Err == nil || !strings.Contains(actions[0].Err.Error(), "host nao esta ocioso") {
+		t.Fatalf("guard err = %v", actions[0].Err)
+	}
+	if calls != 0 {
+		t.Fatalf("RunFn calls = %d, want 0", calls)
+	}
+}
+
+func TestRun_ExecuteRechecksBeforeDeleting(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	mfs := fstest.MapFS{
+		"tmp/a.txt": {Data: []byte("aaaa"), ModTime: now.Add(-30 * 24 * time.Hour)},
+	}
+	opts := testExecuteOptions()
+	opts.WorkDir = "tmp"
+	opts.TmpDir = "tmp"
+	opts.Now = now
+	opts.WalkFn = walkFS(mfs)
+	opts.DockerPrune = false
+	opts.AptClean = false
+	activityCalls := 0
+	opts.ActivityFn = func(context.Context) ([]Activity, error) {
+		activityCalls++
+		if activityCalls == 1 {
+			return nil, nil
+		}
+		return []Activity{{PID: 5678, Command: "/home/emdev/actions-runner/_work/repo/repo/script.sh"}}, nil
+	}
+	rmCalls := 0
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "rm" {
+			rmCalls++
+		}
+		return nil, nil
+	}
+
+	actions := Run(context.Background(), opts)
+	if rmCalls != 0 {
+		t.Fatalf("rmCalls = %d, want 0", rmCalls)
+	}
+	if len(actions) == 0 || actions[0].Err == nil {
+		t.Fatalf("esperava erro no primeiro cleanup action: %+v", actions)
+	}
+}
+
+func TestParseActiveProcessesDetectsWorkersAndWorkdir(t *testing.T) {
+	t.Parallel()
+	ps := `
+ 100 1 Sl Runner.Listener /home/emdev/actions-runner/bin/Runner.Listener run --startuptype service
+ 101 100 Sl Runner.Worker /home/emdev/actions-runner/bin/Runner.Worker run
+ 102 100 S bash /home/emdev/actions-runner/_work/repo/repo/build.sh
+ 103 1 S sleep sleep 10
+`
+	got := parseActiveProcesses(ps, 999)
+	if len(got) != 2 {
+		t.Fatalf("len(active) = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].PID != 101 || got[1].PID != 102 {
+		t.Fatalf("active pids = %+v", got)
+	}
+}
+
+func TestActiveBuildProcessIgnoresCleanupCommandItself(t *testing.T) {
+	t.Parallel()
+	if isActiveBuildProcess("civmctl", "/usr/local/bin/civmctl cleanup --execute --work-dir=/home/emdev/actions-runner/_work") {
+		t.Fatalf("cleanup command should not self-block on its own --work-dir arg")
+	}
+	if !isActiveBuildProcess("docker", "docker buildx build .") {
+		t.Fatalf("docker buildx build should be active")
+	}
+}
+
+func TestEnsureIdleDoubleProbeCatchesNewActivity(t *testing.T) {
+	t.Parallel()
+	opts := testExecuteOptions()
+	opts.IdleProbeDelay = time.Nanosecond
+	calls := 0
+	opts.ActivityFn = func(context.Context) ([]Activity, error) {
+		calls++
+		if calls == 1 {
+			return nil, nil
+		}
+		return []Activity{{PID: 99, Command: "docker compose up"}}, nil
+	}
+	if err := ensureIdle(context.Background(), opts); err == nil {
+		t.Fatalf("ensureIdle sem erro no segundo probe")
+	}
+}
+
+func TestEnsureIdleFailsClosedOnProbeError(t *testing.T) {
+	t.Parallel()
+	opts := testExecuteOptions()
+	opts.ActivityFn = func(context.Context) ([]Activity, error) {
+		return nil, errors.New("ps unavailable")
+	}
+	err := ensureIdle(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "nao foi possivel provar") {
+		t.Fatalf("ensureIdle err = %v", err)
+	}
+}
+
+func TestFormatActivitiesLimitsOutput(t *testing.T) {
+	t.Parallel()
+	activities := []Activity{
+		{PID: 1, Command: strings.Repeat("a", 100)},
+		{PID: 2, Command: "b"},
+		{PID: 3, Command: "c"},
+		{PID: 4, Command: "d"},
+	}
+	got := formatActivities(activities)
+	for _, want := range []string{"pid=1", "pid=2", "pid=3", "+1 outro"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatActivities omitiu %q: %s", want, got)
+		}
+	}
+}
+
+func TestDefaultActivitiesRealPSDoesNotError(t *testing.T) {
+	// Não usa Parallel: toca ps real.
+	if _, err := defaultActivities(context.Background()); err != nil {
+		t.Skipf("ps indisponivel neste ambiente: %v", err)
 	}
 }

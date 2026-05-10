@@ -1,4 +1,4 @@
-// Package cleanup implements disk hygiene for the ci-vm runner host.
+// Package cleanup implements disk hygiene for the civm runner host.
 // All actions are dry-run by default; --execute flag flips to mutating.
 package cleanup
 
@@ -7,11 +7,36 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/emersonbusson/civm/internal/civm"
 )
+
+type deleteCandidate struct {
+	path string
+	size int64
+}
+
+// Activity is evidence that a CI job or build is currently active on the host.
+type Activity struct {
+	PID     int
+	Command string
+}
+
+var dangerousAbsoluteRoots = map[string]struct{}{
+	"/":     {},
+	"/home": {},
+	"/root": {},
+}
+
+var allowedTopLevelCleanupRoots = map[string]struct{}{
+	civm.DefaultTmpDir: {},
+}
 
 // Action is one cleanup step result.
 type Action struct {
@@ -25,51 +50,54 @@ type Action struct {
 
 // Options control which steps run.
 type Options struct {
-	Execute       bool
-	WorkDir       string
-	TmpDir        string
-	TmpThreshold  time.Duration
-	WorkThreshold time.Duration
-	DockerPrune   bool
-	AptClean      bool
-	Now           time.Time
+	Execute        bool
+	WorkDir        string
+	TmpDir         string
+	TmpThreshold   time.Duration
+	WorkThreshold  time.Duration
+	DockerPrune    bool
+	AptClean       bool
+	SkipIdleGuard  bool
+	IdleProbeDelay time.Duration
+	Now            time.Time
 
-	WalkFn func(root string, fn fs.WalkDirFunc) error
-	StatFn func(path string) (fs.FileInfo, error)
-	RunFn  func(ctx context.Context, name string, args ...string) ([]byte, error)
+	WalkFn     func(root string, fn fs.WalkDirFunc) error
+	StatFn     func(path string) (fs.FileInfo, error)
+	RunFn      func(ctx context.Context, name string, args ...string) ([]byte, error)
+	ActivityFn func(ctx context.Context) ([]Activity, error)
 }
 
 // DefaultOptions returns sane defaults: dry-run, 7d /tmp, 14d _work.
 func DefaultOptions() Options {
 	return Options{
-		Execute:       false,
-		WorkDir:       "/home/runner/_work",
-		TmpDir:        "/tmp",
-		TmpThreshold:  7 * 24 * time.Hour,
-		WorkThreshold: 14 * 24 * time.Hour,
-		DockerPrune:   true,
-		AptClean:      true,
-		Now:           time.Now(),
-		WalkFn:        filepath.WalkDir,
-		StatFn:        defaultStat,
-		RunFn:         defaultRun,
+		Execute:        false,
+		WorkDir:        civm.DefaultWorkDir,
+		TmpDir:         civm.DefaultTmpDir,
+		TmpThreshold:   7 * 24 * time.Hour,
+		WorkThreshold:  14 * 24 * time.Hour,
+		DockerPrune:    true,
+		AptClean:       true,
+		IdleProbeDelay: 2 * time.Second,
+		Now:            time.Now(),
+		WalkFn:         filepath.WalkDir,
+		StatFn:         defaultStat,
+		RunFn:          defaultRun,
+		ActivityFn:     defaultActivities,
 	}
 }
 
 // Run executes every enabled step and returns one Action per step.
 // Errors are captured per-Action; the function itself returns nil.
 func Run(ctx context.Context, opts Options) []Action {
-	if opts.WalkFn == nil {
-		opts.WalkFn = filepath.WalkDir
-	}
-	if opts.StatFn == nil {
-		opts.StatFn = defaultStat
-	}
-	if opts.RunFn == nil {
-		opts.RunFn = defaultRun
-	}
-	if opts.Now.IsZero() {
-		opts.Now = time.Now()
+	applyDefaults(&opts)
+	if opts.Execute && !opts.SkipIdleGuard {
+		if err := ensureIdle(ctx, opts); err != nil {
+			return []Action{{
+				Name: "host_idle",
+				Path: "(runner/build activity)",
+				Err:  err,
+			}}
+		}
 	}
 	var out []Action
 	out = append(out, scanAndMaybeDelete(ctx, opts, "tmp_old", opts.TmpDir, opts.TmpThreshold))
@@ -83,11 +111,36 @@ func Run(ctx context.Context, opts Options) []Action {
 	return out
 }
 
+func applyDefaults(opts *Options) {
+	if opts.WalkFn == nil {
+		opts.WalkFn = filepath.WalkDir
+	}
+	if opts.StatFn == nil {
+		opts.StatFn = defaultStat
+	}
+	if opts.RunFn == nil {
+		opts.RunFn = defaultRun
+	}
+	if opts.ActivityFn == nil {
+		opts.ActivityFn = defaultActivities
+	}
+	if opts.Now.IsZero() {
+		opts.Now = time.Now()
+	}
+}
+
 func scanAndMaybeDelete(ctx context.Context, opts Options, name, root string, threshold time.Duration) Action {
 	a := Action{Name: name, Path: root}
+	cleanRoot, err := validateCleanupRoot(root)
+	if err != nil {
+		a.Err = err
+		return a
+	}
+	root = cleanRoot
+	a.Path = cleanRoot
 	cutoff := opts.Now.Add(-threshold)
-	var toDelete []string
-	err := opts.WalkFn(root, func(path string, d fs.DirEntry, err error) error {
+	var toDelete []deleteCandidate
+	err = opts.WalkFn(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -107,7 +160,7 @@ func scanAndMaybeDelete(ctx context.Context, opts Options, name, root string, th
 		}
 		size := dirSize(opts, path, info)
 		a.BytesFound += size
-		toDelete = append(toDelete, path)
+		toDelete = append(toDelete, deleteCandidate{path: path, size: size})
 		if d.IsDir() {
 			return filepath.SkipDir
 		}
@@ -120,15 +173,42 @@ func scanAndMaybeDelete(ctx context.Context, opts Options, name, root string, th
 	if !opts.Execute {
 		return a
 	}
-	for _, p := range toDelete {
-		if _, err := opts.RunFn(ctx, "rm", "-rf", p); err != nil {
+	if err := ensureIdle(ctx, opts); err != nil {
+		a.Err = err
+		return a
+	}
+	for _, candidate := range toDelete {
+		if _, err := opts.RunFn(ctx, "rm", "-rf", candidate.path); err != nil {
 			a.Err = err
 			break
 		}
-		a.BytesFreed += a.BytesFound // approximated; precise per-path freed not tracked
+		a.BytesFreed += candidate.size
 	}
 	a.Executed = true
 	return a
+}
+
+func validateCleanupRoot(root string) (string, error) {
+	clean, err := civm.CleanDir(root, "cleanup root")
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(clean) {
+		return clean, nil
+	}
+	if _, ok := allowedTopLevelCleanupRoots[clean]; ok {
+		return clean, nil
+	}
+	if _, ok := dangerousAbsoluteRoots[clean]; ok {
+		return "", fmt.Errorf("cleanup root perigoso: %s", clean)
+	}
+	if home, err := os.UserHomeDir(); err == nil && clean == filepath.Clean(home) {
+		return "", fmt.Errorf("cleanup root nao pode ser home inteiro: %s", clean)
+	}
+	if strings.HasPrefix(clean, "/home/") && strings.Count(strings.Trim(clean, "/"), "/") == 1 {
+		return "", fmt.Errorf("cleanup root nao pode ser home inteiro: %s", clean)
+	}
+	return clean, nil
 }
 
 func dirSize(opts Options, root string, info fs.FileInfo) int64 {
@@ -162,6 +242,10 @@ func dockerPrune(ctx context.Context, opts Options) Action {
 		}
 		return a
 	}
+	if err := ensureIdle(ctx, opts); err != nil {
+		a.Err = err
+		return a
+	}
 	out, err := opts.RunFn(ctx, "docker", "system", "prune", "-af", "--volumes")
 	if err != nil {
 		a.Err = err
@@ -177,6 +261,10 @@ func aptClean(ctx context.Context, opts Options) Action {
 	if !opts.Execute {
 		return a
 	}
+	if err := ensureIdle(ctx, opts); err != nil {
+		a.Err = err
+		return a
+	}
 	if _, err := opts.RunFn(ctx, "apt-get", "clean"); err != nil {
 		a.Err = err
 		return a
@@ -187,6 +275,105 @@ func aptClean(ctx context.Context, opts Options) Action {
 	}
 	a.Executed = true
 	return a
+}
+
+func ensureIdle(ctx context.Context, opts Options) error {
+	if opts.SkipIdleGuard || !opts.Execute {
+		return nil
+	}
+	if err := assertIdle(ctx, opts.ActivityFn); err != nil {
+		return err
+	}
+	if opts.IdleProbeDelay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(opts.IdleProbeDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+	}
+	return assertIdle(ctx, opts.ActivityFn)
+}
+
+func assertIdle(ctx context.Context, activityFn func(context.Context) ([]Activity, error)) error {
+	activities, err := activityFn(ctx)
+	if err != nil {
+		return fmt.Errorf("cleanup abortado: nao foi possivel provar host ocioso: %w", err)
+	}
+	if len(activities) == 0 {
+		return nil
+	}
+	return fmt.Errorf("cleanup abortado: host nao esta ocioso (%s)", formatActivities(activities))
+}
+
+func formatActivities(activities []Activity) string {
+	limit := len(activities)
+	if limit > 3 {
+		limit = 3
+	}
+	parts := make([]string, 0, limit+1)
+	for _, a := range activities[:limit] {
+		cmd := a.Command
+		if len(cmd) > 90 {
+			cmd = cmd[:89] + "..."
+		}
+		parts = append(parts, fmt.Sprintf("pid=%d %s", a.PID, cmd))
+	}
+	if len(activities) > limit {
+		parts = append(parts, fmt.Sprintf("+%d outro(s)", len(activities)-limit))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func defaultActivities(ctx context.Context) ([]Activity, error) {
+	out, err := exec.CommandContext(ctx, "ps", "-eo", "pid=,ppid=,comm=,args=").Output()
+	if err != nil {
+		return nil, err
+	}
+	return parseActiveProcesses(string(out), os.Getpid()), nil
+}
+
+func parseActiveProcesses(psOutput string, currentPID int) []Activity {
+	var activities []Activity
+	for _, line := range strings.Split(psOutput, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || pid == currentPID {
+			continue
+		}
+		comm := fields[2]
+		args := strings.Join(fields[3:], " ")
+		if isActiveBuildProcess(comm, args) {
+			activities = append(activities, Activity{PID: pid, Command: args})
+		}
+	}
+	return activities
+}
+
+func isActiveBuildProcess(comm, args string) bool {
+	if strings.Contains(args, "civmctl cleanup") || strings.Contains(args, "civmctl disk-watchdog") {
+		return false
+	}
+	switch {
+	case strings.Contains(comm, "Runner.Worker"), strings.Contains(args, "Runner.Worker"):
+		return true
+	case strings.Contains(args, "Runner.PluginHost"):
+		return true
+	case strings.Contains(args, "/_work/"):
+		return true
+	case strings.Contains(args, "docker build"), strings.Contains(args, "docker compose"):
+		return true
+	case strings.Contains(args, "docker-compose"), strings.Contains(args, "buildx build"):
+		return true
+	case strings.Contains(args, "buildctl "):
+		return true
+	}
+	return false
 }
 
 // parseReclaimable parses output of `docker system df --format {{.Reclaimable}}`.

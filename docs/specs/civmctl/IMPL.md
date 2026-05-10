@@ -8,12 +8,12 @@
 
 | Commit | Escopo | Arquivos |
 |---|---|---|
-| `chore(ci-vm)` | AGENTS/CODEX/MEMORY (gap) | `AGENTS.md`, `CODEX.md`, `MEMORY.md` |
-| `docs(ci-vm)` | SSDV3 PRD + SPEC + IMPL | `docs/specs/civmctl/{PRD,SPEC,IMPL}.md` |
-| `feat(ci-vm)` | civmctl Go binary | `go.mod`, `cmd/civmctl/*.go`, `internal/{specs,health,cleanup,bootstrap}/*.go` (+ tests) |
-| `feat(ci-vm)` | systemd timer | `deploy/systemd/civmctl-cleanup.{service,timer,README.md}` |
-| `docs(ci-vm)` | zero-effort docs | `README.md`, `runbooks/MULTI-PROJECT-RUNNER.md` |
-| `ci(ci-vm)` | build + test civmctl | `.github/workflows/ci.yml` |
+| `chore(civm)` | AGENTS/CODEX/MEMORY (gap) | `AGENTS.md`, `CODEX.md`, `MEMORY.md` |
+| `docs(civm)` | SSDV3 PRD + SPEC + IMPL | `docs/specs/civmctl/{PRD,SPEC,IMPL}.md` |
+| `feat(civm)` | civmctl Go binary | `go.mod`, `cmd/civmctl/*.go`, `internal/{specs,health,cleanup,bootstrap}/*.go` (+ tests) |
+| `feat(civm)` | systemd timer | `deploy/systemd/civmctl-cleanup.{service,timer,README.md}` |
+| `docs(civm)` | zero-effort docs | `README.md`, `runbooks/MULTI-PROJECT-RUNNER.md` |
+| `ci(civm)` | build + test civmctl | `.github/workflows/ci.yml` |
 
 ## Critérios de aceitação (do PRD §13)
 
@@ -22,11 +22,12 @@
 | PRD aprovado | ✅ | autor + auto mode |
 | SPEC aprovado | ✅ | implementação implícita |
 | `go build ./...` sem warnings | ✅ | clean |
-| `go test -race -count=1 ./...` verde | ✅ | 4 packages OK |
+| `go test -race -count=1 ./...` verde | ✅ | 13 packages OK |
 | `civmctl --help` <100ms | ✅ | 8ms medido |
 | `civmctl version-pins` <50ms | ✅ | 7ms medido |
 | `civmctl health` testado | ✅ | exit 1 em dev (sem runners; esperado) |
 | `civmctl cleanup --dry-run` testado | ✅ | sem mutação |
+| Cleanup active-job guard | ✅ | bloqueia Runner.Worker/_work/build antes de mutar |
 | `civmctl bootstrap --dry-run` testado | ⏭ | requer Linux real (verify_uid falha em sandbox) |
 | Cobertura `internal/**` ≥80% | ✅ | specs 100%, health 88.4%, cleanup 84.5%, bootstrap 84.8% |
 | Binário <10 MB stripped | ✅ | 2.29 MB |
@@ -37,7 +38,7 @@
 |---|---|---|
 | `internal/specs` | 100.0% | data-only, fácil de cobrir |
 | `internal/health` | 88.4% | wrappers OS testados via fake + real |
-| `internal/cleanup` | 84.5% | fstest.MapFS + RunFn fake |
+| `internal/cleanup` | 84.6% | fstest.MapFS + RunFn/ActivityFn fake |
 | `internal/bootstrap` | 84.8% | RunFn fake + cenário already-installed |
 | `cmd/civmctl` | 0% | dispatch puro (PRD §RNF-2 marca opcional) |
 
@@ -48,7 +49,8 @@
   apt_base_packages, install_go, install_node, install_docker,
   install_gh, install_systemd_timer); dry-run default; --execute exige flag
 - ✅ **RF-3** `cleanup`: 4 ações (tmp_old, work_old, docker_prune,
-  apt_cache); thresholds configuráveis; anti-jobs (mtime <2h pulado)
+  apt_cache); thresholds configuráveis; fail-closed quando job/build ativo;
+  anti-jobs por mtime <2h como segunda camada
 - ✅ **RF-4** `health`: 4 checks (DISK, MEM, RUNNERS, LAST); exit 0/1/2
 - ✅ **RF-5** `runner add`: wrapper `./config.sh` do actions/runner;
   `runner list` via systemctl
@@ -63,6 +65,7 @@
 - ✅ **RNF-5** Mutações destrutivas dry-run por default
 - ✅ **RNF-6** Logs PT-BR para usuário; identifiers/comments inglês
 - ✅ **RNF-7** Exit codes: 0 OK, 1 warning, 2 critical, 64 erro de uso
+- ✅ **RNF-8** Cleanup/disk-watchdog não mutam com Runner.Worker/_work/build ativo
 
 ## Disciplinas Kahneman aplicadas
 
@@ -79,18 +82,21 @@
 
 ## O que NÃO foi visto
 
-- **VM real**: agente sandboxed sem SSH; bootstrap end-to-end não foi
-  testado em Ubuntu 24.04 fresh. Step `apply` de cada install_* invoca
-  comandos que precisam ser validados em ambiente real.
-- **systemd timer em ação**: `civmctl-cleanup.timer` não foi disparado em
-  produção; comportamento sob disk pressure real desconhecido.
+- **Bootstrap com este diff**: não rodei `bootstrap --execute` nesta sessão.
+  As validações na VM foram read-only.
+- **Cleanup execute real com este diff**: não rodei `cleanup --execute`.
+  O guard foi validado por teste unitário; a VM ainda precisa receber o
+  binário atualizado para prova operacional.
+- **systemd cleanup diário**: `civmctl-cleanup.timer` ainda não tinha entrada
+  de journal; `civmctl-disk-watchdog.timer` disparou e decidiu `ok` com
+  disco abaixo do threshold.
 - **Compatibilidade de versões em 30 dias**: `actions/runner-images`
   publica updates semanais; `internal/specs/specs.go` precisa sync manual.
 
 ## Próximos passos (humano)
 
-1. Push do branch `main` do ci-vm para `origin` (admin manual quando
-   confirmar): `gh repo create emersonbusson/ci-vm --private` + `git push -u origin main`
+1. Push do branch `main` do civm para `origin` (admin manual quando
+   confirmar): `gh repo create emersonbusson/civm --private` + `git push -u origin main`
 2. Numa VM Ubuntu 24.04 fresh: clone + build + `sudo civmctl bootstrap --execute`
 3. Validar `civmctl health` retorna OK
 4. `systemctl status civmctl-cleanup.timer` confirma habilitado

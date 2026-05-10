@@ -6,8 +6,9 @@
 >
 > **Modelo conceitual (importante):** civm e' **mirror visivel no
 > GitHub**, nao gate alternativo de validacao. O gate de verdade do
-> projeto e' `compexhubctl ci local --clean` que cada dev roda no laptop
-> ANTES de push (ver [`LOCAL-CI.md`](./LOCAL-CI.md) §"Modelo conceitual").
+> projeto e' o gate local do peer (ex.: `compexhubctl ci local --clean`
+> no compexhub) que cada dev roda no laptop
+> ANTES de push (ver [`LOCAL-CI-DISCIPLINE.md`](./LOCAL-CI-DISCIPLINE.md) §"Modelo conceitual").
 > Este runner self-hosted existe pra postar checkmark verde no PR sem
 > custo de Actions minutes — a validacao real ja aconteceu antes do
 > push, em cada laptop.
@@ -19,8 +20,8 @@
 > **Companion runbooks:**
 > - [`CI-BILLING-FALLBACK.md`](./CI-BILLING-FALLBACK.md) — Camada 1+2 do
 >   mirror visivel no GitHub (compexhub-specific).
-> - [`LOCAL-CI.md`](./LOCAL-CI.md) — `compexhubctl ci local` como gate
->   real do projeto (mandatorio antes de push).
+> - [`LOCAL-CI-DISCIPLINE.md`](./LOCAL-CI-DISCIPLINE.md) — gate local do
+>   peer como validacao real do projeto (mandatorio antes de push).
 
 ## Topologia alvo
 
@@ -66,11 +67,11 @@ em GitHub Teams/Enterprise).
 
 ```
 gha-ubuntu-2404
-├── ~/actions-runner/                 (civm-1     -> emersonbusson/ci-vm)
+├── ~/actions-runner/                 (civm-1     -> emersonbusson/civm)
 ├── ~/actions-runner-compexhub/       (civm-cmpx  -> emersonbusson/compexhub)
 ├── ~/actions-runner-vitae/           (civm-vitae -> emersonbusson/vitae)
 └── /etc/systemd/system/
-    ├── actions.runner.emersonbusson-ci-vm.civm-1.service
+    ├── actions.runner.emersonbusson-civm.civm-1.service
     ├── actions.runner.emersonbusson-compexhub.civm-cmpx.service
     └── actions.runner.emersonbusson-vitae.civm-vitae.service
 ```
@@ -106,7 +107,8 @@ do GitHub Actions ja garante isolamento:
 
 - `GITHUB_WORKSPACE` unico per-job (delete + recreate entre jobs)
 - `actions/checkout@v4` faz fresh git clone (sem state preservado)
-- `civmctl-cleanup.timer` (cron 04:00 UTC) limpa Docker/tmp/_work diariamente
+- `civmctl-cleanup.timer` (04:00 UTC) limpa Docker/tmp/_work diariamente,
+  mas aborta se detectar job/build ativo
 - Multiplos runners da mesma VM tem `--work _work` separado por runner
 
 Resultado: cada job comeca do zero, sem crosstalk.
@@ -136,7 +138,7 @@ billing-block continuar derrubando jobs em <10s).
 ## Setup zero-effort (recomendado): civmctl bootstrap
 
 A partir de 2026-05-10, **provisionamento e cleanup são automatizados** via
-`civmctl` (Go binary do proprio repo ci-vm). Specs ficam travadas em
+`civmctl` (Go binary do proprio repo civm). Specs ficam travadas em
 `internal/specs/specs.go` e seguem `actions/runner-images` Ubuntu2404-Readme.md.
 
 ```bash
@@ -144,8 +146,8 @@ A partir de 2026-05-10, **provisionamento e cleanup são automatizados** via
 
 # 1. Build civmctl (uma vez; precisa Go ≥ 1.26 instalado manualmente OU
 #    rodar bootstrap do compexhub que ja tem Go).
-git clone https://github.com/emersonbusson/ci-vm.git /opt/ci-vm
-cd /opt/ci-vm && go build -o /usr/local/bin/civmctl ./cmd/civmctl
+git clone https://github.com/emersonbusson/civm.git /opt/civm
+cd /opt/civm && go build -o /usr/local/bin/civmctl ./cmd/civmctl
 
 # 2. Confere versoes alvo (paridade com ubuntu-latest)
 civmctl version-pins
@@ -157,7 +159,7 @@ sudo civmctl bootstrap
 sudo civmctl bootstrap --execute
 
 # 5. Instalar systemd timer de cleanup automatico
-sudo cp /opt/ci-vm/deploy/systemd/civmctl-cleanup.{service,timer} /etc/systemd/system/
+sudo cp /opt/civm/deploy/systemd/civmctl-cleanup.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now civmctl-cleanup.timer
 
@@ -188,8 +190,18 @@ Cleanup automatico (cron diario 04:00 UTC via systemd timer):
 | `apt_cache` | `apt-get clean && apt-get autoremove -y` | (libera /var/cache/apt) |
 
 `civmctl cleanup --dry-run` (default) lista o que seria liberado sem
-deletar. `--execute` aplica. Anti-jobs-em-curso: nunca toca arquivos com
-mtime <2h.
+deletar. `--execute` aplica somente se provar que o host está ocioso.
+
+Garantias anti-crosstalk:
+
+- aborta se detectar `Runner.Worker`, `Runner.PluginHost`, processo em
+  `/_work/`, `docker build`, `docker compose`, `buildx` ou `buildctl`
+- fail-closed se o detector não conseguir ler processos
+- checa no início e revalida antes de cada mutação (`rm -rf`, Docker prune,
+  apt clean/autoremove)
+- `flock /run/civmctl-cleanup.lock` impede cleanup diário e disk-watchdog
+  de rodarem ao mesmo tempo
+- mtime <2h continua como segunda camada para arquivos recentes
 
 ### Quando usar setup manual em vez de civmctl
 
@@ -449,9 +461,10 @@ Sem automacao, disco enche em ~30 dias com 3 repos ativos. Setup:
 
 ### Cron de limpeza diaria
 
-Criar `/opt/civm/cleanup.sh` (NA VM, fora de qualquer repo — nao
-viola invariante #14 do compexhub porque nao esta em tools/ scripts/
-infra/ de repo). Conteudo:
+Preferir systemd + `civmctl cleanup --execute`. O script manual abaixo fica
+como referência legada para VM sem civmctl e **não deve ser usado em VM
+ativa com runners online**, porque não tem o guard completo de
+`Runner.Worker`/`_work`.
 
 ```bash
 #!/usr/bin/env bash
@@ -463,6 +476,11 @@ infra/ de repo). Conteudo:
 set -euo pipefail
 echo "=== cleanup $(date -Iseconds) ==="
 df -h / | tail -1
+
+if pgrep -af 'Runner.Worker|/_work/|docker build|docker compose|buildx build|buildctl' >/dev/null; then
+  echo "SKIP: build/job ativo; cleanup manual abortado"
+  exit 0
+fi
 
 # 1. Workspaces de jobs antigos (runner deleta, mas tmp persiste as vezes)
 find /home/runner/_work-*/_temp -mindepth 1 -maxdepth 2 -mtime +3 -exec rm -rf {} + 2>/dev/null || true
@@ -522,13 +540,14 @@ USAGE=$(df / --output=pcent | tail -1 | tr -dc '0-9')
 
 if [ "$USAGE" -gt "$THRESHOLD" ]; then
   echo "$(date -Iseconds) WARNING: disk at ${USAGE}% — running aggressive cleanup"
-  /opt/civm/cleanup.sh
+  /usr/bin/flock -n /run/civmctl-cleanup.lock /usr/local/bin/civmctl disk-watchdog --threshold-pct="$THRESHOLD" --execute
 
-  # Se ainda alto, limpar TUDO de docker
+  # Se ainda alto, NAO nukar docker automaticamente durante CI.
+  # Abrir incidente manual: runner pode estar segurando volumes/cache ativos.
   USAGE_AFTER=$(df / --output=pcent | tail -1 | tr -dc '0-9')
   if [ "$USAGE_AFTER" -gt "$THRESHOLD" ]; then
-    echo "Still at ${USAGE_AFTER}% — nuking docker"
-    docker system prune -af --volumes
+    echo "Still at ${USAGE_AFTER}% — manual intervention required"
+    exit 2
   fi
 fi
 ```
@@ -583,15 +602,12 @@ Estrutura mínima a copiar:
 Para o detector heurístico, vitae/advoq podem escolher entre 3 tiers <!-- invariant-waive:#11 -- repos peer -->
 (em ordem de preferência operacional):
 
-- **Tier 1 — detector via Go (rota mais determinista):** vendor o binário
-  `compexhubctl` da release do compexhub e chamar
-  `compexhubctl ci billing-status --workflow=ci.yml`. Mesma lógica
-  do ci-router atual do compexhub.
-- **Tier 2 — detector via Go remoto (sem vendor):** rodar
-  `go run github.com/<owner>/compexhub/tools/compexhubctl@latest ci billing-status`
-  no step do workflow. Mesma logica do Tier 1, sem precisar vendor o
-  repo inteiro. Exige Go disponivel no runner (actions/setup-go@v5
-  instala em segundos).
+- **Tier 1 — detector via civmctl (rota mais deterministica):** chamar
+  `civmctl billing-status --repo=<owner>/<repo> --workflow=ci.yml` no
+  step do workflow. Mesma logica do template `ci-router`.
+- **Tier 2 — detector vendor-eado:** copiar/binariar `civmctl` no peer
+  quando a VM ainda nao tiver `/usr/local/bin/civmctl`. Evita acoplar
+  peers a ferramentas de outro projeto.
 - **Tier 3 — optimistic-retry pattern (zero-auth, self-healing):** adotar
   `docs/templates/ci-optimistic.yml.template` que **não usa detector**.
   Sempre tenta `ubuntu-latest` primeiro com `continue-on-error: true`;
@@ -612,7 +628,7 @@ Para cada repo (compexhub, vitae, advoq) que vai usar civm: <!-- invariant-waive
 
 - [ ] Runner registrado e online (verificar via `gh api repos/<owner>/<repo>/actions/runners`)
 - [ ] Workflow `ci.yml` adota router pattern (template do compexhub)
-- [ ] `compexhubctl ci billing-status` chamavel no workflow (via `go run` ou binario vendor-eado)
+- [ ] `civmctl billing-status` chamavel no workflow
 - [ ] Branch protection rule de `main`:
   - [ ] `Require status checks to pass before merging` habilitado
   - [ ] `Gates (typecheck, test, build, invariants)` adicionado como

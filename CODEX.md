@@ -1,4 +1,4 @@
-# CODEX.md — ci-vm
+# CODEX.md — civm
 
 Operação para CLIs estilo Codex (automação + DEFERRED + pause rules).
 
@@ -9,7 +9,7 @@ CODEX.md complementa `AGENTS.md` (que complementa `README.md`). Em conflito:
 
 ## Escopo de execução autônoma
 
-ci-vm permite execução autônoma para:
+civm permite execução autônoma para:
 
 - ✅ Editar `runbooks/*.md`, `templates/*`, `disciplines/*.md`, `rules/*.md`
 - ✅ Editar `cmd/civmctl/**` e `internal/**` (código Go)
@@ -19,7 +19,7 @@ ci-vm permite execução autônoma para:
 - ✅ Build e test local (`go build`, `go test`)
 - ✅ Commit local (sem push)
 
-ci-vm **NÃO** permite autonomamente:
+civm **NÃO** permite autonomamente:
 
 - ❌ `git push` para `origin/main` (sempre humano)
 - ❌ Alterar `.git/config` ou hooks
@@ -30,11 +30,19 @@ ci-vm **NÃO** permite autonomamente:
   do dev (destinado à VM dedicada; agente sandboxed não tem SSH)
 - ❌ Persistir secret em qualquer arquivo (mesmo `.env.example`)
 
+## Cleanup safety
+
+`civmctl cleanup --execute` e `civmctl disk-watchdog --execute` são
+fail-closed: se detectarem `Runner.Worker`, processo dentro de `_work`,
+Docker build/compose/buildctl ativo ou se não conseguirem provar o host
+ocioso, abortam antes de deletar/prunar. Não adicionar flag ou runbook para
+contornar esse guard sem nova SPEC e validação em VM.
+
 ## Pause rules (modo autônomo)
 
 Quando humano pede execução autônoma ("continue", "faça tudo", "auto"):
 
-1. **Pause após 3 commits locais consecutivos** em ci-vm. Reportar estado
+1. **Pause após 3 commits locais consecutivos** em civm. Reportar estado
    e pedir confirmação antes de seguir.
 2. **Pause obrigatoriamente após mudança em `cmd/civmctl/**`** se afetar
    subcomando `bootstrap` ou `cleanup` (lógica de mutação no host).
@@ -98,7 +106,7 @@ justificado.
 
 ### 2026-05-10 — civmctl criado (revisão de decisão prévia)
 
-Em sessão anterior, decidi-se "não civmctl" pelo argumento de que ci-vm
+Em sessão anterior, decidi-se "não civmctl" pelo argumento de que civm
 "não faz audit". Decisão revisada nesta data: civmctl não faz audit; faz
 provisioning + maintenance idempotente da VM. Gap detectado: provisionar
 manualmente seguindo runbook é repetitivo, frágil e não-replicável (humano
@@ -137,4 +145,4 @@ Sem floreio. Sem emoji a menos que o usuário use primeiro. Sem agradecimento
 performativo. Sem repetir o pedido do usuário antes de responder.
 <!-- COMMUNICATION-STYLE:END -->
 
-> Source canônico: `~/codespace/ci-vm/templates/COMMUNICATION-STYLE.md`
+> Source canônico: `~/codespace/civm/templates/COMMUNICATION-STYLE.md`
