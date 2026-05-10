@@ -168,6 +168,9 @@ jobs:
           which civmctl
           civmctl version-pins | head -5
           civmctl drift --timeout=15 || true
+          # billing-status: zero-PAT, usa GITHUB_TOKEN auto
+          # exit 0=ok, 1=blocked, 2=unknown — aceitar todos no smoke
+          civmctl billing-status --repo=emersonbusson/ci-vm --workflow=ci.yml --timeout=15 || true
 
       - name: civmctl health on self
         run: |

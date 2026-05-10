@@ -55,6 +55,7 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl health` | health check (disk, mem, runners, ultimo cleanup) |
 | `civmctl runner add` | registra runner GitHub Actions self-hosted (mkdir + curl + tar + config.sh + svc.sh install + start) |
 | `civmctl drift` | compara pins locais vs upstream actions/runner-images (HTTP fetch) |
+| `civmctl billing-status` | detector heuristico de billing-block (zero-PAT, GITHUB_TOKEN suficiente) |
 
 ### Adicionar runner pra novo peer (1 comando)
 

@@ -67,6 +67,9 @@ civmctl health
 
 # Ver versoes alvo (sync com upstream actions/runner-images)
 civmctl version-pins
+
+# Detector heuristico de billing-block (zero-PAT)
+civmctl billing-status --repo=owner/repo
 ```
 
 ## Commits

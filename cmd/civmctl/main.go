@@ -29,6 +29,8 @@ func main() {
 		os.Exit(runRunner(args))
 	case "drift":
 		os.Exit(runDrift(args))
+	case "billing-status":
+		os.Exit(runBilling(args))
 	case "-h", "--help", "help":
 		printHelp()
 		os.Exit(0)
@@ -55,6 +57,7 @@ COMANDOS
   health          Health check (disk, mem, runners, ultimo cleanup)
   runner          Gerencia runners GitHub Actions self-hosted
   drift           Detecta versoes pinadas vs upstream actions/runner-images
+  billing-status  Detecta billing-block heuristico (3 runs failure <10s)
   help            Esta mensagem
 
 EXEMPLOS
@@ -63,6 +66,8 @@ EXEMPLOS
   civmctl cleanup --dry-run
   sudo civmctl bootstrap --execute
   civmctl drift
+  civmctl billing-status --repo=owner/repo
+  civmctl billing-status --repo=owner/repo --json
   civmctl runner add --repo=owner/repo --token=$(gh api ...) --short=cmpx
   civmctl runner add --repo=owner/repo --token=... --short=cmpx --execute
 

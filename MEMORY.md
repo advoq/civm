@@ -177,3 +177,54 @@ brutos aqui.
 - **Next step:** monitorar primeiro push do usuario em compexhub
   ou vitae apos esta sessao para validar que job entra em
   vitae-ci-cmpx ou vitae-ci-vitae quando billing block ativo
+
+## 2026-05-10 — port-billing-status-and-advoq-doc
+
+- **Branch:** main
+- **Scope:** portar billing-status de compexhubctl para civmctl,
+  documentar adocao advoq sem modificar peer (filosofia
+  "senior, sem atrito"), criar template ci-router pra advoq
+- **Goal:** eliminar dep cross-repo (vitae/advoq nao precisam
+  importar compexhubctl), permitir advoq adotar em 1 comando
+  + 1 cp template
+- **Decisoes do usuario:**
+  - advoq: doc + template, NAO modificar repo
+  - vitae: migrar agora (Python+PAT -> civmctl billing-status)
+  - port billing-status agora
+- **Actions:**
+  - internal/billing/billing.go (port de
+    compexhub/tools/compexhubctl/cmd/ci/billing.go); 93.2 percent
+    cobertura testes; stdlib-only (gh CLI via os/exec, JSON parse)
+  - cmd/civmctl/billing.go: dispatcher + flags --repo --workflow
+    --limit --threshold-sec --min-blocked --json --timeout
+  - cmd/civmctl/main.go: case "billing-status" + help
+  - runbooks/ADVOQ-ADOPTION.md: passo-a-passo zero-atrito (1
+    comando civmctl runner add + 1 cp template + push)
+  - templates/advoq-ci-router.yml.template: workflow coexiste
+    com go.yml e web.yml existentes do advoq, adiciona
+    Gates aggregator em vitae-ci com smoke (go vet, web
+    typecheck) sem modificar workflows existentes
+  - .github/workflows/ci.yml: smoke step civmctl billing-status
+    em self-hosted-smoke job (validate end-to-end remoto)
+  - README.md + AGENTS.md: nova entry billing-status
+  - vitae ci.yml migration: BLOQUEADA por classifier (autorizacao
+    explicita necessaria); plano permanece valido, aguarda user
+- **Validations:**
+  - go test -race -count=1 -cover ./... verde, billing 93.2 percent
+  - civmctl billing-status --repo=emersonbusson/ci-vm: status ok
+    (durations >10s = nao billing block, sao failures legitimos)
+  - civmctl billing-status --repo=emersonbusson/compexhub: status
+    ok (3 runs com durations 4s/4s/12s; o 12s salva do trigger)
+  - civmctl billing-status --json: estrutura JSON valida
+- **Commits:** (a criar nesta sessao)
+- **Open items:**
+  - vitae ci.yml: classifier bloqueou edicao; user precisa
+    autorizar explicitamente "autorizo editar
+    vitae/.github/workflows/ci.yml"
+  - Remover secret ACTIONS_BILLING_TOKEN no vitae GitHub UI
+    (admin manual apos validar nova heuristica)
+  - advoq runner registration: aguarda user rodar
+    `civmctl runner add --repo=emersonbusson/advoq --short=advoq
+    --execute` quando quiser ativar
+- **Next step:** pedir autorizacao explicita pra editar
+  vitae ci.yml; ou aguardar user adotar advoq runbook
