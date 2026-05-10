@@ -7,15 +7,21 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/emersonbusson/civm/internal/idle"
 )
 
 func validUpgradeOpts() UpgradeOptions {
 	return UpgradeOptions{
-		Short:       "civm-1",
-		NewVersion:  "2.335.0",
-		BaseDir:     "/home/emdev",
-		Execute:     false,
-		VerifyDelay: 0,
+		Short:          "civm-1",
+		NewVersion:     "2.335.0",
+		BaseDir:        "/home/emdev",
+		Execute:        false,
+		VerifyDelay:    0,
+		IdleProbeDelay: 0,
+		ActivityFn: func(context.Context) ([]idle.Activity, error) {
+			return nil, nil
+		},
 		RunFn: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			key := name + " " + strings.Join(args, " ")
 			if strings.Contains(key, "list-units") {
@@ -152,6 +158,33 @@ func TestUpgrade_StopFails(t *testing.T) {
 	}
 	if r.StoppedOK {
 		t.Errorf("StoppedOK true mesmo com erro")
+	}
+}
+
+func TestUpgrade_ExecuteBlocksWhenHostBusy(t *testing.T) {
+	t.Parallel()
+	o := validUpgradeOpts()
+	o.Execute = true
+	o.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		return []idle.Activity{{PID: 44, Command: "docker build ."}}, nil
+	}
+	calls := []string{}
+	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		key := name + " " + strings.Join(args, " ")
+		calls = append(calls, key)
+		if strings.Contains(key, "list-units") {
+			return []byte(fakeListOutput), nil
+		}
+		return nil, nil
+	}
+	r, _ := Upgrade(context.Background(), o)
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "host nao esta ocioso") {
+		t.Fatalf("Err = %v, want busy guard", r.Err)
+	}
+	for _, c := range calls {
+		if strings.Contains(c, "systemctl stop") {
+			t.Fatalf("systemctl stop called despite busy host: %v", calls)
+		}
 	}
 }
 

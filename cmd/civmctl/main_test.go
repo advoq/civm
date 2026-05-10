@@ -58,3 +58,11 @@ func TestBootstrapEverythingHelpers(t *testing.T) {
 		t.Fatalf("joinArgs = %q", got)
 	}
 }
+
+func TestSplitCSV(t *testing.T) {
+	t.Parallel()
+	got := splitCSV("emersonbusson/civm, emersonbusson/vitae,,")
+	if len(got) != 2 || got[0] != "emersonbusson/civm" || got[1] != "emersonbusson/vitae" {
+		t.Fatalf("splitCSV = %#v", got)
+	}
+}

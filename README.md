@@ -37,9 +37,9 @@ git clone https://github.com/emersonbusson/civm.git /opt/civm
 cd /opt/civm
 go build -o /usr/local/bin/civmctl ./cmd/civmctl
 sudo civmctl bootstrap --execute
-sudo cp deploy/systemd/civmctl-cleanup.{service,timer} /etc/systemd/system/
+sudo cp deploy/systemd/civmctl-*.service deploy/systemd/civmctl-*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now civmctl-cleanup.timer
+sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-reverse-watchdog.timer
 civmctl health
 ```
 
@@ -53,6 +53,8 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl bootstrap [--execute]` | provisiona VM (default: dry-run) |
 | `civmctl cleanup [--execute]` | limpa Docker, /tmp, _work, apt cache; em `--execute` aborta se detectar job/build ativo |
 | `civmctl health` | health check (disk, mem, runners, ultimo cleanup) |
+| `civmctl doctor [--json]` | visão read-only consolidada: host, timers, systemd runners e GitHub runners |
+| `civmctl idle-check [--json]` | detector read-only de ociosidade: exit `0=idle`, `1=busy`, `2=unknown` |
 | `civmctl runner add` | registra runner GitHub Actions self-hosted (mkdir + curl + tar + config.sh + svc.sh install + start) |
 | `civmctl runner remove` | desregistra runner (svc.sh stop + uninstall + config.sh remove + rm -rf dir) |
 | `civmctl drift` | compara pins locais vs upstream actions/runner-images (HTTP fetch) |
@@ -129,6 +131,10 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 
 2. **Cada peer repo** referencia `runs-on: [self-hosted, civm]` em
    seu próprio `.github/workflows/ci.yml`.
+
+   Regra de seguranca: jobs self-hosted devem rodar apenas PR confiavel
+   ou same-repo. Evitar `pull_request_target` e nao expor secrets a codigo
+   de fork em runner self-hosted.
 
 3. **Quando billing GitHub OK:** workflow roda em `ubuntu-latest`
    (GitHub-hosted, paga minutos). Quando billing bloqueado: roteia

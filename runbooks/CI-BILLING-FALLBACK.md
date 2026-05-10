@@ -187,11 +187,12 @@ Setup minimo (single-runner, single-repo):
    merge — single point of failure aceitado (mitigado em multi-runner
    setup; ver MULTI-PROJECT-RUNNER.md).
 
-**Nota de seguranca:** runner self-hosted pode executar codigo de PRs
-(dependendo de settings). Para repo publico ou aceitando PRs externos,
-configurar `Settings > Actions > General > Fork pull request workflows`
-para "Require approval for all outside collaborators" ou desabilitar PRs
-externos completamente. Para repo solo (caso atual), risco minimo.
+**Nota de seguranca:** runner self-hosted deve executar apenas PR confiavel
+ou same-repo. Para repo publico ou aceitando PRs externos, configurar
+`Settings > Actions > General > Fork pull request workflows` para
+"Require approval for all outside collaborators" ou desabilitar PRs externos
+completamente. Evitar `pull_request_target` em workflows que possam tocar
+codigo do PR e nunca expor secrets a codigo de fork em runner self-hosted.
 
 ## Configurar branch protection para aceitar Gates como required
 

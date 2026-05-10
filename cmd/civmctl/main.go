@@ -21,6 +21,8 @@ func main() {
 		os.Exit(runVersionPins(args))
 	case "health":
 		os.Exit(runHealth(args))
+	case "doctor":
+		os.Exit(runDoctor(args))
 	case "cleanup":
 		os.Exit(runCleanup(args))
 	case "bootstrap":
@@ -33,6 +35,8 @@ func main() {
 		os.Exit(runBilling(args))
 	case "disk-watchdog":
 		os.Exit(runDiskWatchdog(args))
+	case "idle-check":
+		os.Exit(runIdleCheck(args))
 	case "ci":
 		os.Exit(runCI(args))
 	case "reverse-watchdog":
@@ -65,10 +69,12 @@ COMANDOS
   bootstrap       Provisiona Ubuntu 24.04 com tools alvo (idempotente)
   cleanup         Limpa Docker, /tmp, _work, apt cache (cron diario)
   health          Health check (disk, mem, runners, ultimo cleanup)
+  doctor          Diagnostico read-only consolidado host + GitHub runners
   runner          Gerencia runners GitHub Actions self-hosted
   drift           Detecta versoes pinadas vs upstream actions/runner-images
   billing-status  Detecta billing-block heuristico (3 runs failure <10s)
   disk-watchdog   Trigger cleanup agressivo se disk >threshold (default 80%%)
+  idle-check      Read-only: 0=idle, 1=busy, 2=unknown
   ci              Subcomandos CI cross-peer (local-report)
   reverse-watchdog Alerta se disk-watchdog nao disparou em >MaxAge (default 2h)
   bootstrap-everything  Wrapper: cp systemd units + daemon-reload + bootstrap --execute
@@ -78,6 +84,7 @@ COMANDOS
 EXEMPLOS
   civmctl version-pins
   civmctl health
+  civmctl doctor --json
   civmctl cleanup --dry-run
   sudo civmctl bootstrap --execute
   civmctl drift
@@ -94,7 +101,8 @@ EXEMPLOS
   civmctl peer-status --repo=emersonbusson/compexhub
   civmctl health --json | jq '.exit'
   civmctl reverse-watchdog --max-age-hours=4
-  sudo civmctl bootstrap --install-units-from=/opt/civm/deploy/systemd --execute
+  civmctl idle-check --json
+  sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute
   civmctl disk-watchdog --threshold-pct=80 --execute
   civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="Local VM CI"
 

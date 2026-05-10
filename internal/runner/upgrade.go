@@ -9,28 +9,33 @@ import (
 	"time"
 
 	"github.com/emersonbusson/civm/internal/civm"
+	"github.com/emersonbusson/civm/internal/idle"
 )
 
 // UpgradeOptions controls a runner version upgrade.
 type UpgradeOptions struct {
-	Short       string // suffix curto
-	Unit        string // unit name explícito (sobreescreve Short)
-	Dir         string // diretorio do runner explicito (sobreescreve guess de Short)
-	NewVersion  string // ex: "2.335.0"
-	BaseDir     string // ex: "/home/emdev"
-	Execute     bool
-	VerifyDelay time.Duration
-	RunFn       func(ctx context.Context, name string, args ...string) ([]byte, error)
-	SleepFn     func(d time.Duration)
+	Short          string // suffix curto
+	Unit           string // unit name explícito (sobreescreve Short)
+	Dir            string // diretorio do runner explicito (sobreescreve guess de Short)
+	NewVersion     string // ex: "2.335.0"
+	BaseDir        string // ex: "/home/emdev"
+	Execute        bool
+	VerifyDelay    time.Duration
+	IdleProbeDelay time.Duration
+	RunFn          func(ctx context.Context, name string, args ...string) ([]byte, error)
+	ActivityFn     func(ctx context.Context) ([]idle.Activity, error)
+	SleepFn        func(d time.Duration)
 }
 
 // DefaultUpgradeOptions returns sane defaults.
 func DefaultUpgradeOptions() UpgradeOptions {
 	return UpgradeOptions{
-		VerifyDelay: time.Duration(civm.DefaultUpgradeVerifySeconds) * time.Second,
-		Execute:     false,
-		RunFn:       defaultRun,
-		SleepFn:     time.Sleep,
+		VerifyDelay:    time.Duration(civm.DefaultUpgradeVerifySeconds) * time.Second,
+		IdleProbeDelay: 2 * time.Second,
+		Execute:        false,
+		RunFn:          defaultRun,
+		ActivityFn:     idle.DefaultActivities,
+		SleepFn:        time.Sleep,
 	}
 }
 
@@ -62,6 +67,9 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (UpgradeResult, error) {
 	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
+	}
+	if opts.ActivityFn == nil {
+		opts.ActivityFn = idle.DefaultActivities
 	}
 	if opts.SleepFn == nil {
 		opts.SleepFn = time.Sleep
@@ -107,6 +115,10 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (UpgradeResult, error) {
 		r.UnitResolved, tarPath, tarball, r.Dir, tarPath, r.UnitResolved, opts.VerifyDelay, r.UnitResolved)
 
 	if !opts.Execute {
+		return r, nil
+	}
+	if err := ensureMutationIdle(ctx, opts.ActivityFn, opts.IdleProbeDelay); err != nil {
+		r.Err = err
 		return r, nil
 	}
 

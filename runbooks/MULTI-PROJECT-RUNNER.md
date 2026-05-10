@@ -37,7 +37,7 @@
 |                                                      |
 |  Cada runner tem:                                    |
 |   - Label: civm                                  |
-|   - Work dir: /home/runner/_work-N                   |
+|   - Work dir: ~/actions-runner-<short>/_work         |
 |   - PID separado, processo isolado                   |
 |                                                      |
 |  Ferramentas no PATH (compartilhadas):               |
@@ -100,10 +100,10 @@ ssh gha-ubuntu-2404 "mkdir -p ~/actions-runner-<REPO> && cd ~/actions-runner-<RE
 gh api /repos/emersonbusson/<REPO>/actions/runners --jq '.runners[]|"\(.name) \(.status)"'
 ```
 
-### "Do zero sempre" — clean-slate per job
+### Runner persistente com workspace limpo por job
 
-Sem precisar `--ephemeral` (que requer JIT tokens via webhook). O default
-do GitHub Actions ja garante isolamento:
+O modelo atual é runner persistente por repo. O isolamento vem do workspace
+per-job e do cleanup operacional, não de runner efêmero/JIT:
 
 - `GITHUB_WORKSPACE` unico per-job (delete + recreate entre jobs)
 - `actions/checkout@v4` faz fresh git clone (sem state preservado)
@@ -122,6 +122,19 @@ civmctl runner remove --short=<short> --token="$TOKEN" --execute
 
 Faz tudo idempotente (best-effort): svc.sh stop + uninstall + config.sh
 remove + rm -rf dir. Token mascarado nos logs.
+
+### Remover runner legacy offline (manual)
+
+`civmctl doctor` apenas reporta runners legacy/stale; ele nunca apaga
+registro GitHub automaticamente. Depois de confirmar que o runner offline
+nao e mais usado:
+
+```bash
+gh api /repos/emersonbusson/<REPO>/actions/runners \
+  --jq '.runners[] | select(.status=="offline") | "\(.id) \(.name)"'
+
+gh api -X DELETE /repos/emersonbusson/<REPO>/actions/runners/<RUNNER_ID>
+```
 
 Equivalente manual (se civmctl indisponivel):
 
@@ -158,13 +171,15 @@ sudo civmctl bootstrap
 # 4. Aplicar
 sudo civmctl bootstrap --execute
 
-# 5. Instalar systemd timer de cleanup automatico
-sudo cp /opt/civm/deploy/systemd/civmctl-cleanup.{service,timer} /etc/systemd/system/
+# 5. Instalar systemd timers operacionais
+sudo cp /opt/civm/deploy/systemd/civmctl-*.service /etc/systemd/system/
+sudo cp /opt/civm/deploy/systemd/civmctl-*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now civmctl-cleanup.timer
+sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-reverse-watchdog.timer
 
 # 6. Health check (deve retornar exit 0)
 civmctl health
+civmctl doctor --json
 ```
 
 Steps idempotentes do bootstrap (todos check-then-apply):
@@ -178,14 +193,14 @@ Steps idempotentes do bootstrap (todos check-then-apply):
 | `install_node` | NodeSource setup_20.x + apt install nodejs | `node --version` reporta v20.20.2 |
 | `install_docker` | apt repo Docker CE + plugin compose | `docker --version` reporta 28.0.4 |
 | `install_gh` | apt repo cli.github.com + apt install gh | `gh --version` reporta 2.89.0 |
-| `install_systemd_timer` | enable --now civmctl-cleanup.timer | systemctl is-enabled retorna enabled |
+| `install_systemd_timers` | enable --now cleanup, disk-watchdog e reverse-watchdog | systemctl is-enabled retorna enabled |
 
 Cleanup automatico (cron diario 04:00 UTC via systemd timer):
 
 | Action | O que limpa | Threshold |
 |---|---|---|
 | `tmp_old` | `/tmp` antigos | mtime >7 dias E >2h |
-| `work_old` | `/home/runner/_work/**/_actions` antigos | mtime >14 dias E >2h |
+| `work_old` | `/home/*/actions-runner-*/_work` quando `--work-dir` default é usado | mtime >14 dias E >2h |
 | `docker_prune` | `docker system prune -af --volumes` | (sem threshold; remove tudo nao usado) |
 | `apt_cache` | `apt-get clean && apt-get autoremove -y` | (libera /var/cache/apt) |
 
@@ -483,7 +498,7 @@ if pgrep -af 'Runner.Worker|/_work/|docker build|docker compose|buildx build|bui
 fi
 
 # 1. Workspaces de jobs antigos (runner deleta, mas tmp persiste as vezes)
-find /home/runner/_work-*/_temp -mindepth 1 -maxdepth 2 -mtime +3 -exec rm -rf {} + 2>/dev/null || true
+find /home/*/actions-runner-*/_work/_temp -mindepth 1 -maxdepth 2 -mtime +3 -exec rm -rf {} + 2>/dev/null || true
 
 # 2. Docker images orfas + build cache
 docker image prune -af --filter "until=168h" || true   # >7 dias
@@ -575,13 +590,13 @@ Se em 30 dias o disco passar de 90% mais de 3 vezes, escalar:
 1. Reduzir N runners (1 por repo em vez de 1+ por repo)
 2. Adicionar 2o disco (ou expandir VM se cloud)
 3. Migrar caches grandes para volume separado
-4. Considerar rotacao de runners com `--ephemeral` (cada job em
-   container fresh, descartado depois)
+4. Reavaliar a topologia de runner persistente por repo antes de considerar
+   JIT/efemero; isso exige novo desenho de registro e segurança
 
 ### Limpar caches antigos manualmente (interativo)
 
 ```bash
-sudo -u runner find /home/runner/_work-*/_temp -mtime +7 -delete
+find /home/*/actions-runner-*/_work/_temp -mtime +7 -delete
 ```
 
 (Adicionar a cron diário se quiser.)

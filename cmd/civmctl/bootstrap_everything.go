@@ -29,6 +29,7 @@ func runBootstrapEverything(args []string) int {
 		"diretorio com .service/.timer files (ex: /opt/civm/deploy/systemd)")
 	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")
 	watchdog := fs.Bool("watchdog", true, "habilitar disk-watchdog timer")
+	reverseWatchdog := fs.Bool("reverse-watchdog", true, "habilitar reverse-watchdog timer")
 	timeoutMin := fs.Int("timeout", civm.DefaultCleanupTimeoutMinutes, "timeout total em minutos")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args:", err)
@@ -44,7 +45,7 @@ func runBootstrapEverything(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutMin)*time.Minute)
 	defer cancel()
 
-	steps := buildBootstrapEverythingSteps(*unitsSource, *watchdog, *execute)
+	steps := buildBootstrapEverythingSteps(*unitsSource, *watchdog, *reverseWatchdog, *execute)
 	results := runEverythingSteps(ctx, steps, *execute)
 	renderEverythingTable(results, *execute, os.Stdout)
 
@@ -69,12 +70,15 @@ type everythingResult struct {
 	Err      error
 }
 
-func buildBootstrapEverythingSteps(unitsSource string, watchdog, execute bool) []everythingStep {
+func buildBootstrapEverythingSteps(unitsSource string, watchdog, reverseWatchdog, execute bool) []everythingStep {
 	systemdDest := civm.DefaultSystemdDir
 	cleanUnitsSource, unitsSourceErr := civm.CleanDir(unitsSource, "--units-source")
 	timerNames := []string{"civmctl-cleanup"}
 	if watchdog {
 		timerNames = append(timerNames, "civmctl-disk-watchdog")
+	}
+	if reverseWatchdog {
+		timerNames = append(timerNames, "civmctl-reverse-watchdog")
 	}
 
 	steps := []everythingStep{
@@ -137,11 +141,12 @@ func buildBootstrapEverythingSteps(unitsSource string, watchdog, execute bool) [
 		},
 		everythingStep{
 			Name:    "bootstrap_run",
-			WouldDo: "civmctl bootstrap " + execFlag(execute) + " --watchdog=" + boolStr(watchdog),
+			WouldDo: "civmctl bootstrap " + execFlag(execute) + " --watchdog=" + boolStr(watchdog) + " --reverse-watchdog=" + boolStr(reverseWatchdog),
 			Apply: func(ctx context.Context) error {
 				opts := bootstrap.DefaultOptions()
 				opts.Execute = true
 				opts.WatchdogTimer = watchdog
+				opts.ReverseWatchdog = reverseWatchdog
 				results := bootstrap.Run(ctx, opts)
 				for _, r := range results {
 					if r.Err != nil {

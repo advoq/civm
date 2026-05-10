@@ -64,6 +64,8 @@ civmctl cleanup --execute
 
 # Health check
 civmctl health
+civmctl doctor --json
+civmctl idle-check
 
 # Ver versoes alvo (sync com upstream actions/runner-images)
 civmctl version-pins
@@ -112,6 +114,9 @@ civm **detecta**, nunca corrige automaticamente. **Nunca**:
 - Não usar `civmctl cleanup --execute` sem revisar primeiro com `--dry-run`.
   O execute também aborta se detectar `Runner.Worker`, processo em `_work`
   ou build Docker ativo; não contornar esse guard durante CI.
+- Não usar `civmctl runner restart/remove/upgrade --execute` durante job em
+  curso. Esses comandos agora também abortam fail-closed se `idle-check`
+  encontrar `Runner.Worker`, `_work` ou build Docker ativo.
 - Não usar `civmctl runner add` sem token GitHub válido (peer repo precisa
   registrar seu próprio runner).
 

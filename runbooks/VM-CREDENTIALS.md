@@ -9,10 +9,10 @@
 
 - **Host pattern operacional:** ex.: "VM rodando Ubuntu 22.04, IP
   privado na rede do dono, acessível via VPN/Tailscale do operador"
-- **User convention:** runner roda como user `runner` em
-  `/home/runner/`
-- **Onde ficam os work dirs:** `/home/runner/_work-N/` (N = número
-  do runner instance)
+- **User convention:** runner roda como usuário operacional dedicado
+  (ex.: `emdev` ou `runner`) sob o próprio `$HOME`.
+- **Onde ficam os work dirs:** `~/actions-runner-<short>/_work` quando
+  criado por `civmctl runner add`.
 - **Comandos exemplos** com placeholders: `ssh <YOUR_USER>@<VM_HOST>`
 - **Permissões esperadas** em arquivos sensíveis: `~/.ssh/id_*` com
   `chmod 600`

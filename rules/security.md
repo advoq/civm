@@ -66,6 +66,16 @@ CSP nonce em todo response Next.js. Bloquear:
 - Campos obrigatórios: `actor_user_id`, `workspace_id`, `action`, `target`, `outcome`, `ip_address`, `ua_hash`, `request_id`, `payload_redacted`.
 - Auditoria é **append-only** com triggers BLOCK UPDATE/DELETE/TRUNCATE.
 
+## Self-hosted runners
+
+- Jobs em `runs-on: [self-hosted, civm]` devem rodar apenas PR confiavel
+  ou same-repo.
+- Evitar `pull_request_target` quando qualquer step faz checkout ou executa
+  codigo da branch do PR.
+- Nunca expor secrets a codigo vindo de fork em runner self-hosted.
+- Runners legacy/offline são removidos manualmente via `gh api -X DELETE`
+  depois de revisao humana; `civmctl doctor` apenas reporta.
+
 ## LGPD
 
 - Soft-delete por padrão (`status = 'archived'`).
@@ -87,3 +97,4 @@ Ver `SECURITY.md`. Email `security@compexhub.app`. Timeline: 48h ack / 5d assess
 - ❌ Cookies sem HttpOnly+Secure+SameSite.
 - ❌ Pular gitleaks via `--no-verify`.
 - ❌ Hard-delete sem janela LGPD.
+- ❌ Rodar fork nao confiavel em self-hosted com secrets.

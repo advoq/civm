@@ -38,6 +38,11 @@ Docker build/compose/buildctl ativo ou se não conseguirem provar o host
 ocioso, abortam antes de deletar/prunar. Não adicionar flag ou runbook para
 contornar esse guard sem nova SPEC e validação em VM.
 
+`civmctl runner restart/remove/upgrade --execute` usa a mesma checagem
+compartilhada (`civmctl idle-check`). Mutação de runner deve abortar antes de
+`systemctl restart/stop`, `config.sh remove`, `rm -rf` ou upgrade de tarball
+quando o host estiver ocupado ou desconhecido.
+
 ## Pause rules (modo autônomo)
 
 Quando humano pede execução autônoma ("continue", "faça tudo", "auto"):

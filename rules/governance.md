@@ -41,8 +41,9 @@ O `civm` ainda não tem `pr-governance.yml` ativo. Enquanto esse guard não
 existir, a governança de PR é regra operacional revisada por humano.
 
 Se o guard for implementado, deve ficar neste repo, ser stdlib-only quando
-possível, ter testes focados e rodar em `pull_request_target` sem executar
-código vindo da branch do PR.
+possível e ter testes focados. Evitar `pull_request_target`; se ele for
+inevitavel, o job nao pode fazer checkout nem executar codigo vindo da branch
+do PR e nao pode expor secrets a fork.
 
 ## Issues
 

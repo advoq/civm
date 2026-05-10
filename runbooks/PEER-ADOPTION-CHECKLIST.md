@@ -8,6 +8,11 @@
 
 - [ ] civm repo presente em `~/codespace/civm/` (local OK; quando
       migrar pra GitHub, ajustar refs)
+- [ ] Runner GitHub do peer registrado e online com label `civm`
+- [ ] Workflow usa `runs-on: [self-hosted, civm]` nos jobs que devem cair
+      no runner local
+- [ ] Self-hosted roda apenas PR confiavel/same-repo; forks externos,
+      `pull_request_target` e secrets em jobs self-hosted foram revisados
 - [ ] Working tree do peer está clean OU você sabe o que está
       uncommitted (não vai perder nada)
 - [ ] git branch atual é segura (não main de produção)
@@ -76,6 +81,8 @@ cp ~/codespace/civm/templates/ci-router.yml.template \
 ```
 
 EDITAR: substituir steps "echo PLACEHOLDER" pelos gates reais do peer.
+Conferir que todo job local usa `runs-on: [self-hosted, civm]` ou o
+conditional equivalente `fromJSON('["self-hosted","civm"]')`.
 
 ## Passo 7 — Commit
 

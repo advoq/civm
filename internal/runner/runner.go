@@ -9,8 +9,10 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/emersonbusson/civm/internal/civm"
+	"github.com/emersonbusson/civm/internal/idle"
 )
 
 // AddOptions controls a single runner installation.
@@ -217,18 +219,22 @@ func defaultRun(ctx context.Context, name string, args ...string) ([]byte, error
 
 // RemoveOptions controls a runner removal.
 type RemoveOptions struct {
-	Short   string // suffix do diretorio: ~/actions-runner-<short>
-	Token   string // remove-token (efemero, gh api .../runners/remove-token)
-	BaseDir string // ex: "/home/emdev"
-	Execute bool   // false = dry-run
-	RunFn   func(ctx context.Context, name string, args ...string) ([]byte, error)
+	Short          string // suffix do diretorio: ~/actions-runner-<short>
+	Token          string // remove-token (efemero, gh api .../runners/remove-token)
+	BaseDir        string // ex: "/home/emdev"
+	Execute        bool   // false = dry-run
+	IdleProbeDelay time.Duration
+	RunFn          func(ctx context.Context, name string, args ...string) ([]byte, error)
+	ActivityFn     func(ctx context.Context) ([]idle.Activity, error)
 }
 
 // DefaultRemoveOptions returns sane defaults.
 func DefaultRemoveOptions() RemoveOptions {
 	return RemoveOptions{
-		Execute: false,
-		RunFn:   defaultRun,
+		Execute:        false,
+		IdleProbeDelay: 2 * time.Second,
+		RunFn:          defaultRun,
+		ActivityFn:     idle.DefaultActivities,
 	}
 }
 
@@ -242,7 +248,19 @@ func Remove(ctx context.Context, opts RemoveOptions) ([]Result, error) {
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
 	}
+	if opts.ActivityFn == nil {
+		opts.ActivityFn = idle.DefaultActivities
+	}
 	dir := filepath.Join(opts.BaseDir, "actions-runner-"+opts.Short)
+	if opts.Execute {
+		if err := ensureMutationIdle(ctx, opts.ActivityFn, opts.IdleProbeDelay); err != nil {
+			return []Result{{
+				Name:        "host_idle",
+				Description: "Confirma host sem job/build ativo",
+				Err:         err,
+			}}, nil
+		}
+	}
 	steps := []Step{
 		{
 			Name:        "stop_service",

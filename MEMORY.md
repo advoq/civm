@@ -228,3 +228,100 @@ brutos aqui.
     --execute` quando quiser ativar
 - **Next step:** pedir autorizacao explicita pra editar
   vitae ci.yml; ou aguardar user adotar advoq runbook
+
+## 2026-05-10 — doctor-idle-runner-safety
+
+- **Branch:** fix/civm-ci-runner-safety
+- **Scope:** `civmctl doctor`, `idle-check`, runner mutation guard,
+  health timers, bootstrap reverse-watchdog, docs/templates/runbooks.
+- **Goal:** fechar hardening read-only de VM/adoção/segurança sem apagar
+  runners legacy nem modificar peer repos automaticamente.
+- **Actions:**
+  - Adicionado `internal/idle` e `civmctl idle-check` com exit
+    `0=idle`, `1=busy`, `2=unknown`.
+  - `cleanup`, `disk-watchdog` e `runner restart/remove/upgrade --execute`
+    passam a usar o mesmo detector fail-closed.
+  - Adicionado `internal/doctor` e `civmctl doctor` com tabela/JSON para
+    host, timers, systemd runners e GitHub runners.
+  - `doctor` classifica `civm-*` online como canônico, `vitae-ci-*`
+    offline como legacy/stale, runner online sem label `civm` como
+    ambíguo, busy como warning e repo sem runner como missing.
+  - `health` agora valida `civmctl-cleanup.timer`,
+    `civmctl-disk-watchdog.timer` e `civmctl-reverse-watchdog.timer`.
+  - `bootstrap` e `bootstrap-everything` aceitam `--reverse-watchdog`
+    e copiam/habilitam o timer quando true.
+  - Docs/templates/runbooks reforçados para `runs-on: [self-hosted, civm]`,
+    PR confiável/same-repo, evitar `pull_request_target` e remoção manual
+    de runners legacy via `gh api -X DELETE`.
+- **Validations:**
+  - `go vet ./...` passou.
+  - `go build ./...` passou.
+  - `go test -race -count=1 ./...` passou.
+  - `go test ./...` passou após ajuste final em `doctor`.
+  - `git diff --check` passou.
+  - `civmctl idle-check` local: `idle`, exit 0.
+  - `civmctl health --json` local: exit 2 esperado fora da VM
+    (`/home/runner/_work` e timers ausentes).
+  - `civmctl doctor --json` local: confirmou GitHub runners `civm-*`
+    online para civm/compexhub/vitae/advoq; legados `vitae-ci-*`
+    offline reportados; `vitae-local-vm-1` ambíguo.
+  - SSH read-only em `gha-ubuntu-2404`: `/` em 39%, 63G livres, 6935MB
+    memória disponível, cleanup/disk-watchdog enabled+active,
+    4 services `actions.runner.*` active/running.
+- **Commits:** nenhum nesta sessão.
+- **Open items:**
+  - VM read-only mostrou `civmctl-reverse-watchdog.timer` `not-found` e
+    inactive; precisa instalação/habilitação manual ou próximo bootstrap.
+  - Binário `/usr/local/bin/civmctl` da VM não foi substituído nesta sessão.
+- **Next step:** instalar/habilitar reverse-watchdog na VM ou rodar
+  `bootstrap-everything --reverse-watchdog=true --execute` com aprovação
+  explícita.
+
+## 2026-05-10 — vm-rollout-and-legacy-cleanup
+
+- **Branch:** fix/civm-ci-runner-safety
+- **Scope:** rollout mutável autorizado na VM, remoção manual dos runners
+  legacy offline e correção de drift entre health/cleanup e workdirs reais.
+- **Actions:**
+  - Compilado novo `civmctl` e instalado em
+    `/usr/local/bin/civmctl` na VM `gha-ubuntu-2404`.
+  - Copiados/habilitados os 3 timers systemd:
+    `civmctl-cleanup.timer`, `civmctl-disk-watchdog.timer` e
+    `civmctl-reverse-watchdog.timer`.
+  - Corrigido `health`/`doctor` para checar disco em `/` por default,
+    mantendo `DefaultWorkDir` para cleanup.
+  - Corrigido `cleanup` para autodiscover seguro de
+    `/home/*/actions-runner-*/_work` quando o default legado é usado.
+  - Removidos via GitHub API os runners offline legacy:
+    `vitae-ci-1`, `vitae-ci-cmpx`, `vitae-ci-vitae`,
+    `vitae-ci-advoq`.
+  - Removido `vitae-local-vm-1` via GitHub API depois de confirmar que
+    ele não existia nos services nem nos diretórios `.runner` da VM
+    `gha-ubuntu-2404`.
+- **Validations:**
+  - `go vet ./...` passou.
+  - `go build ./...` passou.
+  - `go test -race -count=1 ./...` passou.
+  - `git diff --check` passou.
+  - VM `systemctl list-timers "civmctl-*"` mostrou cleanup,
+    disk-watchdog e reverse-watchdog enabled+active.
+  - VM `civmctl health --json`: DISK/MEM/RUNNERS/TIMER_* OK; `LAST`
+    warning porque cleanup diário ainda não disparou.
+  - VM `civmctl cleanup` dry-run detectou 23.3 GB (Docker) e
+    10.3 MB em `_work` real.
+  - Após o run `vitae` fechar, VM `idle-check` retornou idle e
+    `sudo civmctl cleanup --execute` liberou 12.3 GB via Docker prune.
+  - `civmctl doctor --json` confirmou runners `civm-*` online e
+    legacy/ambiguous removidos; `vitae` ficou só com `civm-vitae`.
+  - `vitae` run `25639221136` validou roteamento real no runner
+    `civm-vitae`; o job estava em andamento no `Setup Node` baixando
+    cache grande/lento.
+- **Commits:** a criar nesta sessão.
+- **Open items:**
+  - `civmctl health` ainda reporta `LAST` warning até o primeiro disparo
+    do timer `civmctl-cleanup.timer`; execução manual não conta como timer.
+  - Se `vitae-local-vm-1` reaparecer no GitHub, há outro host externo
+    ainda rodando esse listener e ele precisa ser encontrado fora do civm.
+  - Criada issue GitHub `#1` ("Hardening das operações do runner civm")
+    com labels `type:feature`, `area:civmctl`, `area:runner` e assignee
+    `emersonbusson` para linkar a PR.

@@ -91,6 +91,52 @@ func TestRun_DryRun_DetectsOldFiles(t *testing.T) {
 	}
 }
 
+func TestRun_DefaultWorkDirDiscoversRunnerWorkDirs(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-30 * 24 * time.Hour)
+	mfs := fstest.MapFS{
+		"tmp/fresh.txt": {Data: []byte("x"), ModTime: now.Add(-30 * time.Minute)},
+		"home/emdev/actions-runner-a/_work/old.txt":    {Data: []byte("aaaa"), ModTime: old},
+		"home/emdev/actions-runner-b/_work/cache.bin":  {Data: []byte("bbbbbb"), ModTime: old},
+		"home/emdev/actions-runner-b/_work/recent.bin": {Data: []byte("cc"), ModTime: now.Add(-30 * time.Minute)},
+	}
+	opts := DefaultOptions()
+	opts.TmpDir = "tmp"
+	opts.Now = now
+	opts.WalkFn = walkFS(mfs)
+	opts.GlobFn = func(pattern string) ([]string, error) {
+		if pattern != "/home/*/actions-runner-*/_work" {
+			t.Fatalf("glob pattern = %q", pattern)
+		}
+		return []string{
+			"home/emdev/actions-runner-b/_work",
+			"home/emdev/actions-runner-a/_work",
+		}, nil
+	}
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.DockerPrune = false
+	opts.AptClean = false
+
+	actions := Run(context.Background(), opts)
+	if len(actions) != 2 {
+		t.Fatalf("len(actions) = %d, want 2", len(actions))
+	}
+	work := actions[1]
+	if work.Name != "work_old" {
+		t.Fatalf("second action = %s, want work_old", work.Name)
+	}
+	if work.Err != nil {
+		t.Fatalf("work_old err = %v", work.Err)
+	}
+	if work.BytesFound != 10 {
+		t.Fatalf("work_old BytesFound = %d, want 10", work.BytesFound)
+	}
+	if !strings.Contains(work.Path, "actions-runner-a/_work") || !strings.Contains(work.Path, "actions-runner-b/_work") {
+		t.Fatalf("work_old Path omitiu roots descobertos: %s", work.Path)
+	}
+}
+
 func TestRun_Execute_CallsRm(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)

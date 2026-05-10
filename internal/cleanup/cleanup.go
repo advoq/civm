@@ -10,11 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/emersonbusson/civm/internal/civm"
+	"github.com/emersonbusson/civm/internal/idle"
 )
 
 type deleteCandidate struct {
@@ -23,10 +24,7 @@ type deleteCandidate struct {
 }
 
 // Activity is evidence that a CI job or build is currently active on the host.
-type Activity struct {
-	PID     int
-	Command string
-}
+type Activity = idle.Activity
 
 var dangerousAbsoluteRoots = map[string]struct{}{
 	"/":     {},
@@ -63,6 +61,7 @@ type Options struct {
 
 	WalkFn     func(root string, fn fs.WalkDirFunc) error
 	StatFn     func(path string) (fs.FileInfo, error)
+	GlobFn     func(pattern string) ([]string, error)
 	RunFn      func(ctx context.Context, name string, args ...string) ([]byte, error)
 	ActivityFn func(ctx context.Context) ([]Activity, error)
 }
@@ -81,6 +80,7 @@ func DefaultOptions() Options {
 		Now:            time.Now(),
 		WalkFn:         filepath.WalkDir,
 		StatFn:         defaultStat,
+		GlobFn:         filepath.Glob,
 		RunFn:          defaultRun,
 		ActivityFn:     defaultActivities,
 	}
@@ -101,7 +101,7 @@ func Run(ctx context.Context, opts Options) []Action {
 	}
 	var out []Action
 	out = append(out, scanAndMaybeDelete(ctx, opts, "tmp_old", opts.TmpDir, opts.TmpThreshold))
-	out = append(out, scanAndMaybeDelete(ctx, opts, "work_old", opts.WorkDir, opts.WorkThreshold))
+	out = append(out, scanWorkAndMaybeDelete(ctx, opts))
 	if opts.DockerPrune {
 		out = append(out, dockerPrune(ctx, opts))
 	}
@@ -118,6 +118,9 @@ func applyDefaults(opts *Options) {
 	if opts.StatFn == nil {
 		opts.StatFn = defaultStat
 	}
+	if opts.GlobFn == nil {
+		opts.GlobFn = filepath.Glob
+	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
 	}
@@ -127,6 +130,37 @@ func applyDefaults(opts *Options) {
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()
 	}
+}
+
+func scanWorkAndMaybeDelete(ctx context.Context, opts Options) Action {
+	roots := workCleanupRoots(opts)
+	if len(roots) == 1 {
+		return scanAndMaybeDelete(ctx, opts, "work_old", roots[0], opts.WorkThreshold)
+	}
+	a := Action{Name: "work_old", Path: strings.Join(roots, ", ")}
+	for _, root := range roots {
+		part := scanAndMaybeDelete(ctx, opts, "work_old", root, opts.WorkThreshold)
+		a.BytesFound += part.BytesFound
+		a.BytesFreed += part.BytesFreed
+		a.Executed = a.Executed || part.Executed
+		if part.Err != nil && a.Err == nil {
+			a.Err = part.Err
+		}
+	}
+	return a
+}
+
+func workCleanupRoots(opts Options) []string {
+	workDir := filepath.Clean(opts.WorkDir)
+	if workDir != filepath.Clean(civm.DefaultWorkDir) {
+		return []string{opts.WorkDir}
+	}
+	matches, err := opts.GlobFn("/home/*/actions-runner-*/_work")
+	if err != nil || len(matches) == 0 {
+		return []string{opts.WorkDir}
+	}
+	sort.Strings(matches)
+	return matches
 }
 
 func scanAndMaybeDelete(ctx context.Context, opts Options, name, root string, threshold time.Duration) Action {
@@ -281,99 +315,33 @@ func ensureIdle(ctx context.Context, opts Options) error {
 	if opts.SkipIdleGuard || !opts.Execute {
 		return nil
 	}
-	if err := assertIdle(ctx, opts.ActivityFn); err != nil {
-		return err
-	}
-	if opts.IdleProbeDelay <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(opts.IdleProbeDelay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-	}
-	return assertIdle(ctx, opts.ActivityFn)
+	idleOpts := idle.DefaultOptions()
+	idleOpts.ActivityFn = opts.ActivityFn
+	idleOpts.ProbeDelay = opts.IdleProbeDelay
+	return idle.Ensure(ctx, idleOpts, "cleanup")
 }
 
 func assertIdle(ctx context.Context, activityFn func(context.Context) ([]Activity, error)) error {
-	activities, err := activityFn(ctx)
-	if err != nil {
-		return fmt.Errorf("cleanup abortado: nao foi possivel provar host ocioso: %w", err)
-	}
-	if len(activities) == 0 {
-		return nil
-	}
-	return fmt.Errorf("cleanup abortado: host nao esta ocioso (%s)", formatActivities(activities))
+	idleOpts := idle.DefaultOptions()
+	idleOpts.ActivityFn = activityFn
+	idleOpts.ProbeDelay = 0
+	return idle.Ensure(ctx, idleOpts, "cleanup")
 }
 
 func formatActivities(activities []Activity) string {
-	limit := len(activities)
-	if limit > 3 {
-		limit = 3
-	}
-	parts := make([]string, 0, limit+1)
-	for _, a := range activities[:limit] {
-		cmd := a.Command
-		if len(cmd) > 90 {
-			cmd = cmd[:89] + "..."
-		}
-		parts = append(parts, fmt.Sprintf("pid=%d %s", a.PID, cmd))
-	}
-	if len(activities) > limit {
-		parts = append(parts, fmt.Sprintf("+%d outro(s)", len(activities)-limit))
-	}
-	return strings.Join(parts, "; ")
+	return idle.FormatActivities(activities)
 }
 
 func defaultActivities(ctx context.Context) ([]Activity, error) {
-	out, err := exec.CommandContext(ctx, "ps", "-eo", "pid=,ppid=,comm=,args=").Output()
-	if err != nil {
-		return nil, err
-	}
-	return parseActiveProcesses(string(out), os.Getpid()), nil
+	return idle.DefaultActivities(ctx)
 }
 
 func parseActiveProcesses(psOutput string, currentPID int) []Activity {
-	var activities []Activity
-	for _, line := range strings.Split(psOutput, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			continue
-		}
-		pid, err := strconv.Atoi(fields[0])
-		if err != nil || pid == currentPID {
-			continue
-		}
-		comm := fields[2]
-		args := strings.Join(fields[3:], " ")
-		if isActiveBuildProcess(comm, args) {
-			activities = append(activities, Activity{PID: pid, Command: args})
-		}
-	}
-	return activities
+	return idle.ParseActiveProcesses(psOutput, currentPID)
 }
 
 func isActiveBuildProcess(comm, args string) bool {
-	if strings.Contains(args, "civmctl cleanup") || strings.Contains(args, "civmctl disk-watchdog") {
-		return false
-	}
-	switch {
-	case strings.Contains(comm, "Runner.Worker"), strings.Contains(args, "Runner.Worker"):
-		return true
-	case strings.Contains(args, "Runner.PluginHost"):
-		return true
-	case strings.Contains(args, "/_work/"):
-		return true
-	case strings.Contains(args, "docker build"), strings.Contains(args, "docker compose"):
-		return true
-	case strings.Contains(args, "docker-compose"), strings.Contains(args, "buildx build"):
-		return true
-	case strings.Contains(args, "buildctl "):
-		return true
-	}
-	return false
+	return idle.IsActiveBuildProcess(comm, args)
 }
 
 // parseReclaimable parses output of `docker system df --format {{.Reclaimable}}`.

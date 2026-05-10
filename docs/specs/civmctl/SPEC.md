@@ -5,6 +5,23 @@
 **Discipline links:** Kahneman #2 (counterfactual em cada step destrutivo),
 #3 (numero antes de adjetivo nos logs).
 
+## Emenda 2026-05-10 — hardening operacional
+
+Este SPEC nasceu no bootstrap do `civmctl`; o hardening posterior adiciona:
+
+- `cmd/civmctl/doctor.go` + `internal/doctor/`: diagnóstico read-only
+  consolidado de host, timers, systemd runners e GitHub runners.
+- `cmd/civmctl/idlecheck.go` + `internal/idle/`: detector compartilhado de
+  host ocioso, com exit `0=idle`, `1=busy`, `2=unknown`.
+- `internal/runner` passa a usar o detector antes de
+  `restart/remove/upgrade --execute`.
+- `internal/health` valida `civmctl-cleanup.timer`,
+  `civmctl-disk-watchdog.timer` e `civmctl-reverse-watchdog.timer`.
+- `bootstrap`/`bootstrap-everything` expõem `--reverse-watchdog=true` e
+  habilitam o timer quando os unit files estão instalados.
+- Runners legacy offline são apenas reportados; remoção é manual via
+  `gh api -X DELETE`.
+
 ## Arquivos a criar
 
 ### Modulo Go
@@ -106,7 +123,7 @@ type Report struct {
 }
 
 func Collect(ctx context.Context, opts Options) (Report, error) {
-    // 1. df -BG /home/runner/_work (ou path passado)
+    // 1. df -BG / (ou path passado)
     // 2. /proc/meminfo MemAvailable
     // 3. systemctl list-units --type=service "actions.runner.*"
     // 4. journalctl -u civmctl-cleanup --since "24h ago" --reverse -n1
@@ -131,7 +148,7 @@ type Action struct {
 
 type Options struct {
     Execute       bool
-    WorkDir       string  // /home/runner/_work default
+    WorkDir       string  // default legado; autodiscover /home/*/actions-runner-*/_work
     TmpThreshold  time.Duration  // 7d default
     WorkThreshold time.Duration  // 14d default
     DockerPrune   bool  // true default

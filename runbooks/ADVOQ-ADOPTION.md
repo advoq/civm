@@ -51,6 +51,8 @@ ssh gha-ubuntu-2404 "systemctl is-active actions.runner.emersonbusson-advoq.civm
 Advoq atualmente roda 100% em `ubuntu-latest` (workflows `go.yml`,
 `web.yml`). Pra ativar fallback billing-block via civm, adicione um
 job router que decide entre `ubuntu-latest` e `[self-hosted, civm]`.
+Seguranca: usar o self-hosted apenas para PR confiavel/same-repo; evitar
+`pull_request_target` e secrets em jobs que executem codigo de fork.
 
 Template pronto:
 

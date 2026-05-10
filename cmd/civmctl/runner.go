@@ -65,7 +65,8 @@ func runRunnerUpgrade(args []string) int {
 	opts.Execute = *execute
 	if *execute {
 		fmt.Fprintln(os.Stderr, "AVISO: --execute vai parar runner, baixar tarball, sobrescrever binarios e reiniciar.")
-		fmt.Fprintln(os.Stderr, "Job em curso ABORTADO. Pressione Ctrl+C em 5s pra cancelar...")
+		fmt.Fprintln(os.Stderr, "Se houver job/build ativo, civmctl aborta fail-closed antes da mutacao.")
+		fmt.Fprintln(os.Stderr, "Pressione Ctrl+C em 5s pra cancelar...")
 		time.Sleep(5 * time.Second)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutMin)*time.Minute)
@@ -101,7 +102,8 @@ func runRunnerRestart(args []string) int {
 	opts.Execute = *execute
 	if *execute {
 		fmt.Fprintln(os.Stderr, "AVISO: --execute vai parar e reiniciar o runner systemd.")
-		fmt.Fprintln(os.Stderr, "Job em curso pode ser interrompido. Pressione Ctrl+C em 3s...")
+		fmt.Fprintln(os.Stderr, "Se houver job/build ativo, civmctl aborta fail-closed antes da mutacao.")
+		fmt.Fprintln(os.Stderr, "Pressione Ctrl+C em 3s...")
 		time.Sleep(3 * time.Second)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutSec)*time.Second)
@@ -222,6 +224,7 @@ func runRunnerRemove(args []string) int {
 	opts.Execute = *execute
 	if *execute {
 		fmt.Fprintln(os.Stderr, "AVISO: --execute vai parar service + remover diretorio.")
+		fmt.Fprintln(os.Stderr, "Se houver job/build ativo, civmctl aborta fail-closed antes da mutacao.")
 		fmt.Fprintln(os.Stderr, "Pressione Ctrl+C em 3s para abortar...")
 		time.Sleep(3 * time.Second)
 	}

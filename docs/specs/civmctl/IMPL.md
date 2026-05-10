@@ -47,14 +47,21 @@
 - ✅ **RF-1** `version-pins`: tabela + `--json`
 - ✅ **RF-2** `bootstrap`: 8 steps idempotentes (verify_os, verify_uid,
   apt_base_packages, install_go, install_node, install_docker,
-  install_gh, install_systemd_timer); dry-run default; --execute exige flag
+  install_gh, install_systemd_timers); dry-run default; --execute exige flag
 - ✅ **RF-3** `cleanup`: 4 ações (tmp_old, work_old, docker_prune,
   apt_cache); thresholds configuráveis; fail-closed quando job/build ativo;
-  anti-jobs por mtime <2h como segunda camada
-- ✅ **RF-4** `health`: 4 checks (DISK, MEM, RUNNERS, LAST); exit 0/1/2
+  anti-jobs por mtime <2h como segunda camada; autodiscover de
+  `/home/*/actions-runner-*/_work` quando o default legado é usado
+- ✅ **RF-4** `health`: DISK, MEM, RUNNERS, TIMER_CLEANUP, TIMER_DISK,
+  TIMER_REVERSE, LAST; exit 0/1/2
 - ✅ **RF-5** `runner add`: wrapper `./config.sh` do actions/runner;
   `runner list` via systemctl
-- ✅ **RF-6** Help auto-gerado para todos subcomandos
+- ✅ **RF-6** `doctor`: host + timers + systemd runners + GitHub runners,
+  com classificação canônica/legacy/ambígua/busy/missing e `--json`
+- ✅ **RF-7** `idle-check`: read-only; exit 0 idle, 1 busy, 2 unknown
+- ✅ **RF-8** `runner restart/remove/upgrade --execute`: bloqueia
+  fail-closed antes de mutar se host estiver busy/unknown
+- ✅ **RF-9** Help auto-gerado para todos subcomandos
 
 ## RNFs cumpridos
 
@@ -65,12 +72,13 @@
 - ✅ **RNF-5** Mutações destrutivas dry-run por default
 - ✅ **RNF-6** Logs PT-BR para usuário; identifiers/comments inglês
 - ✅ **RNF-7** Exit codes: 0 OK, 1 warning, 2 critical, 64 erro de uso
-- ✅ **RNF-8** Cleanup/disk-watchdog não mutam com Runner.Worker/_work/build ativo
+- ✅ **RNF-8** Cleanup/disk-watchdog/runner mutations não mutam com
+  Runner.Worker/_work/build ativo
 
 ## Disciplinas Kahneman aplicadas
 
-- **#1 WYSIATI**: `IMPL.md §"O que NÃO foi visto"` declara explicitamente
-  que VM real não foi testada (agente sandboxed sem SSH).
+- **#1 WYSIATI**: `IMPL.md §"O que NÃO foi visto"` separa bootstrap,
+  cleanup execute, rollout direto na VM e limpeza de runners legados.
 - **#2 Counterfactual**: cada commit tem `Rollback trigger:`. PRD §"Rollback
   trigger" define gate de 6 meses.
 - **#3 Número antes de adjetivo**: este IMPL.md usa medições reais (8ms,
@@ -83,25 +91,28 @@
 ## O que NÃO foi visto
 
 - **Bootstrap com este diff**: não rodei `bootstrap --execute` nesta sessão.
-  As validações na VM foram read-only.
-- **Cleanup execute real com este diff**: não rodei `cleanup --execute`.
-  O guard foi validado por teste unitário; a VM ainda precisa receber o
-  binário atualizado para prova operacional.
+  A VM recebeu binário + units via instalação direta controlada, não via
+  bootstrap completo.
+- **Cleanup execute real com este diff**: rodei após `idle-check` provar
+  VM idle; liberou 12.3 GB via Docker prune. Antes disso, a VM estava busy
+  com job real do vitae e o guard bloqueava a frente destrutiva.
 - **systemd cleanup diário**: `civmctl-cleanup.timer` ainda não tinha entrada
   de journal; `civmctl-disk-watchdog.timer` disparou e decidiu `ok` com
   disco abaixo do threshold.
+- **Runner ambíguo online**: `vitae-local-vm-1` não existia na VM
+  `gha-ubuntu-2404` e não tinha mais função operacional; foi removido
+  do GitHub via API. Se ele reaparecer, há outro host externo ainda rodando
+  esse listener.
 - **Compatibilidade de versões em 30 dias**: `actions/runner-images`
   publica updates semanais; `internal/specs/specs.go` precisa sync manual.
 
 ## Próximos passos (humano)
 
-1. Push do branch `main` do civm para `origin` (admin manual quando
-   confirmar): `gh repo create emersonbusson/civm --private` + `git push -u origin main`
-2. Numa VM Ubuntu 24.04 fresh: clone + build + `sudo civmctl bootstrap --execute`
-3. Validar `civmctl health` retorna OK
-4. `systemctl status civmctl-cleanup.timer` confirma habilitado
-5. Esperar 24h e ver `journalctl -u civmctl-cleanup` mostrando run
-6. Reportar de volta para atualizar `internal/specs/specs.go` se
+1. Esperar o primeiro disparo diário de `civmctl-cleanup.timer` e validar
+   `journalctl -u civmctl-cleanup`.
+2. Quando a VM estiver idle, rodar `civmctl cleanup --execute` se o dry-run
+   continuar mostrando ganho relevante.
+3. Reportar de volta para atualizar `internal/specs/specs.go` se
    versões mudaram em upstream
 
 ## Rollback trigger (do PRD)

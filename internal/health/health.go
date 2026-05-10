@@ -50,6 +50,12 @@ type Check struct {
 	Status Status
 }
 
+// TimerState is the systemd state of one expected civm timer.
+type TimerState struct {
+	Enabled string
+	Active  string
+}
+
 // Report is the full health report.
 type Report struct {
 	Checks []Check
@@ -79,6 +85,7 @@ type Collector struct {
 	MeminfoFn     func() (memAvailableKB int64, err error)
 	RunnerUnitsFn func(ctx context.Context) ([]string, error)
 	LastCleanupFn func(ctx context.Context) (*time.Time, string, error)
+	TimerStateFn  func(ctx context.Context, timer string) (TimerState, error)
 }
 
 // NewDefaultCollector wires the production implementations.
@@ -93,16 +100,23 @@ func NewDefaultCollector(workDir string) *Collector {
 		MeminfoFn:      defaultMeminfo,
 		RunnerUnitsFn:  defaultRunnerUnits,
 		LastCleanupFn:  defaultLastCleanup,
+		TimerStateFn:   defaultTimerState,
 	}
 }
 
 // Collect runs every check; never panics, returns Report with checks
 // even if some fail (failures become a Check with StatusWarn).
 func (c *Collector) Collect(ctx context.Context) Report {
+	if c.TimerStateFn == nil {
+		c.TimerStateFn = defaultTimerState
+	}
 	var r Report
 	r.Checks = append(r.Checks, c.checkDisk())
 	r.Checks = append(r.Checks, c.checkMem())
 	r.Checks = append(r.Checks, c.checkRunners(ctx))
+	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_CLEANUP", "civmctl-cleanup.timer", StatusCritical))
+	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_DISK", "civmctl-disk-watchdog.timer", StatusCritical))
+	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_REVERSE", "civmctl-reverse-watchdog.timer", StatusWarn))
 	r.Checks = append(r.Checks, c.checkLastCleanup(ctx))
 	return r
 }
@@ -157,13 +171,28 @@ func (c *Collector) checkRunners(ctx context.Context) Check {
 	return Check{Name: "RUNNERS", Detail: strings.Join(units, ", "), Status: StatusOK}
 }
 
+func (c *Collector) checkTimer(ctx context.Context, name, timer string, missingStatus Status) Check {
+	state, err := c.TimerStateFn(ctx, timer)
+	if err != nil {
+		return Check{Name: name, Detail: fmt.Sprintf("%s missing: %v", timer, err), Status: missingStatus}
+	}
+	if state.Enabled != "enabled" || state.Active != "active" {
+		return Check{
+			Name:   name,
+			Detail: fmt.Sprintf("%s stale: enabled=%s active=%s", timer, state.Enabled, state.Active),
+			Status: missingStatus,
+		}
+	}
+	return Check{Name: name, Detail: timer + " enabled+active", Status: StatusOK}
+}
+
 func (c *Collector) checkLastCleanup(ctx context.Context) Check {
 	when, recovered, err := c.LastCleanupFn(ctx)
 	if err != nil {
 		return Check{Name: "LAST", Detail: err.Error(), Status: StatusWarn}
 	}
 	if when == nil {
-		return Check{Name: "LAST", Detail: "cleanup nunca rodou (timer pode nao ter disparado ainda)", Status: StatusWarn}
+		return Check{Name: "LAST", Detail: "cleanup timer nunca rodou (pode nao ter disparado ainda)", Status: StatusWarn}
 	}
 	age := time.Since(*when)
 	st := StatusOK
@@ -303,6 +332,22 @@ func defaultLastCleanup(ctx context.Context) (*time.Time, string, error) {
 		rest = parts[1]
 	}
 	return &t, rest, nil
+}
+
+func defaultTimerState(ctx context.Context, timer string) (TimerState, error) {
+	enabledOut, enabledErr := exec.CommandContext(ctx, "systemctl", "is-enabled", timer).Output()
+	activeOut, activeErr := exec.CommandContext(ctx, "systemctl", "is-active", timer).Output()
+	state := TimerState{
+		Enabled: strings.TrimSpace(string(enabledOut)),
+		Active:  strings.TrimSpace(string(activeOut)),
+	}
+	if enabledErr != nil {
+		return state, fmt.Errorf("is-enabled: %w", enabledErr)
+	}
+	if activeErr != nil {
+		return state, fmt.Errorf("is-active: %w", activeErr)
+	}
+	return state, nil
 }
 
 // readFile is a tiny wrapper to make defaultMeminfo testable via build tags

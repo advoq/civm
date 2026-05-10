@@ -10,6 +10,7 @@ import (
 
 const (
 	DefaultWorkDir        = "/home/runner/_work"
+	DefaultHealthDiskPath = "/"
 	DefaultTmpDir         = "/tmp"
 	DefaultSystemdDir     = "/etc/systemd/system"
 	DefaultUnitsSourceDir = "/opt/civm/deploy/systemd"

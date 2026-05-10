@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/emersonbusson/civm/internal/idle"
 )
 
 func validOpts() AddOptions {
@@ -237,11 +239,13 @@ func TestDefaultOptions_HasSaneDefaults(t *testing.T) {
 
 func validRemoveOpts() RemoveOptions {
 	return RemoveOptions{
-		Short:   "cmpx",
-		Token:   "REMOVE-TOKEN-XYZ",
-		BaseDir: "/home/emdev",
-		Execute: false,
-		RunFn:   func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		Short:          "cmpx",
+		Token:          "REMOVE-TOKEN-XYZ",
+		BaseDir:        "/home/emdev",
+		Execute:        false,
+		IdleProbeDelay: 0,
+		RunFn:          func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		ActivityFn:     func(context.Context) ([]idle.Activity, error) { return nil, nil },
 	}
 }
 
@@ -326,6 +330,33 @@ func TestRemove_ConfigRemoveErrorIsReported(t *testing.T) {
 	}
 	if !gotConfigErr {
 		t.Errorf("config_remove deveria reportar erro")
+	}
+}
+
+func TestRemove_ExecuteBlocksWhenHostBusy(t *testing.T) {
+	t.Parallel()
+	o := validRemoveOpts()
+	o.Execute = true
+	o.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		return []idle.Activity{{PID: 123, Command: "/home/emdev/actions-runner/_work/repo/repo/test.sh"}}, nil
+	}
+	calls := 0
+	o.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		calls++
+		return nil, nil
+	}
+	results, err := Remove(context.Background(), o)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "host_idle" {
+		t.Fatalf("results = %+v, want host_idle only", results)
+	}
+	if results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "host nao esta ocioso") {
+		t.Fatalf("Err = %v, want busy guard", results[0].Err)
+	}
+	if calls != 0 {
+		t.Fatalf("RunFn calls = %d, want 0", calls)
 	}
 }
 
