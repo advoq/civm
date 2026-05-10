@@ -1,0 +1,15 @@
+[Unit]
+Description=civmctl cleanup (disk hygiene da VM ci-vm)
+Documentation=https://github.com/emersonbusson/ci-vm/blob/main/docs/specs/civmctl/PRD.md
+After=network-online.target
+ConditionPathExists=/usr/local/bin/civmctl
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/civmctl cleanup --execute
+User=root
+Nice=15
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=30min
