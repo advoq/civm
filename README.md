@@ -10,6 +10,9 @@ projetos do mesmo dono (compexhub, vitae, advoq, etc).
 - Quando GitHub Actions atribui um job ao label `vitae-ci`, o runner
   na VM executa **exatamente o .yml do peer repo**, igual ubuntu-latest
   faria.
+- **Provisionamento automatico via `civmctl`** (Go binary deste repo):
+  paridade com Ubuntu 24.04 LTS, Go 1.22-1.25, Node 20/22/24, Python
+  3.10-3.14, Docker 28.0.4, gh 2.89.0. Bootstrap idempotente.
 - Distribui templates de workflow + runbooks operacionais + disciplinas
   metodológicas + regras granulares que peers podem **copiar** para
   seus próprios repos.
@@ -21,8 +24,38 @@ projetos do mesmo dono (compexhub, vitae, advoq, etc).
   adiciona step `eslint .` ou ferramenta-do-projeto no próprio .yml.
 - ❌ Não é uma plataforma de orquestração custom. ci-vm é só onde a
   VM mora; orquestração é GitHub Actions padrão.
-- ❌ Não tem CLI próprio (`civmctl`) por enquanto. Se peer precisa de
-  ferramenta de discipline, usa a do próprio projeto.
+- ❌ `civmctl` **não faz audit**. Faz provisioning + maintenance da VM
+  (bootstrap idempotente, cleanup automatizado, health check, runner
+  registration). Discipline checks ficam no projeto do peer.
+
+## Bootstrap em 1 comando (zero-effort)
+
+Numa VM Ubuntu 24.04 LTS limpa, como root:
+
+```bash
+git clone https://github.com/emersonbusson/ci-vm.git /opt/ci-vm
+cd /opt/ci-vm
+go build -o /usr/local/bin/civmctl ./cmd/civmctl
+sudo civmctl bootstrap --execute
+sudo cp deploy/systemd/civmctl-cleanup.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now civmctl-cleanup.timer
+civmctl health
+```
+
+Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
+
+## Comandos civmctl
+
+| Comando | Função |
+|---|---|
+| `civmctl version-pins` | imprime versoes alvo (paridade com `ubuntu-latest`) |
+| `civmctl bootstrap [--execute]` | provisiona VM (default: dry-run) |
+| `civmctl cleanup [--execute]` | limpa Docker, /tmp, _work, apt cache |
+| `civmctl health` | health check (disk, mem, runners, ultimo cleanup) |
+| `civmctl runner add` | registra runner GitHub Actions self-hosted |
+
+PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 
 ## Estrutura por audiência
 

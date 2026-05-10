@@ -56,7 +56,73 @@ ficam em queue até runner liberar.
 compexhub, vitae, advoq). Escalar para 5 ou 6 se o gate `Gates (typecheck, <!-- invariant-waive:#11 -- runbook lista repos compartilhando runner -->
 test, build, invariants)` ficar consistentemente em queue >2 minutos.
 
-## Setup operacional
+## Setup zero-effort (recomendado): civmctl bootstrap
+
+A partir de 2026-05-10, **provisionamento e cleanup são automatizados** via
+`civmctl` (Go binary do proprio repo ci-vm). Specs ficam travadas em
+`internal/specs/specs.go` e seguem `actions/runner-images` Ubuntu2404-Readme.md.
+
+```bash
+# Numa VM Ubuntu 24.04 LTS limpa, como root:
+
+# 1. Build civmctl (uma vez; precisa Go ≥ 1.26 instalado manualmente OU
+#    rodar bootstrap do compexhub que ja tem Go).
+git clone https://github.com/emersonbusson/ci-vm.git /opt/ci-vm
+cd /opt/ci-vm && go build -o /usr/local/bin/civmctl ./cmd/civmctl
+
+# 2. Confere versoes alvo (paridade com ubuntu-latest)
+civmctl version-pins
+
+# 3. Dry-run primeiro (default; nao modifica nada)
+sudo civmctl bootstrap
+
+# 4. Aplicar
+sudo civmctl bootstrap --execute
+
+# 5. Instalar systemd timer de cleanup automatico
+sudo cp /opt/ci-vm/deploy/systemd/civmctl-cleanup.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now civmctl-cleanup.timer
+
+# 6. Health check (deve retornar exit 0)
+civmctl health
+```
+
+Steps idempotentes do bootstrap (todos check-then-apply):
+
+| Step | O que faz | Skip se |
+|---|---|---|
+| `verify_os` | confere `/etc/os-release` ID=ubuntu VERSION_ID=24.04 | OS errado → erro |
+| `verify_uid` | confere UID=0 | UID≠0 → erro |
+| `apt_base_packages` | instala build-essential, curl, wget, jq, git, ca-certificates | dpkg-query reporta ja instalados |
+| `install_go` | baixa tarball go1.25.9 para /usr/local/go | `go version` reporta versao alvo |
+| `install_node` | NodeSource setup_20.x + apt install nodejs | `node --version` reporta v20.20.2 |
+| `install_docker` | apt repo Docker CE + plugin compose | `docker --version` reporta 28.0.4 |
+| `install_gh` | apt repo cli.github.com + apt install gh | `gh --version` reporta 2.89.0 |
+| `install_systemd_timer` | enable --now civmctl-cleanup.timer | systemctl is-enabled retorna enabled |
+
+Cleanup automatico (cron diario 04:00 UTC via systemd timer):
+
+| Action | O que limpa | Threshold |
+|---|---|---|
+| `tmp_old` | `/tmp` antigos | mtime >7 dias E >2h |
+| `work_old` | `/home/runner/_work/**/_actions` antigos | mtime >14 dias E >2h |
+| `docker_prune` | `docker system prune -af --volumes` | (sem threshold; remove tudo nao usado) |
+| `apt_cache` | `apt-get clean && apt-get autoremove -y` | (libera /var/cache/apt) |
+
+`civmctl cleanup --dry-run` (default) lista o que seria liberado sem
+deletar. `--execute` aplica. Anti-jobs-em-curso: nunca toca arquivos com
+mtime <2h.
+
+### Quando usar setup manual em vez de civmctl
+
+- VM que **nao e** Ubuntu 24.04 LTS (Debian, RHEL, Arch, etc).
+- Quer customizar versoes que divergem do `internal/specs/Ubuntu2404`.
+- Bootstrap falhou e quer debugar passo-a-passo.
+
+Nesses casos, ver "## Setup operacional (manual)" abaixo.
+
+## Setup operacional (manual, alternativa)
 
 ### 1. Provisionar a VM
 
