@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/emersonbusson/civm/internal/billing"
+	"github.com/emersonbusson/civm/internal/civm"
 )
 
 func runBilling(args []string) int {
@@ -20,7 +21,7 @@ func runBilling(args []string) int {
 	thresholdSec := fs.Int("threshold-sec", 10, "duracao maxima (segundos) pra considerar 'morto cedo'")
 	minBlocked := fs.Int("min-blocked", 3, "min consecutive blocked runs pra StatusBlocked")
 	jsonOut := fs.Bool("json", false, "saida JSON")
-	timeoutSec := fs.Int("timeout", 15, "timeout em segundos")
+	timeoutSec := fs.Int("timeout", civm.DefaultBillingTimeoutSeconds, "timeout em segundos")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de billing-status:", err)
 		return exitUsage

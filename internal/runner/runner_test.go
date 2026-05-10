@@ -28,9 +28,14 @@ func TestValidate_AllRequiredFieldsChecked(t *testing.T) {
 		{"bad repo (no slash)", func(o *AddOptions) { o.Repo = "compexhub" }},
 		{"no token", func(o *AddOptions) { o.Token = "" }},
 		{"no short", func(o *AddOptions) { o.Short = "" }},
+		{"bad short", func(o *AddOptions) { o.Short = "../cmpx" }},
+		{"bad label", func(o *AddOptions) { o.Label = "civm, bad label" }},
 		{"no runner-version", func(o *AddOptions) { o.RunnerVersion = "" }},
+		{"bad runner-version", func(o *AddOptions) { o.RunnerVersion = "2.334" }},
 		{"no base-dir", func(o *AddOptions) { o.BaseDir = "" }},
+		{"base-dir not clean", func(o *AddOptions) { o.BaseDir = "/home/emdev/.." }},
 		{"no run-as", func(o *AddOptions) { o.RunAsUser = "" }},
+		{"bad run-as", func(o *AddOptions) { o.RunAsUser = "emdev;root" }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -82,10 +87,14 @@ func TestAdd_DryRun_NoExecute(t *testing.T) {
 func TestAdd_Execute_RunsAllSteps(t *testing.T) {
 	t.Parallel()
 	calls := 0
+	var gotShell bool
 	o := validOpts()
 	o.Execute = true
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		calls++
+		if name == "sh" {
+			gotShell = true
+		}
 		return nil, nil
 	}
 	results, err := Add(context.Background(), o)
@@ -102,6 +111,9 @@ func TestAdd_Execute_RunsAllSteps(t *testing.T) {
 	}
 	if calls < 6 {
 		t.Errorf("calls = %d, esperava ao menos 6 (1+ por step)", calls)
+	}
+	if gotShell {
+		t.Errorf("Add nao deveria usar sh -c")
 	}
 }
 
@@ -195,21 +207,6 @@ func TestRenderTable_Error(t *testing.T) {
 	RenderTable(results, o, &buf)
 	if !strings.Contains(buf.String(), "boom") {
 		t.Errorf("erro nao apareceu na tabela")
-	}
-}
-
-func TestShellQuote(t *testing.T) {
-	t.Parallel()
-	cases := map[string]string{
-		"abc":   "'abc'",
-		"a'b":   `'a'\''b'`,
-		"":      "''",
-		"x y":   "'x y'",
-	}
-	for in, want := range cases {
-		if got := shellQuote(in); got != want {
-			t.Errorf("shellQuote(%q) = %q, want %q", in, got, want)
-		}
 	}
 }
 
@@ -310,29 +307,25 @@ func TestRemove_TokenNotInWouldDo(t *testing.T) {
 	}
 }
 
-func TestRemove_BestEffortIgnoresPartialErrors(t *testing.T) {
+func TestRemove_ConfigRemoveErrorIsReported(t *testing.T) {
 	t.Parallel()
 	o := validRemoveOpts()
 	o.Execute = true
-	step := 0
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		step++
-		if step <= 3 {
-			// 3 primeiros steps usam sh -c com `|| true`, nao retornam erro
-			return nil, nil
+		if strings.HasSuffix(name, "/config.sh") {
+			return nil, errors.New("config remove falhou")
 		}
-		// rm -rf step (step 4) — propagaria erro real
 		return nil, nil
 	}
 	results, _ := Remove(context.Background(), o)
-	executed := 0
+	var gotConfigErr bool
 	for _, r := range results {
-		if r.Executed {
-			executed++
+		if r.Name == "config_remove" && r.Err != nil {
+			gotConfigErr = true
 		}
 	}
-	if executed != 4 {
-		t.Errorf("executed = %d, want 4 (todos best-effort)", executed)
+	if !gotConfigErr {
+		t.Errorf("config_remove deveria reportar erro")
 	}
 }
 
@@ -343,7 +336,9 @@ func TestValidateRemove_RequiredFields(t *testing.T) {
 		mut  func(*RemoveOptions)
 	}{
 		{"no short", func(o *RemoveOptions) { o.Short = "" }},
+		{"bad short", func(o *RemoveOptions) { o.Short = "x/y" }},
 		{"no base-dir", func(o *RemoveOptions) { o.BaseDir = "" }},
+		{"base-dir not clean", func(o *RemoveOptions) { o.BaseDir = "/home/emdev/.." }},
 		{"no token", func(o *RemoveOptions) { o.Token = "" }},
 	}
 	for _, c := range cases {

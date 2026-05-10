@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -41,6 +44,7 @@ func okOpts(t *testing.T) Options {
 	t.Helper()
 	opts := DefaultOptions()
 	opts.UID = 0
+	opts.WriteFileFn = func(string, []byte, fs.FileMode) error { return nil }
 	opts.OSReader = func() (string, error) {
 		return "ID=ubuntu\nVERSION_ID=\"24.04\"\n", nil
 	}
@@ -304,5 +308,147 @@ func TestRun_StepError_Propagates(t *testing.T) {
 	}
 	if !hasError {
 		t.Errorf("esperava propagar erro de apt-get update")
+	}
+}
+
+func TestCopySystemdUnitsCopiesMatchedFilesWithoutShell(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, name := range []string{"civmctl-cleanup.service", "civmctl-cleanup.timer"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("unit"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := okOpts(t)
+	opts.InstallUnitsFrom = dir
+	var calls []string
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	if err := copySystemdUnits(context.Background(), opts); err != nil {
+		t.Fatalf("copySystemdUnits err = %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(calls))
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "sh ") {
+			t.Fatalf("copySystemdUnits usou shell: %s", call)
+		}
+		if !strings.Contains(call, "cp ") || !strings.Contains(call, "/etc/systemd/system/") {
+			t.Fatalf("call inesperada: %s", call)
+		}
+	}
+}
+
+func TestCopySystemdUnitsErrorsWhenNoUnits(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.InstallUnitsFrom = t.TempDir()
+	if err := copySystemdUnits(context.Background(), opts); err == nil {
+		t.Fatalf("esperava erro sem units")
+	}
+}
+
+func TestInstallDockerCEWritesSourceWithoutShell(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.OSReader = func() (string, error) {
+		return "ID=ubuntu\nVERSION_ID=\"24.04\"\nVERSION_CODENAME=noble\n", nil
+	}
+	var commands []string
+	var writtenPath string
+	var writtenData string
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		switch name {
+		case "dpkg":
+			return []byte("amd64\n"), nil
+		default:
+			return nil, nil
+		}
+	}
+	opts.WriteFileFn = func(path string, data []byte, perm fs.FileMode) error {
+		writtenPath = path
+		writtenData = string(data)
+		return nil
+	}
+	if err := installDockerCE(context.Background(), opts); err != nil {
+		t.Fatalf("installDockerCE err = %v", err)
+	}
+	if writtenPath != "/etc/apt/sources.list.d/docker.list" {
+		t.Fatalf("writtenPath = %q", writtenPath)
+	}
+	for _, want := range []string{"arch=amd64", " noble ", "download.docker.com"} {
+		if !strings.Contains(writtenData, want) {
+			t.Fatalf("docker source sem %q: %s", want, writtenData)
+		}
+	}
+	for _, command := range commands {
+		if strings.HasPrefix(command, "sh ") {
+			t.Fatalf("installDockerCE usou shell: %s", command)
+		}
+		if strings.HasPrefix(command, "lsb_release ") {
+			t.Fatalf("installDockerCE nao deveria depender de lsb_release: %s", command)
+		}
+	}
+}
+
+func TestUbuntuCodenameFallbackForUbuntu2404(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.OSReader = func() (string, error) {
+		return "ID=ubuntu\nVERSION_ID=\"24.04\"\n", nil
+	}
+	got, err := ubuntuCodename(opts)
+	if err != nil {
+		t.Fatalf("ubuntuCodename err = %v", err)
+	}
+	if got != "noble" {
+		t.Fatalf("ubuntuCodename = %q, want noble", got)
+	}
+}
+
+func TestInstallGHCLIWritesSourceWithoutShell(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	var commands []string
+	var writtenData string
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		if name == "dpkg" {
+			return []byte("arm64\n"), nil
+		}
+		return nil, nil
+	}
+	opts.WriteFileFn = func(path string, data []byte, perm fs.FileMode) error {
+		if path != "/etc/apt/sources.list.d/github-cli.list" {
+			t.Fatalf("path = %q", path)
+		}
+		writtenData = string(data)
+		return nil
+	}
+	if err := installGHCLI(context.Background(), opts); err != nil {
+		t.Fatalf("installGHCLI err = %v", err)
+	}
+	if !strings.Contains(writtenData, "arch=arm64") {
+		t.Fatalf("github source sem arch=arm64: %s", writtenData)
+	}
+	for _, command := range commands {
+		if strings.HasPrefix(command, "sh ") {
+			t.Fatalf("installGHCLI usou shell: %s", command)
+		}
+	}
+}
+
+func TestCommandOutputTrimmedRejectsEmpty(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(" \n"), nil
+	}
+	if _, err := commandOutputTrimmed(context.Background(), opts, "dpkg", "--print-architecture"); err == nil {
+		t.Fatalf("esperava erro para output vazio")
 	}
 }

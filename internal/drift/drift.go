@@ -18,10 +18,10 @@ import (
 
 // Diff is one tool whose pinned version differs from upstream.
 type Diff struct {
-	Tool       string
-	Pinned     string
-	Upstream   string
-	Status     Status
+	Tool     string
+	Pinned   string
+	Upstream string
+	Status   Status
 }
 
 // Status of a single diff.
@@ -50,10 +50,10 @@ func (s Status) String() string {
 
 // Report is the full drift report.
 type Report struct {
-	UpstreamURL    string
-	Generated      time.Time
-	Diffs          []Diff
-	UpstreamRaw    string // raw markdown fetched (truncated to first 16KB for traceability)
+	UpstreamURL string
+	Generated   time.Time
+	Diffs       []Diff
+	UpstreamRaw string // raw markdown fetched (truncated to first 16KB for traceability)
 }
 
 // HasBehind returns true if any tool is behind upstream. "Ahead" e

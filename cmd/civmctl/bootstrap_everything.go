@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/emersonbusson/civm/internal/bootstrap"
+	"github.com/emersonbusson/civm/internal/civm"
 )
 
 // runBootstrapEverything wrappa bootstrap + cp dos systemd units.
-// Pré-requisito: ci-vm repo clonado em --units-source (ou /opt/ci-vm
+// Pré-requisito: repo civm clonado em --units-source (ou /opt/civm
 // como default). civmctl ja deve estar em /usr/local/bin (use
 // 'go build -o' ou install standalone antes).
 //
@@ -24,11 +25,11 @@ import (
 func runBootstrapEverything(args []string) int {
 	fs := flag.NewFlagSet("bootstrap-everything", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	unitsSource := fs.String("units-source", "/opt/ci-vm/deploy/systemd",
-		"diretorio com .service/.timer files (ex: /opt/ci-vm/deploy/systemd)")
+	unitsSource := fs.String("units-source", civm.DefaultUnitsSourceDir,
+		"diretorio com .service/.timer files (ex: /opt/civm/deploy/systemd)")
 	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")
 	watchdog := fs.Bool("watchdog", true, "habilitar disk-watchdog timer")
-	timeoutMin := fs.Int("timeout", 30, "timeout total em minutos")
+	timeoutMin := fs.Int("timeout", civm.DefaultCleanupTimeoutMinutes, "timeout total em minutos")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args:", err)
 		return exitUsage
@@ -56,9 +57,9 @@ func runBootstrapEverything(args []string) int {
 }
 
 type everythingStep struct {
-	Name     string
-	WouldDo  string
-	Apply    func(ctx context.Context) error
+	Name    string
+	WouldDo string
+	Apply   func(ctx context.Context) error
 }
 
 type everythingResult struct {
@@ -69,7 +70,8 @@ type everythingResult struct {
 }
 
 func buildBootstrapEverythingSteps(unitsSource string, watchdog, execute bool) []everythingStep {
-	systemdDest := "/etc/systemd/system"
+	systemdDest := civm.DefaultSystemdDir
+	cleanUnitsSource, unitsSourceErr := civm.CleanDir(unitsSource, "--units-source")
 	timerNames := []string{"civmctl-cleanup"}
 	if watchdog {
 		timerNames = append(timerNames, "civmctl-disk-watchdog")
@@ -88,10 +90,13 @@ func buildBootstrapEverythingSteps(unitsSource string, watchdog, execute bool) [
 		},
 		{
 			Name:    "verify_units_source",
-			WouldDo: "ls " + unitsSource + "/*.{service,timer}",
+			WouldDo: "ls " + cleanUnitsSource + "/civmctl-*.{service,timer}",
 			Apply: func(ctx context.Context) error {
-				if _, err := os.Stat(unitsSource); err != nil {
-					return fmt.Errorf("units-source %s nao existe: %w (use --units-source pra customizar)", unitsSource, err)
+				if unitsSourceErr != nil {
+					return unitsSourceErr
+				}
+				if _, err := os.Stat(cleanUnitsSource); err != nil {
+					return fmt.Errorf("units-source %s nao existe: %w (use --units-source pra customizar)", cleanUnitsSource, err)
 				}
 				return nil
 			},
@@ -103,20 +108,20 @@ func buildBootstrapEverythingSteps(unitsSource string, watchdog, execute bool) [
 		steps = append(steps,
 			everythingStep{
 				Name:    "cp_" + name + "_service",
-				WouldDo: fmt.Sprintf("sudo cp %s/%s.service %s/", unitsSource, name, systemdDest),
+				WouldDo: fmt.Sprintf("sudo cp %s/%s.service %s/", cleanUnitsSource, name, systemdDest),
 				Apply: func(ctx context.Context) error {
-					src := filepath.Join(unitsSource, name+".service")
+					src := filepath.Join(cleanUnitsSource, name+".service")
 					dst := filepath.Join(systemdDest, name+".service")
-					return runShell(ctx, fmt.Sprintf("sudo cp %s %s", shellQuote(src), shellQuote(dst)))
+					return runCommand(ctx, "sudo", "cp", src, dst)
 				},
 			},
 			everythingStep{
 				Name:    "cp_" + name + "_timer",
-				WouldDo: fmt.Sprintf("sudo cp %s/%s.timer %s/", unitsSource, name, systemdDest),
+				WouldDo: fmt.Sprintf("sudo cp %s/%s.timer %s/", cleanUnitsSource, name, systemdDest),
 				Apply: func(ctx context.Context) error {
-					src := filepath.Join(unitsSource, name+".timer")
+					src := filepath.Join(cleanUnitsSource, name+".timer")
 					dst := filepath.Join(systemdDest, name+".timer")
-					return runShell(ctx, fmt.Sprintf("sudo cp %s %s", shellQuote(src), shellQuote(dst)))
+					return runCommand(ctx, "sudo", "cp", src, dst)
 				},
 			},
 		)
@@ -127,7 +132,7 @@ func buildBootstrapEverythingSteps(unitsSource string, watchdog, execute bool) [
 			Name:    "daemon_reload",
 			WouldDo: "sudo systemctl daemon-reload",
 			Apply: func(ctx context.Context) error {
-				return runShell(ctx, "sudo systemctl daemon-reload")
+				return runCommand(ctx, "sudo", "systemctl", "daemon-reload")
 			},
 		},
 		everythingStep{
@@ -195,41 +200,23 @@ func renderEverythingTable(results []everythingResult, execute bool, w io.Writer
 	}
 }
 
-func runShell(ctx context.Context, cmd string) error {
-	out, err := exec.CommandContext(ctx, "sh", "-c", cmd).CombinedOutput()
+func runCommand(ctx context.Context, name string, args ...string) error {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s: %w (output: %s)", cmd, err, string(out))
+		return fmt.Errorf("%s %s: %w (output: %s)", name, joinArgs(args), err, string(out))
 	}
 	return nil
 }
 
-func shellQuote(s string) string {
-	// Simple single-quote escape (consistent with internal/runner.shellQuote).
-	return "'" + replaceAll(s, "'", `'\''`) + "'"
-}
-
-func replaceAll(s, old, new string) string {
+func joinArgs(args []string) string {
 	out := ""
-	for {
-		i := indexOf(s, old)
-		if i < 0 {
-			return out + s
+	for i, arg := range args {
+		if i > 0 {
+			out += " "
 		}
-		out += s[:i] + new
-		s = s[i+len(old):]
+		out += arg
 	}
-}
-
-func indexOf(s, sub string) int {
-	if len(sub) == 0 {
-		return 0
-	}
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
+	return out
 }
 
 func execFlag(execute bool) string {

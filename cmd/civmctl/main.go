@@ -1,4 +1,4 @@
-// civmctl: zero-effort CLI to provision and maintain the ci-vm self-hosted
+// civmctl: zero-effort CLI to provision and maintain the civm self-hosted
 // GitHub Actions runner. See docs/specs/civmctl/PRD.md for design.
 package main
 
@@ -55,7 +55,7 @@ func main() {
 }
 
 func printHelp() {
-	fmt.Print(`civmctl — provisionamento zero-esforco da VM ci-vm
+	fmt.Print(`civmctl — provisionamento zero-esforco da VM civm
 
 USO
   civmctl <comando> [flags]
@@ -86,15 +86,15 @@ EXEMPLOS
   civmctl runner add --repo=owner/repo --token=$(gh api ...) --short=cmpx
   civmctl runner add --repo=owner/repo --token=... --short=cmpx --execute
   civmctl runner remove --short=cmpx --token=$(gh api -X POST .../remove-token) --execute
-  civmctl runner list --json | jq '.runners[] | select(.repo == "emersonbusson/ci-vm")'
+  civmctl runner list --json | jq '.runners[] | select(.repo == "emersonbusson/civm")'
   civmctl runner restart --short=civm-1 --execute
   civmctl runner upgrade --short=cmpx --new-version=2.335.0 --execute
   civmctl reverse-watchdog --max-age-hours=2
-  sudo civmctl bootstrap-everything --units-source=/opt/ci-vm/deploy/systemd --execute
+  sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute
   civmctl peer-status --repo=emersonbusson/compexhub
   civmctl health --json | jq '.exit'
   civmctl reverse-watchdog --max-age-hours=4
-  sudo civmctl bootstrap --install-units-from=/opt/ci-vm/deploy/systemd --execute
+  sudo civmctl bootstrap --install-units-from=/opt/civm/deploy/systemd --execute
   civmctl disk-watchdog --threshold-pct=80 --execute
   civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="Local VM CI"
 

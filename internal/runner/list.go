@@ -46,7 +46,9 @@ func List(ctx context.Context, opts ListOptions) ([]Status, error) {
 }
 
 // parseSystemctlList parses lines like:
-//   "  actions.runner.OWNER-REPO.NAME.service  loaded active running GitHub Actions Runner (...)"
+//
+//	"  actions.runner.OWNER-REPO.NAME.service  loaded active running GitHub Actions Runner (...)"
+//
 // Empty lines are skipped. Lines without 5+ fields are skipped.
 func parseSystemctlList(stdout string) []Status {
 	var out []Status
@@ -77,7 +79,7 @@ func parseSystemctlList(stdout string) []Status {
 }
 
 // parseRunnerUnit extracts repo and runner-name from a unit like
-// "actions.runner.emersonbusson-ci-vm.civm-1.service".
+// "actions.runner.emersonbusson-civm.civm-1.service".
 func parseRunnerUnit(unit string) (repo, name string) {
 	const prefix = "actions.runner."
 	const suffix = ".service"
@@ -85,14 +87,14 @@ func parseRunnerUnit(unit string) (repo, name string) {
 		return "", ""
 	}
 	rest := strings.TrimSuffix(strings.TrimPrefix(unit, prefix), suffix)
-	// rest = "emersonbusson-ci-vm.civm-1"
+	// rest = "emersonbusson-civm.civm-1"
 	idx := strings.LastIndex(rest, ".")
 	if idx == -1 {
 		return rest, ""
 	}
 	repoSegment := rest[:idx]
 	name = rest[idx+1:]
-	// repoSegment "emersonbusson-ci-vm" → "emersonbusson/ci-vm"
+	// repoSegment "emersonbusson-civm" → "emersonbusson/civm"
 	dashIdx := strings.Index(repoSegment, "-")
 	if dashIdx == -1 {
 		return repoSegment, name

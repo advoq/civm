@@ -178,6 +178,7 @@ func TestValidate_RequiredFields(t *testing.T) {
 	}{
 		{"no repo", func(o *Options) { o.Repo = "" }},
 		{"bad repo", func(o *Options) { o.Repo = "norepo" }},
+		{"bad workflow", func(o *Options) { o.WorkflowFile = "../ci.yml" }},
 		{"low limit", func(o *Options) { o.Limit = 1 }},
 		{"low min-blocked", func(o *Options) { o.MinBlocked = 0 }},
 	}
@@ -256,9 +257,9 @@ func TestRenderJSON_StructValid(t *testing.T) {
 func TestExitCode_AllStatuses(t *testing.T) {
 	t.Parallel()
 	cases := map[Status]int{
-		StatusOK:      0,
-		StatusBlocked: 1,
-		StatusUnknown: 2,
+		StatusOK:          0,
+		StatusBlocked:     1,
+		StatusUnknown:     2,
 		Status("garbage"): 2,
 	}
 	for s, want := range cases {

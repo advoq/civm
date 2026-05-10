@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/emersonbusson/civm/internal/civm"
 	"github.com/emersonbusson/civm/internal/diskwatchdog"
 )
 
@@ -15,11 +16,11 @@ func runDiskWatchdog(args []string) int {
 	fs := flag.NewFlagSet("disk-watchdog", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("path", "/", "filesystem a monitorar")
-	thresholdPct := fs.Int("threshold-pct", 80, "disparar cleanup se used%% > threshold")
-	workDir := fs.String("work-dir", "/home/runner/_work", "diretorio do runner")
-	tmpDir := fs.String("tmp-dir", "/tmp", "diretorio /tmp")
+	thresholdPct := fs.Int("threshold-pct", civm.DefaultWatchdogThresholdPct, "disparar cleanup se used%% > threshold")
+	workDir := fs.String("work-dir", civm.DefaultWorkDir, "diretorio do runner")
+	tmpDir := fs.String("tmp-dir", civm.DefaultTmpDir, "diretorio /tmp")
 	execute := fs.Bool("execute", false, "aplicar cleanup (default: dry-run)")
-	timeoutMin := fs.Int("timeout", 30, "timeout em minutos")
+	timeoutMin := fs.Int("timeout", civm.DefaultCleanupTimeoutMinutes, "timeout em minutos")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de disk-watchdog:", err)
 		return exitUsage

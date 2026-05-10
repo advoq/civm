@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"time"
 
+	"github.com/emersonbusson/civm/internal/civm"
 	"github.com/emersonbusson/civm/internal/runner"
 )
 
@@ -44,9 +45,9 @@ func runRunnerUpgrade(args []string) int {
 	dir := fs.String("dir", "", "diretorio do runner explicito (override do guess BaseDir/actions-runner-Short)")
 	newVersion := fs.String("new-version", "", "nova versao (ex: 2.335.0)")
 	baseDir := fs.String("base-dir", "", "base dir (default: $HOME)")
-	verifySec := fs.Int("verify-delay", 5, "segundos entre start e is-active check")
+	verifySec := fs.Int("verify-delay", civm.DefaultUpgradeVerifySeconds, "segundos entre start e is-active check")
 	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")
-	timeoutMin := fs.Int("timeout", 10, "timeout em minutos (download pode demorar)")
+	timeoutMin := fs.Int("timeout", civm.DefaultRunnerTimeoutMinutes, "timeout em minutos (download pode demorar)")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de runner upgrade:", err)
 		return exitUsage
@@ -86,9 +87,9 @@ func runRunnerRestart(args []string) int {
 	fs.SetOutput(io.Discard)
 	short := fs.String("short", "", "suffix curto (ex: cmpx, vitae, advoq)")
 	unit := fs.String("unit", "", "unit name explícito (sobreescreve --short)")
-	verifySec := fs.Int("verify-delay", 3, "segundos entre restart e is-active check")
+	verifySec := fs.Int("verify-delay", civm.DefaultRestartVerifySeconds, "segundos entre restart e is-active check")
 	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")
-	timeoutSec := fs.Int("timeout", 30, "timeout em segundos")
+	timeoutSec := fs.Int("timeout", civm.DefaultRestartTimeoutSeconds, "timeout em segundos")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de runner restart:", err)
 		return exitUsage
@@ -124,11 +125,11 @@ func runRunnerAdd(args []string) int {
 	token := fs.String("token", "", "registration token (efemero ~1h via gh api)")
 	short := fs.String("short", "", "suffix curto do diretorio (ex: cmpx, vitae)")
 	label := fs.String("label", "civm", "labels CSV")
-	runnerVersion := fs.String("runner-version", "2.334.0", "versao do actions/runner")
+	runnerVersion := fs.String("runner-version", civm.DefaultRunnerVersion, "versao do actions/runner")
 	baseDir := fs.String("base-dir", "", "base dir (default: \\$HOME do user atual)")
 	runAs := fs.String("run-as", "", "user que vai rodar o service (default: user atual)")
 	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")
-	timeoutMin := fs.Int("timeout", 10, "timeout total em minutos")
+	timeoutMin := fs.Int("timeout", civm.DefaultRunnerTimeoutMinutes, "timeout total em minutos")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de runner add:", err)
 		return exitUsage
@@ -206,7 +207,7 @@ func runRunnerRemove(args []string) int {
 	token := fs.String("token", "", "remove-token (gh api -X POST /repos/.../actions/runners/remove-token)")
 	baseDir := fs.String("base-dir", "", "base dir (default: $HOME)")
 	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")
-	timeoutMin := fs.Int("timeout", 5, "timeout em minutos")
+	timeoutMin := fs.Int("timeout", civm.DefaultRunnerRemoveTimeoutMinutes, "timeout em minutos")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de runner remove:", err)
 		return exitUsage

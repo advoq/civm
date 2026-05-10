@@ -235,8 +235,8 @@ func TestParseUpstream_AllTools(t *testing.T) {
 	t.Parallel()
 	got := parseUpstreamVersions(fakeUpstreamReadme)
 	wantContains := map[string][]string{
-		"go":             {"1.22.12", "1.25.9"},   // first and last
-		"node":           {"20.20.2", "24.14.1"},  // first and last
+		"go":             {"1.22.12", "1.25.9"},  // first and last
+		"node":           {"20.20.2", "24.14.1"}, // first and last
 		"python":         {"3.12.13", "3.10.20"},
 		"docker":         {"28.0.4"},
 		"docker-compose": {"2.38.2"},

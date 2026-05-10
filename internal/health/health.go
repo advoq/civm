@@ -1,5 +1,5 @@
 // Package health provides read-only system health collection for the
-// ci-vm runner host. Designed to be testable: all OS interactions are
+// civm runner host. Designed to be testable: all OS interactions are
 // behind small interfaces that tests can fake.
 package health
 
@@ -45,9 +45,9 @@ func (s Status) String() string {
 
 // Check is one row of the report.
 type Check struct {
-	Name    string
-	Detail  string
-	Status  Status
+	Name   string
+	Detail string
+	Status Status
 }
 
 // Report is the full health report.
@@ -69,16 +69,16 @@ func (r Report) Exit() int {
 // Collector knows how to gather health data. Production implementation
 // uses real OS calls; tests inject fakes.
 type Collector struct {
-	WorkDir         string
-	DiskWarnFreeGB  int64
-	DiskCritFreeGB  int64
-	MemWarnFreeMB   int64
-	MemCritFreeMB   int64
+	WorkDir        string
+	DiskWarnFreeGB int64
+	DiskCritFreeGB int64
+	MemWarnFreeMB  int64
+	MemCritFreeMB  int64
 
-	StatfsFn         func(path string) (totalBytes, freeBytes uint64, err error)
-	MeminfoFn        func() (memAvailableKB int64, err error)
-	RunnerUnitsFn    func(ctx context.Context) ([]string, error)
-	LastCleanupFn    func(ctx context.Context) (*time.Time, string, error)
+	StatfsFn      func(path string) (totalBytes, freeBytes uint64, err error)
+	MeminfoFn     func() (memAvailableKB int64, err error)
+	RunnerUnitsFn func(ctx context.Context) ([]string, error)
+	LastCleanupFn func(ctx context.Context) (*time.Time, string, error)
 }
 
 // NewDefaultCollector wires the production implementations.

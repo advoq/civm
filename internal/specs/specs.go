@@ -24,12 +24,12 @@ func (t ToolVersion) Preferred() string {
 
 // RunnerImageSpec is a snapshot of a GitHub Actions runner image.
 type RunnerImageSpec struct {
-	OSDistro    string
-	OSVersion   string
-	Kernel      string
-	UpstreamURL string
+	OSDistro     string
+	OSVersion    string
+	Kernel       string
+	UpstreamURL  string
 	ImageVersion string
-	Tools       []ToolVersion
+	Tools        []ToolVersion
 }
 
 // Ubuntu2404 returns the spec snapshot for ubuntu-latest as of 2026-05-10.

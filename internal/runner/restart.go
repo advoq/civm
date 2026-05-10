@@ -6,14 +6,16 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/emersonbusson/civm/internal/civm"
 )
 
 // RestartOptions controls a runner restart.
 type RestartOptions struct {
-	Short       string // suffix curto (ex: cmpx, vitae, advoq)
-	Unit        string // explicit systemd unit name (sobreescreve Short)
+	Short       string        // suffix curto (ex: cmpx, vitae, advoq)
+	Unit        string        // explicit systemd unit name (sobreescreve Short)
 	VerifyDelay time.Duration // sleep entre restart e is-active check (default 3s)
-	Execute     bool   // false = dry-run (apenas resolve unit name)
+	Execute     bool          // false = dry-run (apenas resolve unit name)
 	RunFn       func(ctx context.Context, name string, args ...string) ([]byte, error)
 	SleepFn     func(d time.Duration)
 }
@@ -21,7 +23,7 @@ type RestartOptions struct {
 // DefaultRestartOptions returns sane defaults.
 func DefaultRestartOptions() RestartOptions {
 	return RestartOptions{
-		VerifyDelay: 3 * time.Second,
+		VerifyDelay: time.Duration(civm.DefaultRestartVerifySeconds) * time.Second,
 		Execute:     false,
 		RunFn:       defaultRun,
 		SleepFn:     time.Sleep,
@@ -53,7 +55,7 @@ func Restart(ctx context.Context, opts RestartOptions) (RestartResult, error) {
 		opts.SleepFn = time.Sleep
 	}
 	if opts.VerifyDelay == 0 {
-		opts.VerifyDelay = 3 * time.Second
+		opts.VerifyDelay = time.Duration(civm.DefaultRestartVerifySeconds) * time.Second
 	}
 	r := RestartResult{}
 
@@ -97,6 +99,16 @@ func Restart(ctx context.Context, opts RestartOptions) (RestartResult, error) {
 func validateRestartOptions(opts RestartOptions) error {
 	if opts.Short == "" && opts.Unit == "" {
 		return fmt.Errorf("--short ou --unit obrigatorio")
+	}
+	if opts.Short != "" {
+		if err := civm.ValidateShort(opts.Short); err != nil {
+			return err
+		}
+	}
+	if opts.Unit != "" {
+		if err := civm.ValidateServiceUnit(opts.Unit); err != nil {
+			return err
+		}
 	}
 	return nil
 }

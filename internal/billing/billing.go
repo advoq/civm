@@ -9,8 +9,9 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"strings"
 	"time"
+
+	"github.com/emersonbusson/civm/internal/civm"
 )
 
 // Status classifies the GitHub Actions billing state.
@@ -50,11 +51,11 @@ type Run struct {
 
 // Options control how the heuristic runs.
 type Options struct {
-	Repo         string // "owner/repo"; passed via gh --repo
-	WorkflowFile string // ex: "ci.yml" (default)
-	Limit        int    // numero de runs a fetchar (default 5)
+	Repo         string        // "owner/repo"; passed via gh --repo
+	WorkflowFile string        // ex: "ci.yml" (default)
+	Limit        int           // numero de runs a fetchar (default 5)
 	Threshold    time.Duration // duracao maxima pra considerar "morto cedo" (default 10s)
-	MinBlocked   int    // min consecutive blocked runs pra StatusBlocked (default 3)
+	MinBlocked   int           // min consecutive blocked runs pra StatusBlocked (default 3)
 	RunFn        func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
@@ -131,11 +132,11 @@ func classifyRuns(runs []Run, opts Options) Status {
 }
 
 func validateOptions(opts Options) error {
-	if opts.Repo == "" {
-		return fmt.Errorf("--repo obrigatorio (formato: owner/repo)")
+	if err := civm.ValidateRepo(opts.Repo); err != nil {
+		return err
 	}
-	if !strings.Contains(opts.Repo, "/") {
-		return fmt.Errorf("--repo deve ter formato owner/repo, got %q", opts.Repo)
+	if err := civm.ValidateWorkflowFile(opts.WorkflowFile); err != nil {
+		return err
 	}
 	if opts.Limit < 3 {
 		return fmt.Errorf("--limit deve ser >= 3, got %d", opts.Limit)

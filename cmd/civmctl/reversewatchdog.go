@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/emersonbusson/civm/internal/civm"
 	"github.com/emersonbusson/civm/internal/reversewatchdog"
 )
 
@@ -15,7 +16,7 @@ func runReverseWatchdog(args []string) int {
 	fs := flag.NewFlagSet("reverse-watchdog", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	unit := fs.String("unit", "civmctl-disk-watchdog.service", "unit a monitorar")
-	maxAgeHours := fs.Int("max-age-hours", 2, "alerta se ultima execucao >MaxAge")
+	maxAgeHours := fs.Int("max-age-hours", civm.DefaultReverseMaxAgeHours, "alerta se ultima execucao >MaxAge")
 	timeoutSec := fs.Int("timeout", 10, "timeout em segundos")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de reverse-watchdog:", err)

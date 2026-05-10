@@ -9,22 +9,22 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/emersonbusson/civm/internal/billing"
+	"github.com/emersonbusson/civm/internal/civm"
 )
 
 // Status agrega informação operacional de um peer-repo.
 type Status struct {
-	Repo            string             `json:"repo"`
-	WorkflowFile    string             `json:"workflow_file"`
-	BillingStatus   string             `json:"billing_status"`   // ok/blocked/unknown
-	BillingExitCode int                `json:"billing_exit_code"`
-	RunnersTotal    int                `json:"runners_total"`
-	RunnersOnline   int                `json:"runners_online"`
-	RunnerNames     []string           `json:"runner_names"`
-	LastRun         *RunSummary        `json:"last_run,omitempty"`
+	Repo            string      `json:"repo"`
+	WorkflowFile    string      `json:"workflow_file"`
+	BillingStatus   string      `json:"billing_status"` // ok/blocked/unknown
+	BillingExitCode int         `json:"billing_exit_code"`
+	RunnersTotal    int         `json:"runners_total"`
+	RunnersOnline   int         `json:"runners_online"`
+	RunnerNames     []string    `json:"runner_names"`
+	LastRun         *RunSummary `json:"last_run,omitempty"`
 }
 
 // RunSummary é o último workflow run.
@@ -124,13 +124,10 @@ func Collect(ctx context.Context, opts Options) (Status, error) {
 }
 
 func validateOptions(opts Options) error {
-	if opts.Repo == "" {
-		return fmt.Errorf("--repo obrigatorio (formato: owner/repo)")
+	if err := civm.ValidateRepo(opts.Repo); err != nil {
+		return err
 	}
-	if !strings.Contains(opts.Repo, "/") {
-		return fmt.Errorf("--repo deve ter formato owner/repo, got %q", opts.Repo)
-	}
-	return nil
+	return civm.ValidateWorkflowFile(opts.WorkflowFile)
 }
 
 // Render writes a human-readable summary.
@@ -158,7 +155,7 @@ func (s Status) Render(w io.Writer) {
 	case s.BillingStatus == "blocked" && s.RunnersOnline == 0:
 		fmt.Fprintln(w, "ALERTA: billing-block + nenhum runner self-hosted online = workflow nao roda.")
 	case s.BillingStatus == "blocked" && s.RunnersOnline > 0:
-		fmt.Fprintln(w, "OK: billing-block detectado, mas vitae-ci self-hosted serve fallback.")
+		fmt.Fprintln(w, "OK: billing-block detectado, mas civm self-hosted serve fallback.")
 	case s.RunnersOnline == 0:
 		fmt.Fprintln(w, "WARN: nenhum runner self-hosted online; depende 100 percent de billing-hosted.")
 	default:

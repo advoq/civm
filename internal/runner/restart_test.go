@@ -26,7 +26,7 @@ func newRestartRunner(commands map[string][]byte, errs map[string]error) func(co
 	}
 }
 
-const fakeListOutput = `actions.runner.emersonbusson-ci-vm.civm-1.service        loaded active running GitHub Actions Runner
+const fakeListOutput = `actions.runner.emersonbusson-civm.civm-1.service        loaded active running GitHub Actions Runner
 actions.runner.emersonbusson-compexhub.civm-cmpx.service loaded active running GitHub Actions Runner
 actions.runner.emersonbusson-vitae.civm-vitae.service    loaded active running GitHub Actions Runner
 `
@@ -206,6 +206,12 @@ func TestValidateRestart_RequiresShortOrUnit(t *testing.T) {
 	}
 	if err := validateRestartOptions(RestartOptions{Unit: "x.service"}); err != nil {
 		t.Errorf("Unit presente nao deveria erro: %v", err)
+	}
+	if err := validateRestartOptions(RestartOptions{Short: "x/y"}); err == nil {
+		t.Errorf("esperava erro para short inseguro")
+	}
+	if err := validateRestartOptions(RestartOptions{Unit: "../x.service"}); err == nil {
+		t.Errorf("esperava erro para unit insegura")
 	}
 }
 

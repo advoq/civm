@@ -217,7 +217,12 @@ func TestValidateUpgrade_Required(t *testing.T) {
 	}{
 		{"no short/unit", func(o *UpgradeOptions) { o.Short = ""; o.Unit = "" }},
 		{"no new-version", func(o *UpgradeOptions) { o.NewVersion = "" }},
+		{"bad new-version", func(o *UpgradeOptions) { o.NewVersion = "2.335" }},
+		{"bad short", func(o *UpgradeOptions) { o.Short = "../x" }},
+		{"bad unit", func(o *UpgradeOptions) { o.Short = ""; o.Unit = "../x.service" }},
 		{"no base-dir", func(o *UpgradeOptions) { o.BaseDir = "" }},
+		{"base-dir not clean", func(o *UpgradeOptions) { o.BaseDir = "/home/emdev/.." }},
+		{"dir not clean", func(o *UpgradeOptions) { o.Dir = "/home/emdev/../runner" }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
