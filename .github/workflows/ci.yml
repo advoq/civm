@@ -171,13 +171,15 @@ jobs:
 
       - name: civmctl health on self
         run: |
-          civmctl health
-          # Exit 0 ou 1 (warn) ambos aceitos; exit 2 (critical) falha.
-          ec=$?
+          # Capturar exit antes de set -e matar (default bash -e).
+          ec=0
+          civmctl health --work-dir="$GITHUB_WORKSPACE" || ec=$?
+          echo "exit=$ec"
           if [ $ec -gt 1 ]; then
             echo "civmctl health critical (exit $ec)"
             exit 1
           fi
+          # warn (1) ou ok (0): aceita
 
       - name: Build civmctl from source on self-hosted (parity test)
         run: |
