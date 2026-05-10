@@ -33,21 +33,23 @@ type Step struct {
 
 // Options control the bootstrap run.
 type Options struct {
-	Execute  bool
-	Spec     specs.RunnerImageSpec
-	UID      int
-	OSReader func() (string, error)
-	RunFn    func(ctx context.Context, name string, args ...string) ([]byte, error)
+	Execute       bool
+	Spec          specs.RunnerImageSpec
+	UID           int
+	WatchdogTimer bool // habilita civmctl-disk-watchdog.timer alem do cleanup
+	OSReader      func() (string, error)
+	RunFn         func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
 // DefaultOptions returns sane production defaults.
 func DefaultOptions() Options {
 	return Options{
-		Execute:  false,
-		Spec:     specs.Ubuntu2404(),
-		UID:      defaultUID(),
-		OSReader: defaultOSReader,
-		RunFn:    defaultRun,
+		Execute:       false,
+		Spec:          specs.Ubuntu2404(),
+		UID:           defaultUID(),
+		WatchdogTimer: true, // default: install both timers
+		OSReader:      defaultOSReader,
+		RunFn:         defaultRun,
 	}
 }
 
@@ -195,21 +197,36 @@ func buildSteps(opts Options) []Step {
 			},
 		},
 		{
-			Name:        "install_systemd_timer",
-			Description: "Instala civmctl-cleanup.timer (cron diario)",
+			Name:        "install_systemd_timers",
+			Description: "Instala civmctl-cleanup.timer (cron diario) e civmctl-disk-watchdog.timer (hourly)",
 			Check: func(ctx context.Context) (bool, error) {
-				out, err := opts.RunFn(ctx, "systemctl", "is-enabled", "civmctl-cleanup.timer")
-				if err != nil {
-					return false, nil
+				timers := []string{"civmctl-cleanup.timer"}
+				if opts.WatchdogTimer {
+					timers = append(timers, "civmctl-disk-watchdog.timer")
 				}
-				return strings.Contains(string(out), "enabled"), nil
+				for _, t := range timers {
+					out, err := opts.RunFn(ctx, "systemctl", "is-enabled", t)
+					if err != nil || !strings.Contains(string(out), "enabled") {
+						return false, nil
+					}
+				}
+				return true, nil
 			},
 			Apply: func(ctx context.Context) error {
 				if _, err := opts.RunFn(ctx, "systemctl", "daemon-reload"); err != nil {
 					return err
 				}
-				_, err := opts.RunFn(ctx, "systemctl", "enable", "--now", "civmctl-cleanup.timer")
-				return err
+				timers := []string{"civmctl-cleanup.timer"}
+				if opts.WatchdogTimer {
+					timers = append(timers, "civmctl-disk-watchdog.timer")
+				}
+				for _, t := range timers {
+					// Idempotente: enable --now em timer ja-enabled e no-op
+					if _, err := opts.RunFn(ctx, "systemctl", "enable", "--now", t); err != nil {
+						return fmt.Errorf("enable %s: %w", t, err)
+					}
+				}
+				return nil
 			},
 		},
 	}

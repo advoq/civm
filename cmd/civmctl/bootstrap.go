@@ -16,6 +16,7 @@ func runBootstrap(args []string) int {
 	fs.SetOutput(io.Discard)
 	execute := fs.Bool("execute", false, "aplicar mudancas (default: dry-run)")
 	dryRun := fs.Bool("dry-run", false, "explicito dry-run (default ja e dry-run)")
+	watchdog := fs.Bool("watchdog", true, "instala civmctl-disk-watchdog.timer (hourly) alem do cleanup.timer")
 	timeoutMin := fs.Int("timeout", 30, "timeout em minutos")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de bootstrap:", err)
@@ -34,6 +35,7 @@ func runBootstrap(args []string) int {
 	defer cancel()
 	opts := bootstrap.DefaultOptions()
 	opts.Execute = *execute
+	opts.WatchdogTimer = *watchdog
 	results := bootstrap.Run(ctx, opts)
 	bootstrap.RenderTable(results, opts, os.Stdout)
 	for _, r := range results {

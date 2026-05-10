@@ -215,6 +215,72 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
+func TestRun_WatchdogTimer_OnlyCleanup(t *testing.T) {
+	t.Parallel()
+	// WatchdogTimer=false: só checa civmctl-cleanup.timer, ignora disk-watchdog
+	opts := okOpts(t)
+	opts.WatchdogTimer = false
+	opts.Execute = false
+	calls := []string{}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		key := name
+		if len(args) > 0 {
+			key = name + " " + strings.Join(args, " ")
+		}
+		calls = append(calls, key)
+		if strings.Contains(key, "is-enabled civmctl-cleanup.timer") {
+			return []byte("enabled\n"), nil
+		}
+		// outros: erro
+		return nil, errors.New("not installed")
+	}
+	results := Run(context.Background(), opts)
+	for _, r := range results {
+		if r.Name == "install_systemd_timers" {
+			if !r.AlreadyDone {
+				t.Errorf("WatchdogTimer=false + cleanup enabled: AlreadyDone esperado true")
+			}
+		}
+	}
+	for _, c := range calls {
+		if strings.Contains(c, "civmctl-disk-watchdog.timer") {
+			t.Errorf("WatchdogTimer=false NAO deveria chamar disk-watchdog.timer; got: %q", c)
+		}
+	}
+}
+
+func TestRun_WatchdogTimer_BothRequired(t *testing.T) {
+	t.Parallel()
+	// WatchdogTimer=true: ambos timers checados
+	opts := okOpts(t)
+	opts.WatchdogTimer = true
+	opts.Execute = false
+	calls := []string{}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		key := name
+		if len(args) > 0 {
+			key = name + " " + strings.Join(args, " ")
+		}
+		calls = append(calls, key)
+		// Cleanup enabled mas watchdog não
+		if strings.Contains(key, "is-enabled civmctl-cleanup.timer") {
+			return []byte("enabled\n"), nil
+		}
+		return nil, errors.New("not installed")
+	}
+	results := Run(context.Background(), opts)
+	for _, r := range results {
+		if r.Name == "install_systemd_timers" {
+			if r.AlreadyDone {
+				t.Errorf("watchdog ausente: AlreadyDone deveria ser false")
+			}
+			if !r.WouldDo {
+				t.Errorf("watchdog ausente em dry-run: WouldDo esperado true")
+			}
+		}
+	}
+}
+
 func TestRun_StepError_Propagates(t *testing.T) {
 	t.Parallel()
 	opts := okOpts(t)

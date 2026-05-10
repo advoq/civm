@@ -121,3 +121,30 @@ jobs:
               yarn typecheck || echo "typecheck issues (warning, not fatal)"
             fi
           fi
+
+      - name: Post Local VM CI status to commit (cross-peer reporter)
+        # Demonstra padrao civmctl ci local-report. Util quando branch
+        # protection esperar check name fixo "Local VM CI (vitae-ci fallback)"
+        # mas o job aggregator nao for o source-of-truth do check
+        # (ex.: peer adota gradualmente sem mexer em branch protection).
+        # Posta status independente do conclusion do job (if: always()).
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          state="success"
+          if [ "${{ job.status }}" != "success" ]; then
+            state="failure"
+          fi
+          if ! command -v civmctl >/dev/null 2>&1; then
+            echo "civmctl not installed; skipping cross-peer status report"
+            exit 0
+          fi
+          civmctl ci local-report \
+            --repo="${{ github.repository }}" \
+            --sha="${{ github.sha }}" \
+            --state="$state" \
+            --context="Local VM CI (vitae-ci fallback)" \
+            --description="advoq smoke + go vet multi-module + web typecheck on vitae-ci runner" \
+            --target-url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            || echo "ci local-report falhou (warning, gates ja decidiram)"

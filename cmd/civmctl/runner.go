@@ -14,7 +14,7 @@ import (
 
 func runRunner(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "uso: civmctl runner <add|list|remove> [flags]")
+		fmt.Fprintln(os.Stderr, "uso: civmctl runner <add|list|remove|restart> [flags]")
 		return exitUsage
 	}
 	sub := args[0]
@@ -26,10 +26,48 @@ func runRunner(args []string) int {
 		return runRunnerList(rest)
 	case "remove":
 		return runRunnerRemove(rest)
+	case "restart":
+		return runRunnerRestart(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "subcomando desconhecido: %s\n", sub)
 		return exitUsage
 	}
+}
+
+func runRunnerRestart(args []string) int {
+	fs := flag.NewFlagSet("runner restart", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	short := fs.String("short", "", "suffix curto (ex: cmpx, vitae, advoq)")
+	unit := fs.String("unit", "", "unit name explícito (sobreescreve --short)")
+	verifySec := fs.Int("verify-delay", 3, "segundos entre restart e is-active check")
+	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")
+	timeoutSec := fs.Int("timeout", 30, "timeout em segundos")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, "erro nos args de runner restart:", err)
+		return exitUsage
+	}
+	opts := runner.DefaultRestartOptions()
+	opts.Short = *short
+	opts.Unit = *unit
+	opts.VerifyDelay = time.Duration(*verifySec) * time.Second
+	opts.Execute = *execute
+	if *execute {
+		fmt.Fprintln(os.Stderr, "AVISO: --execute vai parar e reiniciar o runner systemd.")
+		fmt.Fprintln(os.Stderr, "Job em curso pode ser interrompido. Pressione Ctrl+C em 3s...")
+		time.Sleep(3 * time.Second)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutSec)*time.Second)
+	defer cancel()
+	r, err := runner.Restart(ctx, opts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "erro:", err)
+		return exitUsage
+	}
+	runner.RenderRestartTable(r, opts, os.Stdout)
+	if r.Err != nil {
+		return 1
+	}
+	return 0
 }
 
 func runRunnerAdd(args []string) int {

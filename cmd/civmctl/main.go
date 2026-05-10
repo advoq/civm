@@ -78,6 +78,7 @@ EXEMPLOS
   civmctl runner add --repo=owner/repo --token=... --short=cmpx --execute
   civmctl runner remove --short=cmpx --token=$(gh api -X POST .../remove-token) --execute
   civmctl runner list --json | jq '.runners[] | select(.repo == "emersonbusson/ci-vm")'
+  civmctl runner restart --short=vitae-ci-1 --execute
   civmctl disk-watchdog --threshold-pct=80 --execute
   civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="Local VM CI"
 
