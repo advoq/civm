@@ -132,3 +132,63 @@ jobs:
           /tmp/civmctl health || true
           # cleanup --dry-run em path vazio nao deve mutar nada
           /tmp/civmctl cleanup --dry-run --no-docker --no-apt --tmp-dir=/tmp --work-dir=/tmp > /dev/null
+
+  self-hosted-smoke:
+    name: Self-hosted runner smoke (vitae-ci)
+    runs-on: [self-hosted, vitae-ci]
+    needs: [build-civmctl]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show runner identity
+        run: |
+          echo "RUNNER_NAME=$RUNNER_NAME"
+          echo "RUNNER_OS=$RUNNER_OS"
+          echo "RUNNER_ARCH=$RUNNER_ARCH"
+          uname -a
+          cat /etc/os-release | head -3
+
+      - name: Tool parity check (vs ubuntu-latest)
+        run: |
+          echo "--- versions on self-hosted runner ---"
+          go version
+          node --version
+          docker --version
+          gh --version | head -1
+          git --version
+          jq --version
+          echo "--- /opt/hostedtoolcache writable? ---"
+          test -d /opt/hostedtoolcache && echo "exists" || echo "missing (setup-* will create)"
+
+      - name: civmctl installed system-wide
+        run: |
+          which civmctl
+          civmctl version-pins | head -5
+          civmctl drift --timeout=15 || true
+
+      - name: civmctl health on self
+        run: |
+          civmctl health
+          # Exit 0 ou 1 (warn) ambos aceitos; exit 2 (critical) falha.
+          ec=$?
+          if [ $ec -gt 1 ]; then
+            echo "civmctl health critical (exit $ec)"
+            exit 1
+          fi
+
+      - name: Build civmctl from source on self-hosted (parity test)
+        run: |
+          go build -o /tmp/civmctl-fresh ./cmd/civmctl
+          /tmp/civmctl-fresh version-pins | head -5
+          # Dois binarios devem mesma --help
+          diff <(/usr/local/bin/civmctl --help) <(/tmp/civmctl-fresh --help)
+          rm -f /tmp/civmctl-fresh
+
+      - name: Workspace cleanup (--ephemeral runner discards anyway)
+        if: always()
+        run: |
+          # Como o runner e --ephemeral, ele se auto-destroi apos cada job.
+          # Este step e informativo: confirma que workspace ficou em path
+          # esperado para next job clonar fresh.
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          ls -la "$GITHUB_WORKSPACE" | head -5
