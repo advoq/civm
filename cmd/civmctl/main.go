@@ -31,6 +31,10 @@ func main() {
 		os.Exit(runDrift(args))
 	case "billing-status":
 		os.Exit(runBilling(args))
+	case "disk-watchdog":
+		os.Exit(runDiskWatchdog(args))
+	case "ci":
+		os.Exit(runCI(args))
 	case "-h", "--help", "help":
 		printHelp()
 		os.Exit(0)
@@ -58,6 +62,8 @@ COMANDOS
   runner          Gerencia runners GitHub Actions self-hosted
   drift           Detecta versoes pinadas vs upstream actions/runner-images
   billing-status  Detecta billing-block heuristico (3 runs failure <10s)
+  disk-watchdog   Trigger cleanup agressivo se disk >threshold (default 80%%)
+  ci              Subcomandos CI cross-peer (local-report)
   help            Esta mensagem
 
 EXEMPLOS
@@ -71,6 +77,9 @@ EXEMPLOS
   civmctl runner add --repo=owner/repo --token=$(gh api ...) --short=cmpx
   civmctl runner add --repo=owner/repo --token=... --short=cmpx --execute
   civmctl runner remove --short=cmpx --token=$(gh api -X POST .../remove-token) --execute
+  civmctl runner list --json | jq '.runners[] | select(.repo == "emersonbusson/ci-vm")'
+  civmctl disk-watchdog --threshold-pct=80 --execute
+  civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="Local VM CI"
 
 DOCUMENTACAO
   PRD/SPEC: docs/specs/civmctl/

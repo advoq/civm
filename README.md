@@ -57,6 +57,9 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl runner remove` | desregistra runner (svc.sh stop + uninstall + config.sh remove + rm -rf dir) |
 | `civmctl drift` | compara pins locais vs upstream actions/runner-images (HTTP fetch) |
 | `civmctl billing-status` | detector heuristico de billing-block (zero-PAT, GITHUB_TOKEN suficiente) |
+| `civmctl runner list` | lista runners systemd na VM (parsed; suporta `--json`) |
+| `civmctl disk-watchdog` | dispara cleanup agressivo se disk >threshold (default 80%) |
+| `civmctl ci local-report` | posta commit status via gh api (cross-peer manual reporter) |
 
 ### Adicionar runner pra novo peer (1 comando)
 

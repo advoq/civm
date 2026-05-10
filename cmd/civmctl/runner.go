@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/user"
 	"time"
 
@@ -86,11 +85,30 @@ func runRunnerAdd(args []string) int {
 }
 
 func runRunnerList(args []string) int {
-	cmd := exec.Command("systemctl", "list-units", "--type=service", "--no-pager", "actions.runner.*")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "nenhum runner ativo (ou systemctl indisponivel)")
+	fs := flag.NewFlagSet("runner list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	jsonOut := fs.Bool("json", false, "saida JSON estruturada")
+	timeoutSec := fs.Int("timeout", 5, "timeout em segundos")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, "erro nos args de runner list:", err)
+		return exitUsage
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutSec)*time.Second)
+	defer cancel()
+	items, err := runner.List(ctx, runner.DefaultListOptions())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "erro:", err)
+		return 1
+	}
+	if *jsonOut {
+		if err := runner.RenderListJSON(items, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "erro ao gerar JSON:", err)
+			return 2
+		}
+	} else {
+		runner.RenderListTable(items, os.Stdout)
+	}
+	if len(items) == 0 {
 		return 1
 	}
 	return 0

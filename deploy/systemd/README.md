@@ -1,9 +1,17 @@
 # systemd units para civmctl
 
-Cron diário de cleanup automático na VM ci-vm. Instalação manual após
-`civmctl bootstrap` ter colocado o binário em `/usr/local/bin/civmctl`.
+2 timers systemd disponíveis:
+- `civmctl-cleanup.timer` — diário 04:00 UTC, full cleanup (Docker, /tmp,
+  _work, apt). Idempotente.
+- `civmctl-disk-watchdog.timer` — hourly, dispara cleanup agressivo se
+  disk >80%. Reativo a picos de uso entre execuções diárias.
+
+Instalação manual após `civmctl bootstrap` ter colocado o binário em
+`/usr/local/bin/civmctl`.
 
 ## Instalação
+
+### Cleanup diário
 
 ```bash
 sudo cp civmctl-cleanup.service /etc/systemd/system/
@@ -11,6 +19,19 @@ sudo cp civmctl-cleanup.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now civmctl-cleanup.timer
 ```
+
+### Disk watchdog hourly (opcional, recomendado para SSD <128GB)
+
+```bash
+sudo cp civmctl-disk-watchdog.service /etc/systemd/system/
+sudo cp civmctl-disk-watchdog.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now civmctl-disk-watchdog.timer
+```
+
+Por hora, checa disk %; se >80%, roda `civmctl disk-watchdog --execute`
+que delega para `civmctl cleanup --execute` com thresholds agressivos
+(TmpThreshold=24h, WorkThreshold=7d em vez de 7d/14d default).
 
 (`civmctl bootstrap --execute` faz isso automaticamente quando os arquivos
 estão em `/etc/systemd/system/`. O step `install_systemd_timer` só roda
