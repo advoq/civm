@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate templates and runbooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: YAML lint templates
+        run: |
+          # Templates *.yml.template usam syntax YAML valido por convencao.
+          for f in templates/*.yml.template; do
+            python3 -c "import yaml; yaml.safe_load(open('$f'))" || exit 1
+          done
+          # Workflow do proprio ci-vm
+          python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"
+
+      - name: Markdown links basico
+        run: |
+          # Confere que arquivos referenciados nos READMEs existem.
+          # Heuristica simples: pega [texto](path) e checa que path existe
+          # (ignora URLs externas).
+          missing=0
+          while IFS= read -r line; do
+            file=$(printf '%s' "$line" | sed -E 's/.*\(([^)]+)\).*/\1/')
+            case "$file" in
+              http*|/*) continue ;;
+            esac
+            base=$(printf '%s' "$line" | cut -d: -f1)
+            dir=$(dirname "$base")
+            target="$dir/$file"
+            if [ ! -e "$target" ]; then
+              echo "broken: $base -> $file"
+              missing=$((missing + 1))
+            fi
+          done < <(grep -rn '\](\.' README.md runbooks/ disciplines/ rules/ templates/ 2>/dev/null || true)
+          if [ "$missing" -gt 0 ]; then
+            echo "Found $missing broken local links"
+            exit 1
+          fi
+          echo "All local links OK"
+
+      - name: Communication style template integrity
+        run: |
+          # Garante que o snippet entre marcadores BEGIN/END existe e e parsavel.
+          if ! grep -q "<!-- COMMUNICATION-STYLE:BEGIN -->" templates/COMMUNICATION-STYLE.md; then
+            echo "BEGIN marker missing"
+            exit 1
+          fi
+          if ! grep -q "<!-- COMMUNICATION-STYLE:END -->" templates/COMMUNICATION-STYLE.md; then
+            echo "END marker missing"
+            exit 1
+          fi
+          echo "Markers OK"
