@@ -30,6 +30,18 @@ civm **NÃO** permite autonomamente:
   do dev (destinado à VM dedicada; agente sandboxed não tem SSH)
 - ❌ Persistir secret em qualquer arquivo (mesmo `.env.example`)
 
+## Governança de PR sem issue
+
+PR sem issue só é válido quando a seção `## Issue` traz marcador
+explícito `Sem issue`, `No issue` ou `N/A`. Usar essa exceção apenas para
+trabalho operacional, CI ou documentação que não merece rastreio próprio.
+Feature, bug, refactor não-trivial e mudança com rollback real continuam
+exigindo issue linkada por `Closes`, `Fixes` ou `Resolves`.
+
+Se a metadata do PR divergir do estado real (labels, assignee, issue ou
+marcador sem issue), corrigir o PR no GitHub e aguardar checks de
+governança/CI antes do merge.
+
 ## Cleanup safety
 
 `civmctl cleanup --execute` e `civmctl disk-watchdog --execute` são
@@ -62,6 +74,24 @@ Quando humano pede execução autônoma ("continue", "faça tudo", "auto"):
 5. **Pause antes de `gh repo create`** — sempre humano confirma.
 
 Sem resposta no ponto de pausa, **não continuar** — aguardar.
+
+## Verificação pós-release
+
+Após publicar tag/release, revalidar sem mutação:
+
+```bash
+gh release view v1.0.0
+git status --short --branch
+gh run list --workflow=ci.yml --branch=main --limit 5
+ssh gha-ubuntu-2404 'civmctl health'
+ssh gha-ubuntu-2404 'civmctl doctor --json'
+ssh gha-ubuntu-2404 'civmctl idle-check'
+```
+
+Warning `LAST cleanup timer nunca rodou` é aceitável até o primeiro
+disparo real do timer diário. Se continuar após a próxima janela diária
+esperada, pausar qualquer conclusão de release e tratar como ação
+operacional na VM.
 
 ## DEFERRED (features pensadas, ainda não implementadas)
 

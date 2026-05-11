@@ -367,3 +367,36 @@ brutos aqui.
   - Aguardar CI remoto do commit de formalizacao depois do push.
 - **Next step:** publicar release `v1.0.0` e fechar issue `#3` se o CI remoto
   do commit de formalizacao passar.
+
+## 2026-05-10 — post-v1-pr4-polish
+
+- **Branch:** chore/pr-guard-allow-no-issue
+- **Scope:** polimento pos-v1 dentro do `civm`, sem mudar comportamento do
+  `civmctl`.
+- **Actions:**
+  - Sync documental da regra de PR sem issue em `README.md` e `CODEX.md`,
+    mantendo `Sem issue`, `No issue` e `N/A` como marcadores explicitos.
+  - Adicionada verificacao pos-release read-only com `gh release view`,
+    `git status`, `gh run list`, `civmctl health`, `doctor` e `idle-check`.
+  - Documentado que warning `LAST cleanup timer nunca rodou` e aceitavel
+    ate o primeiro disparo real do timer diario; depois vira acao operacional.
+  - `runbooks/MIGRATION-VITAE-CI-TO-CIVM.md` marcado como
+    historico/superseded porque a migracao principal ja foi concluida.
+- **Local validations:**
+  - `git diff --check` passou.
+  - `go vet ./...` passou.
+  - `go build ./...` passou.
+  - `go test -race -count=1 ./...` passou.
+  - `go test -count=1 -cover ./internal/...` passou; todos os pacotes
+    `internal/**` ficaram acima de 80%.
+- **VM read-only:**
+  - `civmctl health` retornou exit 1 apenas por warning `LAST`; DISK, MEM,
+    RUNNERS e timers OK.
+  - `civmctl doctor --json` retornou exit 1 por warning `LAST` e
+    `civm-vitae` ocupado; runners canonicos online.
+  - `civmctl idle-check` retornou busy porque havia job `vitae` em curso
+    no runner `civm-vitae`.
+- **Open items:**
+  - Push da branch, aguardar CI do PR `#4`, corrigir metadata do PR e mergear
+    apenas se os checks ficarem verdes.
+  - Revalidar `idle-check` antes do merge se a VM liberar.

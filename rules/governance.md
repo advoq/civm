@@ -29,7 +29,7 @@ paths:
 - Seções obrigatórias: `## Resumo`, `## Commits`, `## Issue`, `## Responsavel`, `## Labels`, `## Validacao`, `## Rollback trigger`.
 - `## Commits` lista cada commit em tabela e usa `<details>` clicável para explicar contexto, impacto, arquivos principais e validação.
 - O guard bloqueia `## Commits` vazio ou sem tabela, hash de commit e `<details>`.
-- Linkar issue com keyword do GitHub: `Closes #NNN`, `Fixes #NNN` ou `Resolves #NNN`.
+- Linkar issue com keyword do GitHub: `Closes #NNN`, `Fixes #NNN` ou `Resolves #NNN`. Quando o PR de fato não tem issue (operacional, CI, docs sem rastreio formal), usar o marcador explícito `Sem issue`, `No issue` ou `N/A` na seção. Pior do que ausência é referência falsa.
 - Aplicar pelo menos uma label `type:*` e uma label `area:*`.
 - Atribuir o PR e a issue linkada ao responsável pela entrega.
 - PR e issue linkada devem compartilhar pelo menos um assignee. Quem fecha o problema assina a entrega.
@@ -47,8 +47,11 @@ do PR e nao pode expor secrets a fork.
 
 ## Issues
 
-- Criar issue antes ou junto do PR quando a implementação ainda não tem issue.
+- Criar issue antes ou junto do PR quando o trabalho merece tracking (feature, bug, refactor não-trivial).
 - Usar o link no PR (`Closes #NNN`, `Fixes #NNN`, `Resolves #NNN`) para manter
   rastreabilidade e fechamento automático correto.
+- Para PRs puramente operacionais (CI, infra, docs sem rastreio formal), o
+  marcador explícito `Sem issue`, `No issue` ou `N/A` é alternativa válida.
+  Não force criação de issue artificial só para satisfazer o guard.
 - Issues também devem ser compreensíveis em PT-BR, receber labels coerentes e
   estar atribuídas a quem assume a entrega.
