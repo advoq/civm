@@ -182,6 +182,12 @@ civmctl health
 civmctl doctor --json
 ```
 
+`health`/`doctor` podem retornar warning `LAST cleanup timer nunca rodou`
+até o primeiro disparo real do `civmctl-cleanup.timer` (04:00 UTC). Isso
+é aceitável apenas até passar a próxima janela diária esperada; depois
+vira ação operacional para checar `systemctl list-timers`, journal da
+unit `civmctl-cleanup.service` e o estado do timer na VM.
+
 Steps idempotentes do bootstrap (todos check-then-apply):
 
 | Step | O que faz | Skip se |

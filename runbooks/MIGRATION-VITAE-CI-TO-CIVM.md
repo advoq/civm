@@ -1,5 +1,10 @@
 # Runbook — Migração label `vitae-ci` → `civm` (executar manualmente)
 
+> **Status:** histórico/superseded desde 2026-05-10. A migração principal
+> `vitae-ci` → `civm` já foi concluída; manter este arquivo apenas para
+> auditoria, contexto temporal e rollback histórico. Para o estado
+> operacional atual, usar `README.md` e `runbooks/MULTI-PROJECT-RUNNER.md`.
+>
 > **Por que esse runbook existe:** sessão 2026-05-10 refatorou todo o
 > código do ci-vm pra usar label `civm` (commit `f30387e`). 5 ações
 > destrutivas restantes precisam de autorização nominal explícita por

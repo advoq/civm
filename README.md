@@ -174,6 +174,36 @@ Tags semver opcionais (v1.0.0, v1.1.0). Peer repos podem travar em
 versão se quiserem (ex.: `git checkout v1.2.0` antes de copiar
 templates).
 
+## Governança de PR
+
+PRs devem linkar issue com `Closes #NNN`, `Fixes #NNN` ou
+`Resolves #NNN` quando o trabalho merece rastreio. Para PR puramente
+operacional, CI ou documentação sem issue real, usar marcador explícito
+na seção `## Issue`: `Sem issue`, `No issue` ou `N/A`. Não criar issue
+artificial nem referência falsa só para satisfazer o template.
+
+Toda PR também precisa de pelo menos uma label `type:*`, uma label
+`area:*` e responsável coerente com a issue quando houver issue linkada.
+
+## Verificação pós-release
+
+Depois de publicar tag/release, confirmar o estado sem executar mutação:
+
+```bash
+gh release view v1.0.0
+git status --short --branch
+gh run list --workflow=ci.yml --branch=main --limit 5
+ssh gha-ubuntu-2404 'civmctl health'
+ssh gha-ubuntu-2404 'civmctl doctor --json'
+ssh gha-ubuntu-2404 'civmctl idle-check'
+```
+
+O warning `LAST cleanup timer nunca rodou` em `health`/`doctor` é
+aceitável até o primeiro disparo real do `civmctl-cleanup.timer`
+(janela diária 04:00 UTC). Se persistir após a próxima janela diária
+esperada, vira ação operacional: verificar timer, journal e execução do
+cleanup na VM.
+
 ## Histórico
 
 - **2026-05-10** — bootstrap inicial. Estrutura: 4 runbooks + 3
