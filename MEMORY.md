@@ -582,3 +582,33 @@ brutos aqui.
   - Publicar branch/PR, aguardar CI e merge humano.
   - Apos merge, o workflow `Release` deve criar `v1.1.2`; se abrir um
     novo PR de release para este fix, tratar como ciclo normal.
+
+## 2026-05-11 — release-title-componentless-config
+
+- **Branch:** fix/release-please-default-title-pattern
+- **Scope:** segundo reparo do parsing do titulo do release-please apos
+  o merge do PR `#17`.
+- **Actions:**
+  - Confirmado PR `#17` mergeado em `2026-05-11T18:33:37Z` com merge
+    commit `55925806a4b56ab52ccb77861e88f956f349f7be`.
+  - `main` local atualizado por fast-forward para `5592580`.
+  - Branch local `fix/release-please-component-title` apagada; a branch
+    remota ja tinha sido apagada pelo GitHub apos o merge.
+  - Workflow `Release` do push de `main` terminou `success`, mas ainda
+    abortou sem criar `v1.1.2`, com `PR component: undefined`.
+  - Auditoria do codigo `release-please@17.3.0` mostrou que o abort nao
+    vinha do parsing do titulo, mas da comparacao entre componente da
+    branch e componente configurado em `package-name`.
+  - Em PR agrupado, a branch gerada e `release-please--branches--main`,
+    sem componente; com `package-name: civm`, o release-please espera
+    componente na branch e aborta antes de criar a tag.
+  - Ajustado `release-please-config.json` para remover `package-name` e
+    manter `civm` apenas como texto cosmetico nos patterns de titulo:
+    `chore${scope}: release civm v${version}` e
+    `chore: release civm v${version}`.
+  - Sincronizados `README.md`, `AGENTS.md`, `CODEX.md` e
+    `runbooks/RELEASE-AUTOMATION.md` com a regra componentless.
+- **Open items:**
+  - Publicar branch/PR, aguardar CI e merge humano.
+  - Apos merge, revalidar que `v1.1.2` foi criado e que o PR `#16`
+    mudou de `autorelease: pending` para `autorelease: tagged`.
