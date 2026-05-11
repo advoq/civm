@@ -97,6 +97,27 @@ func TestRun_VerifyOSFails(t *testing.T) {
 	}
 }
 
+func TestRun_ExecuteStopsAfterPreflightError(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.Execute = true
+	opts.OSReader = func() (string, error) {
+		return "ID=debian\nVERSION_ID=\"12\"\n", nil
+	}
+	calls := 0
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		calls++
+		return nil, errors.New("nao deveria executar comandos apos preflight")
+	}
+	results := Run(context.Background(), opts)
+	if len(results) != 1 || results[0].Name != "verify_os" || results[0].Err == nil {
+		t.Fatalf("results = %+v, want only verify_os error", results)
+	}
+	if calls != 0 {
+		t.Fatalf("RunFn calls = %d, want 0", calls)
+	}
+}
+
 func TestRun_NotRoot(t *testing.T) {
 	t.Parallel()
 	opts := okOpts(t)
@@ -113,6 +134,50 @@ func TestRun_NotRoot(t *testing.T) {
 	}
 	if !foundUIDError {
 		t.Errorf("UID 1000 deveria gerar erro em verify_uid")
+	}
+}
+
+func TestInstallGoTarball_VerifiesSHA256BeforeExtract(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.SHA256FileFn = func(string) (string, error) {
+		return "bad-sha", nil
+	}
+	calls := []string{}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	err := installGoTarball(context.Background(), opts, "1.26.3")
+	if err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("err = %v, want sha256 mismatch", err)
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "tar ") || strings.HasPrefix(call, "rm -rf /usr/local/go") {
+			t.Fatalf("mutating command ran before checksum success: %v", calls)
+		}
+	}
+}
+
+func TestInstallNodeViaNodeSource_VerifiesSHA256BeforeBash(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.SHA256FileFn = func(string) (string, error) {
+		return "bad-sha", nil
+	}
+	calls := []string{}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	err := installNodeViaNodeSource(context.Background(), opts, "24.15.0")
+	if err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("err = %v, want sha256 mismatch", err)
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "bash ") || strings.HasPrefix(call, "apt-get install") {
+			t.Fatalf("command ran before checksum success: %v", calls)
+		}
 	}
 }
 

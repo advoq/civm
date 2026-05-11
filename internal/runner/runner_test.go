@@ -154,6 +154,38 @@ func TestAdd_StopsOnError(t *testing.T) {
 	}
 }
 
+func TestAdd_VerifiesRunnerSHA256BeforeExtract(t *testing.T) {
+	t.Parallel()
+	o := validOpts()
+	o.Execute = true
+	o.SHA256FileFn = func(string) (string, error) {
+		return "bad-sha", nil
+	}
+	calls := []string{}
+	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	results, err := Add(context.Background(), o)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	var gotErr bool
+	for _, r := range results {
+		if r.Name == "verify_runner_sha256" && r.Err != nil {
+			gotErr = true
+		}
+	}
+	if !gotErr {
+		t.Fatalf("verify_runner_sha256 should fail, results=%+v", results)
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "tar ") || strings.Contains(call, "config.sh") {
+			t.Fatalf("runner setup continued after checksum failure: %v", calls)
+		}
+	}
+}
+
 func TestAdd_TokenNotInDryRunOutput(t *testing.T) {
 	t.Parallel()
 	o := validOpts()
@@ -330,6 +362,30 @@ func TestRemove_ConfigRemoveErrorIsReported(t *testing.T) {
 	}
 	if !gotConfigErr {
 		t.Errorf("config_remove deveria reportar erro")
+	}
+}
+
+func TestRemove_StopErrorBlocksDestructiveSteps(t *testing.T) {
+	t.Parallel()
+	o := validRemoveOpts()
+	o.Execute = true
+	calls := []string{}
+	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		key := name + " " + strings.Join(args, " ")
+		calls = append(calls, key)
+		if strings.HasSuffix(name, "/svc.sh") && len(args) > 0 && args[0] == "stop" {
+			return nil, errors.New("stop falhou")
+		}
+		return nil, nil
+	}
+	results, _ := Remove(context.Background(), o)
+	if len(results) != 1 || results[0].Name != "stop_service" || results[0].Err == nil {
+		t.Fatalf("results = %+v, want stop_service error only", results)
+	}
+	for _, call := range calls {
+		if strings.Contains(call, "config.sh") || strings.HasPrefix(call, "rm -rf") {
+			t.Fatalf("destructive step ran after stop failure: %v", calls)
+		}
 	}
 }
 

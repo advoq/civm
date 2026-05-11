@@ -57,6 +57,10 @@ func TestBootstrapEverythingHelpers(t *testing.T) {
 	if got := joinArgs([]string{"cp", "a", "b"}); got != "cp a b" {
 		t.Fatalf("joinArgs = %q", got)
 	}
+	steps := buildBootstrapEverythingSteps("/opt/civm/deploy/systemd", true, true, false)
+	if len(steps) == 0 || !bytes.Contains([]byte(steps[0].WouldDo), []byte("/usr/local/bin/civmctl")) {
+		t.Fatalf("bootstrap-everything deve validar /usr/local/bin/civmctl, step=%+v", steps)
+	}
 }
 
 func TestSplitCSV(t *testing.T) {
