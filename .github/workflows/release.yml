@@ -23,6 +23,13 @@ jobs:
   release-please:
     name: release-please
     runs-on: [self-hosted, civm]
+    env:
+      # GitHub vai forçar Node.js 24 default em 2026-06-02; a action
+      # release-please-action@v4 ainda declara Node.js 20. Esse flag
+      # antecipa o runtime moderno e elimina o warning de deprecation
+      # sem aguardar release nova da action.
+      # Doc: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - name: Run release-please
         uses: googleapis/release-please-action@v4
