@@ -190,6 +190,8 @@ com título `chore: release civm v<X.Y.Z>`,
 Mergear esse PR cria a tag e publica o release. Detalhes operacionais em
 `runbooks/RELEASE-AUTOMATION.md` (config, token PAT vs GITHUB_TOKEN,
 override `release-as`, rollback).
+Internamente o template do título mantém `${component}`; trocar por `civm`
+literal quebra o parsing do PR mergeado e impede a criação da tag.
 
 Peer repos podem travar em versão se quiserem (ex.: `git checkout v1.2.0`
 antes de copiar templates).

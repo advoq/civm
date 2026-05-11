@@ -25,6 +25,10 @@ O repo usa manifest mode com `separate-pull-requests=false`; por isso o
 titulo do PR agrupado e controlado por `group-pull-request-title-pattern`.
 `pull-request-title-pattern` fica igual para manter parsing consistente de
 PRs individuais caso a estrategia mude no futuro.
+Os dois patterns devem usar `${component}` e nao `civm` literal. O titulo
+renderizado continua `chore: release civm v<X.Y.Z>`, mas o placeholder
+permite ao release-please associar o PR mergeado ao componente `civm` e
+criar a tag.
 
 ## Anchor de bootstrap (`last-release-sha`)
 
@@ -81,7 +85,7 @@ Mitigacoes (em ordem de preferencia):
 
 ```bash
 # Ver PRs de release pendentes
-gh pr list --repo emersonbusson/civm --search "in:title release-please"
+gh pr list --repo emersonbusson/civm --label "autorelease: pending"
 
 # Inspecionar o PR de release antes do merge
 gh pr view <num> --repo emersonbusson/civm
