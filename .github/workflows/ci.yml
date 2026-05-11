@@ -207,9 +207,14 @@ jobs:
       - name: Build civmctl from source on self-hosted (parity test)
         run: |
           go build -o /tmp/civmctl-fresh ./cmd/civmctl
+          # Smoke: fresh build responde --help sem erro e expõe version-pins.
+          # Diff contra /usr/local/bin/civmctl --help foi removido em
+          # 2026-05-11: qualquer PR que adicione/remova subcomando
+          # divergia antes de o binário instalado ser republicado
+          # pós-merge, quebrando o gate. O regression check de
+          # comandos/flags fica coberto por go test em build-civmctl.
+          /tmp/civmctl-fresh --help > /dev/null
           /tmp/civmctl-fresh version-pins | head -5
-          # Dois binarios devem mesma --help
-          diff <(/usr/local/bin/civmctl --help) <(/tmp/civmctl-fresh --help)
           rm -f /tmp/civmctl-fresh
 
       - name: Workspace cleanup (persistent runner hygiene)
