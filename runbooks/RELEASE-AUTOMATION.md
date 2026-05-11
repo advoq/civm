@@ -32,6 +32,9 @@ Os dois patterns usam `civm` como texto cosmetico no titulo, nao como
 `package-name: civm`, o release-please espera componente na branch e
 aborta com `PR component: undefined does not match configured component:
 civm` antes de criar a tag.
+Esse contrato fica coberto por `TestReleasePleaseGroupedModeIsComponentless`
+e `TestReleasePleaseTitlePatternsParseMergedGroupedPR` em
+`internal/specs/release_please_config_test.go`.
 
 ## Anchor de bootstrap (`last-release-sha`)
 
