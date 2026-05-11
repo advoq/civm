@@ -11,20 +11,6 @@ import (
 	"time"
 )
 
-type fakeEntry struct {
-	name  string
-	mtime time.Time
-	isDir bool
-	size  int64
-}
-
-func (f fakeEntry) Name() string       { return f.name }
-func (f fakeEntry) Size() int64        { return f.size }
-func (f fakeEntry) Mode() fs.FileMode  { return 0644 }
-func (f fakeEntry) ModTime() time.Time { return f.mtime }
-func (f fakeEntry) IsDir() bool        { return f.isDir }
-func (f fakeEntry) Sys() any           { return nil }
-
 func mkFS(now time.Time) fstest.MapFS {
 	old := now.Add(-30 * 24 * time.Hour)
 	recent := now.Add(-1 * time.Hour)

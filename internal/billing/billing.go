@@ -151,7 +151,7 @@ func validateOptions(opts Options) error {
 func Render(status Status, runs []Run, opts Options, w io.Writer) {
 	fmt.Fprintf(w, "Repo: %s | Workflow: %s | Status: %s (exit %d)\n",
 		opts.Repo, opts.WorkflowFile, status, status.ExitCode())
-	fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w)
 	switch status {
 	case StatusOK:
 		fmt.Fprintln(w, "[billing] ok — runs recentes executando normalmente")

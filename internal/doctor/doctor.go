@@ -18,7 +18,7 @@ var DefaultRepos = []string{
 	"emersonbusson/civm",
 	"emersonbusson/compexhub",
 	"emersonbusson/vitae",
-	"emersonbusson/advoq",
+	"advoq/advoq",
 }
 
 type Severity string

@@ -152,26 +152,24 @@ func (r Result) ExitCode() int {
 
 // Render writes a human-readable report.
 func (r Result) Render(w io.Writer) {
-	fmt.Fprintf(w, "Disk watchdog: %s\n", r.Path)
-	fmt.Fprintf(w, "Used: %d GB / %d GB (%d%%) | Threshold: %d%%\n",
+	_, _ = fmt.Fprintf(w, "Disk watchdog: %s\n", r.Path)
+	_, _ = fmt.Fprintf(w, "Used: %d GB / %d GB (%d%%) | Threshold: %d%%\n",
 		r.UsedGB, r.TotalGB, r.UsedPct, r.ThresholdPct)
-	fmt.Fprintf(w, "Decision: %s\n", r.Decision)
+	_, _ = fmt.Fprintf(w, "Decision: %s\n", r.Decision)
 	if r.Err != nil {
-		fmt.Fprintf(w, "Error: %v\n", r.Err)
+		_, _ = fmt.Fprintf(w, "Error: %v\n", r.Err)
 	}
 	if len(r.CleanupActions) > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "Aggressive cleanup actions (TmpThreshold=24h, WorkThreshold=7d):")
+		_, _ = fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w, "Aggressive cleanup actions (TmpThreshold=24h, WorkThreshold=7d):")
 		for _, a := range r.CleanupActions {
-			status := "ok"
+			status := "(dry-run)"
 			if a.Err != nil {
 				status = "erro: " + a.Err.Error()
 			} else if a.Executed {
 				status = "aplicado"
-			} else {
-				status = "(dry-run)"
 			}
-			fmt.Fprintf(w, "  %-14s found=%s freed=%s %s\n",
+			_, _ = fmt.Fprintf(w, "  %-14s found=%s freed=%s %s\n",
 				a.Name, cleanup.FormatBytes(a.BytesFound), cleanup.FormatBytes(a.BytesFreed), status)
 		}
 	}

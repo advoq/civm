@@ -13,10 +13,10 @@
 ## Passo 1 — Registrar runner na VM (1 comando)
 
 ```bash
-TOKEN=$(gh api -X POST /repos/emersonbusson/advoq/actions/runners/registration-token --jq .token)
+TOKEN=$(gh api -X POST /repos/advoq/advoq/actions/runners/registration-token --jq .token)
 
 civmctl runner add \
-  --repo=emersonbusson/advoq \
+  --repo=advoq/advoq \
   --token="$TOKEN" \
   --short=advoq \
   --execute
@@ -35,14 +35,14 @@ Token mascarado nos logs. Idempotente (re-rodar substitui).
 ### Validar online
 
 ```bash
-gh api /repos/emersonbusson/advoq/actions/runners --jq '.runners[]|"\(.name) \(.status) \(.labels[].name)"'
+gh api /repos/advoq/advoq/actions/runners --jq '.runners[]|"\(.name) \(.status) \(.labels[].name)"'
 # Esperado: civm-advoq online (com label civm)
 ```
 
 E na VM:
 
 ```bash
-ssh gha-ubuntu-2404 "systemctl is-active actions.runner.emersonbusson-advoq.civm-advoq.service"
+ssh gha-ubuntu-2404 "systemctl is-active actions.runner.advoq-advoq.civm-advoq.service"
 # Esperado: active
 ```
 
@@ -102,12 +102,13 @@ Node 24 (já está: v24.15.0 LTS Krypton via nvm).
 ## Rollback (1 comando)
 
 ```bash
-TOKEN=$(gh api -X POST /repos/emersonbusson/advoq/actions/runners/remove-token --jq .token)
+TOKEN=$(gh api -X POST /repos/advoq/advoq/actions/runners/remove-token --jq .token)
 civmctl runner remove --short=advoq --token="$TOKEN" --execute
 ```
 
-Faz tudo idempotente (best-effort): svc.sh stop + uninstall + config.sh
-remove + rm -rf dir. Token mascarado nos logs.
+Faz a sequência `svc.sh stop` + uninstall + `config.sh remove` + `rm -rf`
+dir. Se stop/uninstall falhar, aborta antes de desregistrar ou remover o
+diretório. Token mascarado nos logs.
 
 Se template `ci-router.yml` quebrar workflow advoq:
 
@@ -123,7 +124,7 @@ como antes (com risco de billing-block continuar matando jobs em <10s).
 
 ## Critério de sucesso
 
-- `gh api /repos/emersonbusson/advoq/actions/runners` retorna
+- `gh api /repos/advoq/advoq/actions/runners` retorna
   `civm-advoq online`
 - Push em advoq dispara `ci-router` que ELE roda em civm-advoq
   (verificar via `gh run view <id> --json jobs --jq '.jobs[] | "\(.name) runner=\(.runnerName)"'`)

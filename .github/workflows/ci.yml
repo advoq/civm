@@ -82,10 +82,29 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.26.3'
 
       - name: go vet
         run: go vet ./...
+
+      - name: golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.1
+          golangci-lint run ./...
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck ./...
+
+      - name: Secret pattern scan
+        run: |
+          if grep -RInE --exclude-dir=.git 'ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}' .; then
+            exit 1
+          fi
+          if grep -RInE --exclude-dir=.git -- '-----BEGIN (OPENSSH|RSA|EC|DSA) PRIVATE KEY-----' . | grep -v '`-----BEGIN' | grep -v '.github/workflows/ci.yml:'; then
+            exit 1
+          fi
 
       - name: go test (race + cover)
         run: go test -race -count=1 -coverprofile=coverage.out ./...
@@ -158,6 +177,9 @@ jobs:
           gh --version | head -1
           git --version
           jq --version
+          go build -o /tmp/civmctl-parity ./cmd/civmctl
+          /tmp/civmctl-parity parity
+          rm -f /tmp/civmctl-parity
           echo "--- /opt/hostedtoolcache writable? ---"
           test -d /opt/hostedtoolcache && echo "exists" || echo "missing (setup-* will create)"
 
@@ -185,16 +207,20 @@ jobs:
       - name: Build civmctl from source on self-hosted (parity test)
         run: |
           go build -o /tmp/civmctl-fresh ./cmd/civmctl
+          # Smoke: fresh build responde --help sem erro e expõe version-pins.
+          # Diff contra /usr/local/bin/civmctl --help foi removido em
+          # 2026-05-11: qualquer PR que adicione/remova subcomando
+          # divergia antes de o binário instalado ser republicado
+          # pós-merge, quebrando o gate. O regression check de
+          # comandos/flags fica coberto por go test em build-civmctl.
+          /tmp/civmctl-fresh --help > /dev/null
           /tmp/civmctl-fresh version-pins | head -5
-          # Dois binarios devem mesma --help
-          diff <(/usr/local/bin/civmctl --help) <(/tmp/civmctl-fresh --help)
           rm -f /tmp/civmctl-fresh
 
-      - name: Workspace cleanup (--ephemeral runner discards anyway)
+      - name: Workspace cleanup (persistent runner hygiene)
         if: always()
         run: |
-          # Como o runner e --ephemeral, ele se auto-destroi apos cada job.
-          # Este step e informativo: confirma que workspace ficou em path
-          # esperado para next job clonar fresh.
+          # Runner persistente: checkout recria a workspace e os timers civm
+          # fazem a higiene operacional fora do caminho quente do job.
           echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
           ls -la "$GITHUB_WORKSPACE" | head -5

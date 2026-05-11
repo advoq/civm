@@ -84,10 +84,14 @@ func buildBootstrapEverythingSteps(unitsSource string, watchdog, reverseWatchdog
 	steps := []everythingStep{
 		{
 			Name:    "verify_civmctl",
-			WouldDo: "which civmctl (precisa estar em /usr/local/bin antes deste comando)",
+			WouldDo: "test -x " + civm.DefaultCivmctlPath + " (systemd usa esse path)",
 			Apply: func(ctx context.Context) error {
-				if _, err := exec.LookPath("civmctl"); err != nil {
-					return fmt.Errorf("civmctl nao encontrado no PATH: %w", err)
+				info, err := os.Stat(civm.DefaultCivmctlPath)
+				if err != nil {
+					return fmt.Errorf("civmctl nao encontrado em %s: %w", civm.DefaultCivmctlPath, err)
+				}
+				if info.IsDir() || info.Mode()&0111 == 0 {
+					return fmt.Errorf("civmctl em %s nao e arquivo executavel", civm.DefaultCivmctlPath)
 				}
 				return nil
 			},

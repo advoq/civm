@@ -97,6 +97,27 @@ func TestRun_VerifyOSFails(t *testing.T) {
 	}
 }
 
+func TestRun_ExecuteStopsAfterPreflightError(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.Execute = true
+	opts.OSReader = func() (string, error) {
+		return "ID=debian\nVERSION_ID=\"12\"\n", nil
+	}
+	calls := 0
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		calls++
+		return nil, errors.New("nao deveria executar comandos apos preflight")
+	}
+	results := Run(context.Background(), opts)
+	if len(results) != 1 || results[0].Name != "verify_os" || results[0].Err == nil {
+		t.Fatalf("results = %+v, want only verify_os error", results)
+	}
+	if calls != 0 {
+		t.Fatalf("RunFn calls = %d, want 0", calls)
+	}
+}
+
 func TestRun_NotRoot(t *testing.T) {
 	t.Parallel()
 	opts := okOpts(t)
@@ -116,6 +137,125 @@ func TestRun_NotRoot(t *testing.T) {
 	}
 }
 
+func TestInstallGoTarball_VerifiesSHA256BeforeExtract(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.SHA256FileFn = func(string) (string, error) {
+		return "bad-sha", nil
+	}
+	calls := []string{}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	err := installGoTarball(context.Background(), opts, "1.26.3")
+	if err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("err = %v, want sha256 mismatch", err)
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "tar ") || strings.HasPrefix(call, "rm -rf /usr/local/go") {
+			t.Fatalf("mutating command ran before checksum success: %v", calls)
+		}
+	}
+}
+
+func TestInstallGoTarball_SuccessAfterSHA256(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.SHA256FileFn = func(string) (string, error) {
+		return "2b2cfc7148493da5e73981bffbf3353af381d5f93e789c82c79aff64962eb556", nil
+	}
+	calls := []string{}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	if err := installGoTarball(context.Background(), opts, "1.26.3"); err != nil {
+		t.Fatalf("installGoTarball err = %v", err)
+	}
+	assertCommandRan(t, calls, "tar -C /usr/local -xzf /tmp/go-1.26.3.tar.gz")
+	assertCommandRan(t, calls, "ln -sf /usr/local/go/bin/go /usr/local/bin/go")
+}
+
+func TestInstallNodeViaNodeSource_VerifiesSHA256BeforeBash(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.SHA256FileFn = func(string) (string, error) {
+		return "bad-sha", nil
+	}
+	calls := []string{}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	err := installNodeViaNodeSource(context.Background(), opts, "24.15.0")
+	if err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("err = %v, want sha256 mismatch", err)
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "bash ") || strings.HasPrefix(call, "apt-get install") {
+			t.Fatalf("command ran before checksum success: %v", calls)
+		}
+	}
+}
+
+func TestInstallNodeViaNodeSource_SuccessAfterSHA256(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.SHA256FileFn = func(string) (string, error) {
+		return "6e3d580f5bd7ccf2aa1e8df8d35c60d78e873c3ff8beb282c9bebd914904ad72", nil
+	}
+	calls := []string{}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	if err := installNodeViaNodeSource(context.Background(), opts, "24.15.0"); err != nil {
+		t.Fatalf("installNodeViaNodeSource err = %v", err)
+	}
+	assertCommandRan(t, calls, "bash /tmp/nodesource-24.sh")
+	assertCommandRan(t, calls, "apt-get install -y nodejs")
+}
+
+func TestInstallYQBinary_VerifiesSHA256BeforeInstall(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.SHA256FileFn = func(string) (string, error) {
+		return "bad-sha", nil
+	}
+	calls := []string{}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	err := installYQBinary(context.Background(), opts, "4.52.5")
+	if err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("err = %v, want sha256 mismatch", err)
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "install ") {
+			t.Fatalf("install ran before checksum success: %v", calls)
+		}
+	}
+}
+
+func TestInstallYQBinary_SuccessAfterSHA256(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.SHA256FileFn = func(string) (string, error) {
+		return "75d893a0d5940d1019cb7cdc60001d9e876623852c31cfc6267047bc31149fa9", nil
+	}
+	calls := []string{}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	if err := installYQBinary(context.Background(), opts, "4.52.5"); err != nil {
+		t.Fatalf("installYQBinary err = %v", err)
+	}
+	assertCommandRan(t, calls, "install -m 0755 /tmp/yq-4.52.5-linux-amd64 /usr/local/bin/yq")
+}
+
 func TestRun_Execute_AlreadyInstalled_Skips(t *testing.T) {
 	t.Parallel()
 	opts := okOpts(t)
@@ -124,16 +264,21 @@ func TestRun_Execute_AlreadyInstalled_Skips(t *testing.T) {
 	wantNode := "v" + opts.Spec.Tools[1].Preferred()
 	wantDocker := opts.Spec.Tools[3].Preferred()
 	wantGH := opts.Spec.Tools[5].Preferred()
+	wantYQ := opts.Spec.Tools[8].Preferred()
 	responses := map[string][]byte{
 		"go version":       []byte("go version go" + want + " linux/amd64\n"),
 		"node --version":   []byte(wantNode + "\n"),
 		"docker --version": []byte("Docker version " + wantDocker + ", build abc\n"),
 		"gh --version":     []byte("gh version " + wantGH + " (2026)\n"),
+		"yq --version":     []byte("yq (https://github.com/mikefarah/yq/) version v" + wantYQ + "\n"),
 		"dpkg-query": []byte("build-essential install ok installed\n" +
 			"curl install ok installed\n" +
 			"wget install ok installed\n" +
 			"jq install ok installed\n" +
 			"git install ok installed\n" +
+			"python3 install ok installed\n" +
+			"python3-pip install ok installed\n" +
+			"python3-venv install ok installed\n" +
 			"ca-certificates install ok installed\n"),
 		"systemctl is-enabled": []byte("enabled\n"),
 	}
@@ -365,6 +510,8 @@ func TestInstallDockerCEWritesSourceWithoutShell(t *testing.T) {
 		switch name {
 		case "dpkg":
 			return []byte("amd64\n"), nil
+		case "gpg":
+			return []byte("fpr:::::::::" + "9DC858229FC7DD38854AE2D88D81803C0EBFCD88" + ":\n"), nil
 		default:
 			return nil, nil
 		}
@@ -395,6 +542,35 @@ func TestInstallDockerCEWritesSourceWithoutShell(t *testing.T) {
 	}
 }
 
+func TestInstallDockerCEBlocksBadKeyFingerprint(t *testing.T) {
+	t.Parallel()
+	opts := okOpts(t)
+	opts.OSReader = func() (string, error) {
+		return "ID=ubuntu\nVERSION_ID=\"24.04\"\nVERSION_CODENAME=noble\n", nil
+	}
+	var commands []string
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		switch name {
+		case "dpkg":
+			return []byte("amd64\n"), nil
+		case "gpg":
+			return []byte("fpr:::::::::BAD:\n"), nil
+		default:
+			return nil, nil
+		}
+	}
+	err := installDockerCE(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "fingerprint") {
+		t.Fatalf("err = %v, want fingerprint mismatch", err)
+	}
+	for _, command := range commands {
+		if strings.HasPrefix(command, "apt-get ") {
+			t.Fatalf("apt-get ran after bad fingerprint: %v", commands)
+		}
+	}
+}
+
 func TestUbuntuCodenameFallbackForUbuntu2404(t *testing.T) {
 	t.Parallel()
 	opts := okOpts(t)
@@ -419,6 +595,9 @@ func TestInstallGHCLIWritesSourceWithoutShell(t *testing.T) {
 		commands = append(commands, name+" "+strings.Join(args, " "))
 		if name == "dpkg" {
 			return []byte("arm64\n"), nil
+		}
+		if name == "gpg" {
+			return []byte("fpr:::::::::" + "2C6106201985B60E6C7AC87323F3D4EA75716059" + ":\n"), nil
 		}
 		return nil, nil
 	}
@@ -451,4 +630,14 @@ func TestCommandOutputTrimmedRejectsEmpty(t *testing.T) {
 	if _, err := commandOutputTrimmed(context.Background(), opts, "dpkg", "--print-architecture"); err == nil {
 		t.Fatalf("esperava erro para output vazio")
 	}
+}
+
+func assertCommandRan(t *testing.T, calls []string, want string) {
+	t.Helper()
+	for _, call := range calls {
+		if call == want {
+			return
+		}
+	}
+	t.Fatalf("command %q not found in calls: %v", want, calls)
 }

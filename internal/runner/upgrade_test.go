@@ -15,6 +15,7 @@ func validUpgradeOpts() UpgradeOptions {
 	return UpgradeOptions{
 		Short:          "civm-1",
 		NewVersion:     "2.335.0",
+		RunnerSHA256:   "valid-sha",
 		BaseDir:        "/home/emdev",
 		Execute:        false,
 		VerifyDelay:    0,
@@ -28,6 +29,9 @@ func validUpgradeOpts() UpgradeOptions {
 				return []byte(fakeListOutput), nil
 			}
 			return nil, nil
+		},
+		SHA256FileFn: func(string) (string, error) {
+			return "valid-sha", nil
 		},
 		SleepFn: func(time.Duration) {},
 	}
@@ -135,6 +139,33 @@ func TestUpgrade_DownloadFails_RollbackStart(t *testing.T) {
 	}
 	if startCount < 1 {
 		t.Errorf("rollback start nao chamado")
+	}
+}
+
+func TestUpgrade_VerifiesRunnerSHA256BeforeExtract(t *testing.T) {
+	t.Parallel()
+	o := validUpgradeOpts()
+	o.Execute = true
+	o.SHA256FileFn = func(string) (string, error) {
+		return "bad-sha", nil
+	}
+	calls := []string{}
+	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		key := name + " " + strings.Join(args, " ")
+		calls = append(calls, key)
+		if strings.Contains(key, "list-units") {
+			return []byte(fakeListOutput), nil
+		}
+		return nil, nil
+	}
+	r, _ := Upgrade(context.Background(), o)
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "sha256") {
+		t.Fatalf("Err = %v, want sha256 mismatch", r.Err)
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "tar ") {
+			t.Fatalf("tar ran after checksum failure: %v", calls)
+		}
 	}
 }
 

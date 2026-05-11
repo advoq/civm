@@ -400,3 +400,49 @@ brutos aqui.
   - Push da branch, aguardar CI do PR `#4`, corrigir metadata do PR e mergear
     apenas se os checks ficarem verdes.
   - Revalidar `idle-check` antes do merge se a VM liberar.
+
+## 2026-05-11 — post-v1-hardening-audit
+
+- **Branch:** fix/post-v1-hardening-audit
+- **Scope:** hardening pos-v1 de bootstrap, runner operations, supply-chain,
+  paridade da VM, CI scanners e docs operacionais.
+- **Actions:**
+  - `bootstrap` agora aborta fail-closed em erro hard de preflight
+    (`verify_os`/`verify_uid`) antes de qualquer mutacao.
+  - Downloads root de Go, NodeSource, actions/runner e yq passaram a exigir
+    SHA256 pinado antes de extrair, instalar ou executar.
+  - Chaves apt Docker e GitHub CLI passaram a validar fingerprint pinado antes
+    de serem instaladas.
+  - `runner remove` agora para em falha real de `svc.sh stop` ou
+    `svc.sh uninstall`, sem seguir para `config.sh remove`/`rm -rf`.
+  - `bootstrap-everything` valida exatamente `/usr/local/bin/civmctl`, que e
+    o path usado pelos units systemd.
+  - Adicionado `civmctl parity` para comparar VM real contra os pins do
+    `RunnerImageSpec`; `ahead` e `compatible` sao aceitaveis.
+  - `doctor.DefaultRepos` e runbook advoq foram alinhados para `advoq/advoq`.
+  - CI passou a usar Go `1.26.3`, `toolchain go1.26.3`, `golangci-lint`,
+    `govulncheck`, secret scan e parity check com binario fresh.
+  - VM recebeu `yq` v4.52.5 instalado manualmente com SHA256 verificado para
+    eliminar o gap operacional antes do novo gate de parity.
+- **Local validations:**
+  - `go vet ./...` passou.
+  - `go build ./...` passou.
+  - `go test -race -count=1 ./...` passou.
+  - `go test -count=1 -cover ./internal/...` passou; todos `internal/**`
+    ficaram acima de 80% (bootstrap 81.0%, civm 95.7%).
+  - `golangci-lint run ./... --timeout=5m` passou com `0 issues`.
+  - `govulncheck ./...` passou com `No vulnerabilities found`.
+  - Secret pattern scan local passou.
+  - `git diff --check` passou.
+- **VM validations:**
+  - Binario fresh `/tmp/civmctl-parity` retornou parity OK na VM:
+    go/gh/jq/yq in-sync, Docker/Compose ahead, Python/Git compatible.
+  - `civmctl health` retornou exit 1 apenas por warning `LAST`; DISK, MEM,
+    RUNNERS e timers OK.
+  - `civmctl doctor` retornou exit 1 apenas por warning `LAST`; runners
+    systemd canonicos online.
+  - `civmctl idle-check` retornou `idle`, exit 0.
+- **Open items:**
+  - Publicar branch/PR e aguardar CI remoto antes de merge.
+  - Instalar o novo binario `/usr/local/bin/civmctl` na VM somente depois do
+    merge/release, para expor `civmctl parity` no path canonico.

@@ -120,8 +120,9 @@ TOKEN=$(gh api -X POST /repos/emersonbusson/<REPO>/actions/runners/remove-token 
 civmctl runner remove --short=<short> --token="$TOKEN" --execute
 ```
 
-Faz tudo idempotente (best-effort): svc.sh stop + uninstall + config.sh
-remove + rm -rf dir. Token mascarado nos logs.
+Faz `svc.sh stop` + uninstall + `config.sh remove` + `rm -rf dir`.
+Se stop/uninstall falhar, aborta antes de desregistrar ou remover
+diretorio. Token mascarado nos logs.
 
 ### Remover runner legacy offline (manual)
 
@@ -178,6 +179,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-reverse-watchdog.timer
 
 # 6. Health check (deve retornar exit 0)
+civmctl parity
 civmctl health
 civmctl doctor --json
 ```
@@ -194,11 +196,12 @@ Steps idempotentes do bootstrap (todos check-then-apply):
 |---|---|---|
 | `verify_os` | confere `/etc/os-release` ID=ubuntu VERSION_ID=24.04 | OS errado → erro |
 | `verify_uid` | confere UID=0 | UID≠0 → erro |
-| `apt_base_packages` | instala build-essential, curl, wget, jq, git, ca-certificates | dpkg-query reporta ja instalados |
-| `install_go` | baixa tarball go1.25.9 para /usr/local/go | `go version` reporta versao alvo |
-| `install_node` | NodeSource setup_20.x + apt install nodejs | `node --version` reporta v20.20.2 |
+| `apt_base_packages` | instala build-essential, curl, wget, jq, git, python3, ca-certificates | dpkg-query reporta ja instalados |
+| `install_go` | baixa tarball go1.26.3 com SHA256 e instala em /usr/local/go | `go version` reporta versao alvo |
+| `install_node` | baixa NodeSource setup_24.x com SHA256 + apt install nodejs | `node --version` existe |
 | `install_docker` | apt repo Docker CE + plugin compose | `docker --version` reporta 28.0.4 |
 | `install_gh` | apt repo cli.github.com + apt install gh | `gh --version` reporta 2.89.0 |
+| `install_yq` | baixa `yq_linux_amd64` com SHA256 e instala em `/usr/local/bin/yq` | `yq --version` reporta versao alvo |
 | `install_systemd_timers` | enable --now cleanup, disk-watchdog e reverse-watchdog | systemctl is-enabled retorna enabled |
 
 Cleanup automatico (cron diario 04:00 UTC via systemd timer):
@@ -396,7 +399,7 @@ ubuntu-latest, instalar:
 
 ```bash
 # Go (multi-version via go env GOTOOLCHAIN auto)
-GO_VERSION=1.26.0
+GO_VERSION=1.26.3
 curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | sudo tar -C /usr/local -xz
 sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go
 
@@ -452,31 +455,25 @@ sudo apt update && sudo apt install -y gh
 go install github.com/rhysd/actionlint/cmd/actionlint@latest
 
 # yq (yaml processor)
-sudo snap install yq
+# Preferir `sudo civmctl bootstrap --execute`: ele instala o yq pinado com SHA256.
+civmctl version-pins | grep yq
 ```
 
 ### Verificar parity
 
-Script de smoke test (rodar como user `runner`):
+Preferir o verificador autoritativo do repo:
 
 ```bash
-# Confirmar que tudo essencial esta presente
-for cmd in go node npm python3 docker gh git curl jq; do
-  if command -v "$cmd" >/dev/null 2>&1; then
-    echo "OK: $cmd ($(command -v $cmd))"
-  else
-    echo "MISSING: $cmd"
-  fi
-done
-
-# Versoes minimas
-go version           # esperado go1.26+
-node --version       # esperado v24+
-docker --version     # esperado 24+
-gh --version         # esperado 2.40+
+civmctl version-pins
+civmctl parity
+civmctl parity --json
 ```
 
-Se faltar algo, runner reporta erro confuso quando workflow tentar usar.
+`civmctl parity` retorna `0` quando todas as ferramentas instaladas estao
+em paridade aceitavel com os pins, `1` quando alguma ferramenta esta ausente
+ou atrasada. `ahead` cobre ferramenta local mais nova; `compatible` cobre
+familia operacional equivalente para ferramentas providas pelo Ubuntu base
+(ex.: Python 3.12.x e Git 2.x).
 
 ## Disk hygiene (automacao obrigatoria em 128GB)
 

@@ -18,11 +18,13 @@ type UpgradeOptions struct {
 	Unit           string // unit name explícito (sobreescreve Short)
 	Dir            string // diretorio do runner explicito (sobreescreve guess de Short)
 	NewVersion     string // ex: "2.335.0"
+	RunnerSHA256   string // sha256 do actions-runner-linux-x64 tarball
 	BaseDir        string // ex: "/home/emdev"
 	Execute        bool
 	VerifyDelay    time.Duration
 	IdleProbeDelay time.Duration
 	RunFn          func(ctx context.Context, name string, args ...string) ([]byte, error)
+	SHA256FileFn   func(path string) (string, error)
 	ActivityFn     func(ctx context.Context) ([]idle.Activity, error)
 	SleepFn        func(d time.Duration)
 }
@@ -34,6 +36,7 @@ func DefaultUpgradeOptions() UpgradeOptions {
 		IdleProbeDelay: 2 * time.Second,
 		Execute:        false,
 		RunFn:          defaultRun,
+		SHA256FileFn:   civm.FileSHA256,
 		ActivityFn:     idle.DefaultActivities,
 		SleepFn:        time.Sleep,
 	}
@@ -62,11 +65,19 @@ type UpgradeResult struct {
 // (não vem no tarball, então tar -xzf não os toca). actions-runner-linux
 // só inclui binários e scripts.
 func Upgrade(ctx context.Context, opts UpgradeOptions) (UpgradeResult, error) {
+	if opts.RunnerSHA256 == "" {
+		if expected, ok := civm.RunnerLinuxX64SHA256(opts.NewVersion); ok {
+			opts.RunnerSHA256 = expected
+		}
+	}
 	if err := validateUpgradeOptions(opts); err != nil {
 		return UpgradeResult{}, err
 	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
+	}
+	if opts.SHA256FileFn == nil {
+		opts.SHA256FileFn = civm.FileSHA256
 	}
 	if opts.ActivityFn == nil {
 		opts.ActivityFn = idle.DefaultActivities
@@ -111,7 +122,7 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (UpgradeResult, error) {
 		opts.NewVersion, opts.NewVersion)
 	tarPath := r.Dir + "/runner-upgrade.tar.gz"
 
-	r.WouldDo = fmt.Sprintf("(1) sudo systemctl stop %s; (2) curl -fsSL -o %s %s; (3) tar -C %s -xzf %s (preserva .runner/.credentials/_work); (4) sudo systemctl start %s; (5) sleep %s && systemctl is-active %s",
+	r.WouldDo = fmt.Sprintf("(1) sudo systemctl stop %s; (2) curl -fsSL -o %s %s; (3) verify sha256; (4) tar -C %s -xzf %s (preserva .runner/.credentials/_work); (5) sudo systemctl start %s; (6) sleep %s && systemctl is-active %s",
 		r.UnitResolved, tarPath, tarball, r.Dir, tarPath, r.UnitResolved, opts.VerifyDelay, r.UnitResolved)
 
 	if !opts.Execute {
@@ -138,7 +149,20 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (UpgradeResult, error) {
 	}
 	r.DownloadedOK = true
 
-	// 5. Extract over existing (binaries + scripts; state files preserved)
+	// 5. Verify tarball before mutating runner binaries
+	actual, err := opts.SHA256FileFn(tarPath)
+	if err != nil {
+		_, _ = opts.RunFn(ctx, "sudo", "systemctl", "start", r.UnitResolved)
+		r.Err = fmt.Errorf("sha256 tarball: %w", err)
+		return r, nil
+	}
+	if err := civm.VerifySHA256(actual, opts.RunnerSHA256, "actions/runner v"+opts.NewVersion); err != nil {
+		_, _ = opts.RunFn(ctx, "sudo", "systemctl", "start", r.UnitResolved)
+		r.Err = err
+		return r, nil
+	}
+
+	// 6. Extract over existing (binaries + scripts; state files preserved)
 	if _, err := opts.RunFn(ctx, "tar", "-C", r.Dir, "-xzf", tarPath); err != nil {
 		_, _ = opts.RunFn(ctx, "sudo", "systemctl", "start", r.UnitResolved)
 		r.Err = fmt.Errorf("tar extract: %w", err)
@@ -147,14 +171,14 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (UpgradeResult, error) {
 	r.ExtractedOK = true
 	_, _ = opts.RunFn(ctx, "rm", tarPath) // best-effort cleanup
 
-	// 6. Start service
+	// 7. Start service
 	if _, err := opts.RunFn(ctx, "sudo", "systemctl", "start", r.UnitResolved); err != nil {
 		r.Err = fmt.Errorf("systemctl start: %w", err)
 		return r, nil
 	}
 	r.StartedOK = true
 
-	// 7. Verify is-active
+	// 8. Verify is-active
 	opts.SleepFn(opts.VerifyDelay)
 	out, _ := opts.RunFn(ctx, "systemctl", "is-active", r.UnitResolved)
 	r.ActiveAfter = strings.TrimSpace(string(out)) == "active"
@@ -180,6 +204,9 @@ func validateUpgradeOptions(opts UpgradeOptions) error {
 	}
 	if err := civm.ValidateSemver(opts.NewVersion, "--new-version"); err != nil {
 		return err
+	}
+	if strings.TrimSpace(opts.RunnerSHA256) == "" {
+		return fmt.Errorf("--runner-sha256 obrigatorio para actions/runner v%s", opts.NewVersion)
 	}
 	cleanBase, err := civm.CleanDir(opts.BaseDir, "--base-dir")
 	if err != nil {

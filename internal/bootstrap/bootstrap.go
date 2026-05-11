@@ -30,6 +30,7 @@ type Result struct {
 type Step struct {
 	Name        string
 	Description string
+	HardFail    bool
 	Check       func(ctx context.Context) (bool, error)
 	Apply       func(ctx context.Context) error
 }
@@ -45,6 +46,7 @@ type Options struct {
 	OSReader         func() (string, error)
 	RunFn            func(ctx context.Context, name string, args ...string) ([]byte, error)
 	WriteFileFn      func(name string, data []byte, perm os.FileMode) error
+	SHA256FileFn     func(path string) (string, error)
 }
 
 // DefaultOptions returns sane production defaults.
@@ -59,6 +61,7 @@ func DefaultOptions() Options {
 		OSReader:         defaultOSReader,
 		RunFn:            defaultRun,
 		WriteFileFn:      os.WriteFile,
+		SHA256FileFn:     civm.FileSHA256,
 	}
 }
 
@@ -73,6 +76,9 @@ func Run(ctx context.Context, opts Options) []Result {
 	if opts.WriteFileFn == nil {
 		opts.WriteFileFn = os.WriteFile
 	}
+	if opts.SHA256FileFn == nil {
+		opts.SHA256FileFn = civm.FileSHA256
+	}
 	steps := buildSteps(opts)
 	out := make([]Result, 0, len(steps))
 	for _, s := range steps {
@@ -81,6 +87,9 @@ func Run(ctx context.Context, opts Options) []Result {
 		if err != nil {
 			r.Err = err
 			out = append(out, r)
+			if s.HardFail {
+				return out
+			}
 			continue
 		}
 		r.AlreadyDone = done
@@ -107,11 +116,13 @@ func buildSteps(opts Options) []Step {
 	goVersion, _ := opts.Spec.FindTool("go")
 	nodeVersion, _ := opts.Spec.FindTool("node")
 	ghVersion, _ := opts.Spec.FindTool("gh")
+	yqVersion, _ := opts.Spec.FindTool("yq")
 
 	return []Step{
 		{
 			Name:        "verify_os",
 			Description: "Confirma Ubuntu 24.04 LTS",
+			HardFail:    true,
 			Check: func(ctx context.Context) (bool, error) {
 				out, err := opts.OSReader()
 				if err != nil {
@@ -129,6 +140,7 @@ func buildSteps(opts Options) []Step {
 		{
 			Name:        "verify_uid",
 			Description: "Confirma execucao como root (UID=0)",
+			HardFail:    true,
 			Check: func(ctx context.Context) (bool, error) {
 				if opts.UID == 0 {
 					return true, nil
@@ -141,14 +153,14 @@ func buildSteps(opts Options) []Step {
 		},
 		{
 			Name:        "apt_base_packages",
-			Description: "Instala build-essential, curl, wget, jq, yq, git, ca-certificates",
-			Check:       packagesInstalled(opts, "build-essential", "curl", "wget", "jq", "git", "ca-certificates"),
+			Description: "Instala build-essential, curl, wget, jq, git, python3, ca-certificates",
+			Check:       packagesInstalled(opts, "build-essential", "curl", "wget", "jq", "git", "python3", "python3-pip", "python3-venv", "ca-certificates"),
 			Apply: func(ctx context.Context) error {
 				if _, err := opts.RunFn(ctx, "apt-get", "update", "-y"); err != nil {
 					return err
 				}
 				_, err := opts.RunFn(ctx, "apt-get", "install", "-y",
-					"build-essential", "curl", "wget", "jq", "git", "ca-certificates",
+					"build-essential", "curl", "wget", "jq", "git", "python3", "python3-pip", "python3-venv", "ca-certificates",
 					"gnupg", "lsb-release", "software-properties-common")
 				return err
 			},
@@ -206,6 +218,20 @@ func buildSteps(opts Options) []Step {
 			},
 			Apply: func(ctx context.Context) error {
 				return installGHCLI(ctx, opts)
+			},
+		},
+		{
+			Name:        "install_yq",
+			Description: "Instala yq " + yqVersion.Preferred() + " em /usr/local/bin/yq",
+			Check: func(ctx context.Context) (bool, error) {
+				out, err := opts.RunFn(ctx, "yq", "--version")
+				if err != nil {
+					return false, nil
+				}
+				return strings.Contains(string(out), yqVersion.Preferred()), nil
+			},
+			Apply: func(ctx context.Context) error {
+				return installYQBinary(ctx, opts, yqVersion.Preferred())
 			},
 		},
 		{
@@ -303,13 +329,24 @@ func installGoTarball(ctx context.Context, opts Options, version string) error {
 	if _, err := opts.RunFn(ctx, "curl", "-fsSL", "-o", tmp, url); err != nil {
 		return err
 	}
+	expected, ok := civm.GoLinuxAMD64SHA256(version)
+	if !ok {
+		return fmt.Errorf("sha256 nao pinado para Go linux-amd64 %s", version)
+	}
+	actual, err := sha256File(opts, tmp)
+	if err != nil {
+		return fmt.Errorf("sha256 %s: %w", tmp, err)
+	}
+	if err := civm.VerifySHA256(actual, expected, "Go "+version+" linux-amd64"); err != nil {
+		return err
+	}
 	if _, err := opts.RunFn(ctx, "rm", "-rf", "/usr/local/go"); err != nil {
 		return err
 	}
 	if _, err := opts.RunFn(ctx, "tar", "-C", "/usr/local", "-xzf", tmp); err != nil {
 		return err
 	}
-	_, err := opts.RunFn(ctx, "ln", "-sf", "/usr/local/go/bin/go", "/usr/local/bin/go")
+	_, err = opts.RunFn(ctx, "ln", "-sf", "/usr/local/go/bin/go", "/usr/local/bin/go")
 	return err
 }
 
@@ -320,10 +357,21 @@ func installNodeViaNodeSource(ctx context.Context, opts Options, version string)
 	if _, err := opts.RunFn(ctx, "curl", "-fsSL", "-o", tmp, url); err != nil {
 		return err
 	}
+	expected, ok := civm.NodeSourceSetupSHA256(major)
+	if !ok {
+		return fmt.Errorf("sha256 nao pinado para NodeSource setup_%s.x", major)
+	}
+	actual, err := sha256File(opts, tmp)
+	if err != nil {
+		return fmt.Errorf("sha256 %s: %w", tmp, err)
+	}
+	if err := civm.VerifySHA256(actual, expected, "NodeSource setup_"+major+".x"); err != nil {
+		return err
+	}
 	if _, err := opts.RunFn(ctx, "bash", tmp); err != nil {
 		return err
 	}
-	_, err := opts.RunFn(ctx, "apt-get", "install", "-y", "nodejs")
+	_, err = opts.RunFn(ctx, "apt-get", "install", "-y", "nodejs")
 	return err
 }
 
@@ -338,13 +386,18 @@ func installDockerCE(ctx context.Context, opts Options) error {
 	}
 	steps := [][]string{
 		{"install", "-m", "0755", "-d", "/etc/apt/keyrings"},
-		{"curl", "-fsSL", "https://download.docker.com/linux/ubuntu/gpg", "-o", "/etc/apt/keyrings/docker.asc"},
-		{"chmod", "a+r", "/etc/apt/keyrings/docker.asc"},
+		{"curl", "-fsSL", "https://download.docker.com/linux/ubuntu/gpg", "-o", "/tmp/docker.asc"},
 	}
 	for _, s := range steps {
 		if _, err := opts.RunFn(ctx, s[0], s[1:]...); err != nil {
 			return err
 		}
+	}
+	if err := verifyKeyFingerprint(ctx, opts, "/tmp/docker.asc", civm.DefaultDockerGPGFingerprint, "Docker apt key"); err != nil {
+		return err
+	}
+	if _, err := opts.RunFn(ctx, "install", "-m", "0644", "/tmp/docker.asc", "/etc/apt/keyrings/docker.asc"); err != nil {
+		return err
 	}
 	source := fmt.Sprintf("deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n", arch, codename)
 	if err := opts.WriteFileFn("/etc/apt/sources.list.d/docker.list", []byte(source), 0644); err != nil {
@@ -359,6 +412,14 @@ func installDockerCE(ctx context.Context, opts Options) error {
 		}
 	}
 	return nil
+}
+
+func sha256File(opts Options, path string) (string, error) {
+	fn := opts.SHA256FileFn
+	if fn == nil {
+		fn = civm.FileSHA256
+	}
+	return fn(path)
 }
 
 func ubuntuCodename(opts Options) (string, error) {
@@ -398,7 +459,14 @@ func installGHCLI(ctx context.Context, opts Options) error {
 		return err
 	}
 	source = strings.ReplaceAll(source, "$(dpkg --print-architecture)", arch)
-	if _, err := opts.RunFn(ctx, "curl", "-fsSL", "https://cli.github.com/packages/githubcli-archive-keyring.gpg", "-o", "/usr/share/keyrings/githubcli-archive-keyring.gpg"); err != nil {
+	const tmpKey = "/tmp/githubcli-archive-keyring.gpg"
+	if _, err := opts.RunFn(ctx, "curl", "-fsSL", "https://cli.github.com/packages/githubcli-archive-keyring.gpg", "-o", tmpKey); err != nil {
+		return err
+	}
+	if err := verifyKeyFingerprint(ctx, opts, tmpKey, civm.DefaultGitHubCLIGPGFingerprint, "GitHub CLI apt key"); err != nil {
+		return err
+	}
+	if _, err := opts.RunFn(ctx, "install", "-m", "0644", tmpKey, "/usr/share/keyrings/githubcli-archive-keyring.gpg"); err != nil {
 		return err
 	}
 	if err := opts.WriteFileFn("/etc/apt/sources.list.d/github-cli.list", []byte(source), 0644); err != nil {
@@ -413,6 +481,35 @@ func installGHCLI(ctx context.Context, opts Options) error {
 		}
 	}
 	return nil
+}
+
+func verifyKeyFingerprint(ctx context.Context, opts Options, path, expected, label string) error {
+	out, err := opts.RunFn(ctx, "gpg", "--show-keys", "--with-colons", path)
+	if err != nil {
+		return fmt.Errorf("gpg fingerprint %s: %w", path, err)
+	}
+	return civm.VerifyGPGFingerprint(string(out), expected, label)
+}
+
+func installYQBinary(ctx context.Context, opts Options, version string) error {
+	url := fmt.Sprintf("https://github.com/mikefarah/yq/releases/download/v%s/yq_linux_amd64", version)
+	tmp := "/tmp/yq-" + version + "-linux-amd64"
+	if _, err := opts.RunFn(ctx, "curl", "-fsSL", "-o", tmp, url); err != nil {
+		return err
+	}
+	expected, ok := civm.YQLinuxAMD64SHA256(version)
+	if !ok {
+		return fmt.Errorf("sha256 nao pinado para yq linux-amd64 %s", version)
+	}
+	actual, err := sha256File(opts, tmp)
+	if err != nil {
+		return fmt.Errorf("sha256 %s: %w", tmp, err)
+	}
+	if err := civm.VerifySHA256(actual, expected, "yq "+version+" linux-amd64"); err != nil {
+		return err
+	}
+	_, err = opts.RunFn(ctx, "install", "-m", "0755", tmp, "/usr/local/bin/yq")
+	return err
 }
 
 func commandOutputTrimmed(ctx context.Context, opts Options, name string, args ...string) (string, error) {
