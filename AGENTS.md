@@ -88,7 +88,7 @@ PRs ficam em PT-BR seguindo template:
 
 - `## Resumo`
 - `## Commits` (tabela com hash + `<details>` por commit)
-- `## Issue` (`Closes #NNN`)
+- `## Issue` (`Closes #NNN` ou marcador `Sem issue` / `No issue` / `N/A`)
 - `## Responsavel`
 - `## Labels`
 - `## Validacao`
