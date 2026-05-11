@@ -174,9 +174,24 @@ própria ferramenta — ex.: compexhub tem `compexhubctl`).
 
 ## Versionamento
 
-Tags semver opcionais (v1.0.0, v1.1.0). Peer repos podem travar em
-versão se quiserem (ex.: `git checkout v1.2.0` antes de copiar
-templates).
+`civm` segue SemVer (MAJOR.MINOR.PATCH). Tags + GitHub Releases são
+geradas automaticamente por `release-please` a partir de Conventional
+Commits em `main`:
+
+- `fix:` → bump patch (`v1.0.0` → `v1.0.1`).
+- `feat:` → bump minor (`v1.0.0` → `v1.1.0`).
+- `feat!:` ou `BREAKING CHANGE:` no footer → bump major (`v1.0.0` → `v2.0.0`).
+- `docs:`, `chore:`, `test:`, `build:`, `style:` não bumpam versão.
+- `ci:`, `refactor:`, `perf:` entram no CHANGELOG sem bump (configurável).
+
+Workflow `.github/workflows/release.yml` mantém um PR de release aberto
+com `.release-please-manifest.json` bumpado + `CHANGELOG.md` regerado.
+Mergear esse PR cria a tag e publica o release. Detalhes operacionais
+em `runbooks/RELEASE-AUTOMATION.md` (config, token PAT vs GITHUB_TOKEN,
+override `release-as`, rollback).
+
+Peer repos podem travar em versão se quiserem (ex.: `git checkout v1.2.0`
+antes de copiar templates).
 
 ## Governança de PR
 

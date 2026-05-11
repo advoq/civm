@@ -73,6 +73,11 @@ civmctl version-pins
 
 # Detector heuristico de billing-block (zero-PAT)
 civmctl billing-status --repo=owner/repo
+
+# Releases (automatizado via release-please)
+gh pr list --repo emersonbusson/civm --search "in:title release-please"
+gh release list --repo emersonbusson/civm --limit 5
+git tag --list 'v*' --sort=-version:refname
 ```
 
 ## Commits
@@ -82,6 +87,11 @@ Body em PT-BR, sem markdown/backticks/headings, linhas ≤72 chars.
 
 Commits **não-triviais** (`feat`, `fix`, `refactor`, `perf`) DEVEM ter
 `Rollback trigger: ...` no body.
+
+Types e bump correspondente (release-please): `feat` → minor, `fix` →
+patch, `feat!:`/`BREAKING CHANGE:` → major. `docs`/`chore`/`test`/`build`/
+`style` não bumpam; `ci`/`refactor`/`perf` entram no CHANGELOG sem bump.
+Detalhes em `runbooks/RELEASE-AUTOMATION.md`.
 
 ## Pull Requests
 
