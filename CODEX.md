@@ -16,6 +16,8 @@ civm permite execução autônoma para:
 - ✅ Adicionar testes em `*_test.go`
 - ✅ Atualizar `README.md`, `AGENTS.md`, `CODEX.md` (respeitando sync rule)
 - ✅ Atualizar `MEMORY.md` (append-only, never reorder/delete)
+- ✅ Editar `.github/workflows/*.yml`, `release-please-config.json`,
+  `.release-please-manifest.json` (release automation e CI gates)
 - ✅ Build e test local (`go build`, `go test`)
 - ✅ Commit local (sem push)
 
@@ -67,6 +69,19 @@ qualquer extração, instalação ou execução de script. Se o upstream publica
 nova versão sem checksum pinado, o comando deve falhar pedindo atualização do
 pin, não prosseguir por confiança em HTTPS.
 
+## Release automation
+
+`release-please` (`.github/workflows/release.yml` +
+`release-please-config.json` + `.release-please-manifest.json`) abre e
+mantem um PR de release em `main` a cada push, calculando bump por
+Conventional Commits. O agente NAO faz tag manual nem `gh release create`
+fora desse fluxo — qualquer release passa pelo PR de release, que e
+mergeado por humano. Detalhes em `runbooks/RELEASE-AUTOMATION.md`.
+
+Quando os artefatos `release-please-*.json` ou `release.yml` mudarem,
+sincronizar `README.md` §"Versionamento" e `AGENTS.md` §"Commits" no
+mesmo commit (invariante #5).
+
 ## Pause rules (modo autônomo)
 
 Quando humano pede execução autônoma ("continue", "faça tudo", "auto"):
@@ -84,12 +99,15 @@ Sem resposta no ponto de pausa, **não continuar** — aguardar.
 
 ## Verificação pós-release
 
-Após publicar tag/release, revalidar sem mutação:
+Releases sao criados via merge do PR `chore(release): civm <version>`
+gerado por release-please. Após o merge desse PR, revalidar sem mutação:
 
 ```bash
-gh release view v1.0.0
+gh release view "$(gh release list --repo emersonbusson/civm --limit 1 --json tagName --jq '.[0].tagName')"
+git fetch --tags origin && git tag --list 'v*' --sort=-version:refname | head -3
 git status --short --branch
 gh run list --workflow=ci.yml --branch=main --limit 5
+gh run list --workflow=release.yml --branch=main --limit 3
 ssh gha-ubuntu-2404 'civmctl parity'
 ssh gha-ubuntu-2404 'civmctl health'
 ssh gha-ubuntu-2404 'civmctl doctor --json'

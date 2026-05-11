@@ -446,3 +446,46 @@ brutos aqui.
   - Publicar branch/PR e aguardar CI remoto antes de merge.
   - Instalar o novo binario `/usr/local/bin/civmctl` na VM somente depois do
     merge/release, para expor `civmctl parity` no path canonico.
+
+## 2026-05-11 — release-please-automation
+
+- **Branch:** feat/release-please-automation
+- **Scope:** automacao de releases (tag + GitHub Release + CHANGELOG) por
+  Conventional Commits, fechando o gap "tag manual a cada PR".
+- **Goal:** introduzir release-please-action@v4 em civm com config-file +
+  manifest, runner self-hosted, fallback de token e runbook operacional.
+- **Actions:**
+  - Adicionado `.github/workflows/release.yml` (`push:main`,
+    `[self-hosted, civm]`, `permissions: contents/pull-requests/issues
+    write`, `concurrency: release-<ref>`).
+  - Adicionado `release-please-config.json` (release-type `simple`,
+    changelog sections nomeadas pra `feat/fix/perf/refactor/docs/ci`,
+    `separate-pull-requests=false`, titulo de PR
+    `chore(release): civm ${version}`).
+  - Adicionado `.release-please-manifest.json` em `1.0.0` (alinha com
+    a tag canonica `v1.0.0` ja publicada).
+  - Adicionado `runbooks/RELEASE-AUTOMATION.md` cobrindo fluxo,
+    mapa Conventional Commits -> bump, token PAT vs `GITHUB_TOKEN`,
+    override `release-as`, rollback do workflow.
+  - Sync em `README.md` §Versionamento, `AGENTS.md` §Comandos diarios
+    e §Commits, `CODEX.md` §Escopo de execucao autonoma + nova
+    §Release automation + §Verificacao pos-release.
+- **Local validations:**
+  - `python3 -c yaml.safe_load` em `release.yml` e `ci.yml` passou.
+  - `python3 -c json.load` em `release-please-config.json` e
+    `.release-please-manifest.json` passou.
+  - `go vet ./...` passou (sem mudancas em Go).
+  - `go build ./...` passou.
+  - `go test -race -count=1 ./...` passou em 16 pacotes.
+- **Commits:** a criar nesta sessao (`feat: add release-please
+  automation`).
+- **Open items:**
+  - Apos merge, primeiro release-please rodara em `main` e abrira
+    `chore(release): civm 1.0.1` (porque `4a1f590` foi `fix:`).
+  - Opcional: configurar secret `RELEASE_PLEASE_TOKEN` (PAT classico
+    com escopos `repo`+`workflow`) pra que `ci.yml` rode nos PRs de
+    release; sem PAT, `GITHUB_TOKEN` funciona mas PRs nao disparam CI.
+  - Verificar Settings > Actions > Workflow permissions tem "Read and
+    write permissions" pra release-please conseguir abrir PR/tag.
+- **Next step:** publicar branch + abrir issue + PR; mergear depois
+  de CI verde; humano configura PAT opcional quando for conveniente.

@@ -1,0 +1,34 @@
+name: Release
+
+# Dispara em cada push para main. release-please mantem um PR aberto
+# com bump de versao + CHANGELOG calculados a partir de Conventional
+# Commits desde a ultima tag. Mergear o PR cria a tag + release.
+#
+# Doc: runbooks/RELEASE-AUTOMATION.md
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: [self-hosted, civm]
+    steps:
+      - name: Run release-please
+        uses: googleapis/release-please-action@v4
+        with:
+          # PAT em RELEASE_PLEASE_TOKEN dispara CI nos PRs gerados (GITHUB_TOKEN nao).
+          # Fallback para GITHUB_TOKEN se PAT nao estiver configurada.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
