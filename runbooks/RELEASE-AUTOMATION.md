@@ -15,11 +15,16 @@ Status: ativo desde 2026-05-11. Mantido em `.github/workflows/release.yml`
    - `docs:`, `chore:`, `test:`, `style:`, `build:` -> sem bump
    - `ci:`, `refactor:`, `perf:` -> sem bump (entram so no CHANGELOG)
 3. Se ha pelo menos 1 commit bumpavel, abre/atualiza um PR
-   `chore(release): civm <version>` com:
+   `chore: release civm v<X.Y.Z>` com:
    - `.release-please-manifest.json` bumpado.
    - `CHANGELOG.md` regerado com as secoes configuradas.
 4. Mergear esse PR cria a tag `v<version>` e publica o GitHub Release
    automaticamente. release-please nao escreve em `main` fora desse PR.
+
+O repo usa manifest mode com `separate-pull-requests=false`; por isso o
+titulo do PR agrupado e controlado por `group-pull-request-title-pattern`.
+`pull-request-title-pattern` fica igual para manter parsing consistente de
+PRs individuais caso a estrategia mude no futuro.
 
 ## Anchor de bootstrap (`last-release-sha`)
 

@@ -75,7 +75,7 @@ civmctl version-pins
 civmctl billing-status --repo=owner/repo
 
 # Releases (automatizado via release-please)
-gh pr list --repo emersonbusson/civm --search "in:title release-please"
+gh pr list --repo emersonbusson/civm --label "autorelease: pending"
 gh release list --repo emersonbusson/civm --limit 5
 git tag --list 'v*' --sort=-version:refname
 ```
@@ -91,6 +91,7 @@ Commits **não-triviais** (`feat`, `fix`, `refactor`, `perf`) DEVEM ter
 Types e bump correspondente (release-please): `feat` → minor, `fix` →
 patch, `feat!:`/`BREAKING CHANGE:` → major. `docs`/`chore`/`test`/`build`/
 `style` não bumpam; `ci`/`refactor`/`perf` entram no CHANGELOG sem bump.
+PRs de release usam o título `chore: release civm v<X.Y.Z>`.
 Detalhes em `runbooks/RELEASE-AUTOMATION.md`.
 
 ## Pull Requests

@@ -74,9 +74,11 @@ pin, não prosseguir por confiança em HTTPS.
 `release-please` (`.github/workflows/release.yml` +
 `release-please-config.json` + `.release-please-manifest.json`) abre e
 mantem um PR de release em `main` a cada push, calculando bump por
-Conventional Commits. O agente NAO faz tag manual nem `gh release create`
-fora desse fluxo — qualquer release passa pelo PR de release, que e
-mergeado por humano. Detalhes em `runbooks/RELEASE-AUTOMATION.md`.
+Conventional Commits. O PR agrupado usa o título
+`chore: release civm v<X.Y.Z>`. O agente NAO faz tag manual nem
+`gh release create` fora desse fluxo — qualquer release passa pelo PR de
+release, que e mergeado por humano. Detalhes em
+`runbooks/RELEASE-AUTOMATION.md`.
 
 Quando os artefatos `release-please-*.json` ou `release.yml` mudarem,
 sincronizar `README.md` §"Versionamento" e `AGENTS.md` §"Commits" no
@@ -99,8 +101,9 @@ Sem resposta no ponto de pausa, **não continuar** — aguardar.
 
 ## Verificação pós-release
 
-Releases sao criados via merge do PR `chore(release): civm <version>`
-gerado por release-please. Após o merge desse PR, revalidar sem mutação:
+Releases sao criados via merge do PR
+`chore: release civm v<X.Y.Z>` gerado por release-please. Após o
+merge desse PR, revalidar sem mutação:
 
 ```bash
 gh release view "$(gh release list --repo emersonbusson/civm --limit 1 --json tagName --jq '.[0].tagName')"

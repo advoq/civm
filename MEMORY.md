@@ -489,3 +489,69 @@ brutos aqui.
     write permissions" pra release-please conseguir abrir PR/tag.
 - **Next step:** publicar branch + abrir issue + PR; mergear depois
   de CI verde; humano configura PAT opcional quando for conveniente.
+
+## 2026-05-11 — post-v1.1.1-vm-republish-and-audit
+
+- **Branch:** main
+- **Scope:** republish operacional do binario `civmctl` na VM,
+  auditoria GitHub/release/runner e ajuste local da config
+  release-please.
+- **Goal:** fechar os follow-ups pos-`v1.1.1`: publicar o binario
+  canonico na VM, verificar `RELEASE_PLEASE_TOKEN` e corrigir o titulo
+  cosmetico do PR de release.
+- **Actions:**
+  - Confirmado remoto `emersonbusson/civm`: `main` em `01fd34b`, release
+    `v1.1.1` publicado como Latest, `0` PRs abertos e `0` issues abertas.
+  - Gerado binario `linux/amd64` a partir da tag `v1.1.1` em worktree
+    temporario e instalado na VM `gha-ubuntu-2404` em
+    `/usr/local/bin/civmctl`.
+  - VM passou a reportar `/usr/local/bin/civmctl` com sha256
+    `57d63dba61d301aa117b7a7c868c999ea5734822b00aead74f18dcaca395106e`.
+  - `gh secret list --app actions` nao mostrou `RELEASE_PLEASE_TOKEN`;
+    variaveis locais `RELEASE_PLEASE_TOKEN`, `GH_TOKEN` e `GITHUB_TOKEN`
+    tambem estavam unset. Nenhum secret foi criado sem PAT fornecido.
+  - Adicionado `group-pull-request-title-pattern` em
+    `release-please-config.json` para manifest mode agrupado
+    (`separate-pull-requests=false`), mantendo
+    `pull-request-title-pattern` para parsing/PR individual.
+  - Sincronizados `README.md`, `AGENTS.md`, `CODEX.md` e
+    `runbooks/RELEASE-AUTOMATION.md` com o titulo esperado
+    `chore: release civm v<X.Y.Z>` e busca de PR por label
+    `autorelease: pending`.
+  - Auditoria VM encontrou `civm-compexhub` offline/inactive porque o
+    runner perdeu registro no GitHub (`The signature is not valid` /
+    `runner registration has been deleted from the server`).
+  - Reconfigurado `civm-compexhub` com token efemero, preservando `_work`:
+    `svc.sh stop/uninstall`, `config.sh remove`, novo `config.sh` com
+    label `civm`, `svc.sh install/start`.
+- **Validations:**
+  - `go vet ./...` passou.
+  - `go build ./...` passou.
+  - `go test -race -count=1 ./...` passou.
+  - `go test -count=1 -cover ./internal/...` passou; todos os pacotes
+    `internal/**` ficaram acima de 80%.
+  - `golangci-lint run ./... --timeout=5m` passou com `0 issues`.
+  - `govulncheck ./...` passou com `No vulnerabilities found`.
+  - `python3 -m json.tool release-please-config.json` passou.
+  - `git diff --check` passou.
+  - VM `civmctl parity` retornou OK; Docker/Compose `ahead`,
+    Python/Git `compatible`, demais ferramentas principais in-sync.
+  - VM `civmctl health` retornou exit `1` apenas pelo warning conhecido
+    `LAST cleanup timer nunca rodou`; timers cleanup/disk/reverse
+    enabled+active.
+  - VM `doctor --json` passou a listar os 4 services canonicos active:
+    `civm-self`, `civm-compexhub`, `civm-vitae`, `civm-advoq`.
+  - GitHub API confirmou `emersonbusson/compexhub` runner
+    `civm-compexhub` online com novo id `23` e label `civm`.
+  - Run compexhub `25674544806`, destravado apos reconfig, fechou
+    `success`: `CI Router`, `Invariants`, `Lint`, `Test`,
+    `Contracts drift check`, `Build` e aggregate
+    `Gates (typecheck, test, build, invariants)` passaram.
+- **Commits:** este commit de fechamento local (`fix: set grouped release PR title`).
+- **Open items:**
+  - Configurar `RELEASE_PLEASE_TOKEN` ainda requer PAT humano com escopos
+    `repo` + `workflow`; sem token fornecido, nao ha acao segura do agente.
+  - Mudancas locais de config/docs do release-please ainda nao foram
+    publicadas.
+- **Next step:** humano decide se fornece PAT para `RELEASE_PLEASE_TOKEN`
+  e se quer push/PR das mudancas locais.
