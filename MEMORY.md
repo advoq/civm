@@ -555,3 +555,30 @@ brutos aqui.
     publicadas.
 - **Next step:** humano decide se fornece PAT para `RELEASE_PLEASE_TOKEN`
   e se quer push/PR das mudancas locais.
+
+## 2026-05-11 — release-v1.1.2-component-title-repair
+
+- **Branch:** fix/release-please-component-title
+- **Scope:** fechamento pos-merge do PR `#16`, limpeza de branches
+  mergeadas e reparo do parsing de titulo do release-please.
+- **Actions:**
+  - Confirmado PR `#16` mergeado em `2026-05-11T18:15:31Z` com merge
+    commit `fa9875f71ce13eb135e417efa484114af030a840`.
+  - `main` local atualizado por fast-forward para `fa9875f`.
+  - Branch remota mergeada `release-please--branches--main` apagada
+    apos confirmar que nao havia PR aberto usando o head ref.
+  - Verificacao pos-release mostrou `CI` e `Release` verdes no push de
+    `main`, mas `v1.1.2` ainda nao foi publicado.
+  - Log do workflow `Release` mostrou `PR component: undefined does not
+    match configured component: civm` e abort
+    `There are untagged, merged release PRs outstanding`.
+  - Ajustado `release-please-config.json` para manter `${component}` em
+    `pull-request-title-pattern` e `group-pull-request-title-pattern`,
+    preservando o titulo renderizado `chore: release civm v<X.Y.Z>`.
+  - Sincronizados `README.md`, `AGENTS.md`, `CODEX.md` e
+    `runbooks/RELEASE-AUTOMATION.md` com a regra de nao trocar
+    `${component}` por `civm` literal.
+- **Open items:**
+  - Publicar branch/PR, aguardar CI e merge humano.
+  - Apos merge, o workflow `Release` deve criar `v1.1.2`; se abrir um
+    novo PR de release para este fix, tratar como ciclo normal.
