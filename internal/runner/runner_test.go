@@ -17,6 +17,9 @@ func validOpts() AddOptions {
 	o.Short = "cmpx"
 	o.BaseDir = "/home/emdev"
 	o.RunAsUser = "emdev"
+	o.SHA256FileFn = func(string) (string, error) {
+		return o.RunnerSHA256, nil
+	}
 	return o
 }
 
@@ -34,6 +37,7 @@ func TestValidate_AllRequiredFieldsChecked(t *testing.T) {
 		{"bad label", func(o *AddOptions) { o.Label = "civm, bad label" }},
 		{"no runner-version", func(o *AddOptions) { o.RunnerVersion = "" }},
 		{"bad runner-version", func(o *AddOptions) { o.RunnerVersion = "2.334" }},
+		{"no runner-sha256", func(o *AddOptions) { o.RunnerSHA256 = "" }},
 		{"no base-dir", func(o *AddOptions) { o.BaseDir = "" }},
 		{"base-dir not clean", func(o *AddOptions) { o.BaseDir = "/home/emdev/.." }},
 		{"no run-as", func(o *AddOptions) { o.RunAsUser = "" }},
@@ -73,8 +77,8 @@ func TestAdd_DryRun_NoExecute(t *testing.T) {
 	if called {
 		t.Errorf("RunFn chamado em dry-run")
 	}
-	if len(results) != 6 {
-		t.Errorf("len(results) = %d, want 6 steps", len(results))
+	if len(results) != 7 {
+		t.Errorf("len(results) = %d, want 7 steps", len(results))
 	}
 	for _, r := range results {
 		if r.Executed {
@@ -112,7 +116,7 @@ func TestAdd_Execute_RunsAllSteps(t *testing.T) {
 		}
 	}
 	if calls < 6 {
-		t.Errorf("calls = %d, esperava ao menos 6 (1+ por step)", calls)
+		t.Errorf("calls = %d, esperava ao menos 6 comandos externos", calls)
 	}
 	if gotShell {
 		t.Errorf("Add nao deveria usar sh -c")
@@ -373,7 +377,7 @@ func TestRemove_StopErrorBlocksDestructiveSteps(t *testing.T) {
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		key := name + " " + strings.Join(args, " ")
 		calls = append(calls, key)
-		if strings.HasSuffix(name, "/svc.sh") && len(args) > 0 && args[0] == "stop" {
+		if name == "sudo" && len(args) > 1 && strings.HasSuffix(args[0], "/svc.sh") && args[1] == "stop" {
 			return nil, errors.New("stop falhou")
 		}
 		return nil, nil

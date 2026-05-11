@@ -44,6 +44,7 @@ func runRunnerUpgrade(args []string) int {
 	unit := fs.String("unit", "", "unit name explícito (sobreescreve --short)")
 	dir := fs.String("dir", "", "diretorio do runner explicito (override do guess BaseDir/actions-runner-Short)")
 	newVersion := fs.String("new-version", "", "nova versao (ex: 2.335.0)")
+	runnerSHA256 := fs.String("runner-sha256", "", "sha256 do tarball actions-runner-linux-x64 (default: pin conhecido)")
 	baseDir := fs.String("base-dir", "", "base dir (default: $HOME)")
 	verifySec := fs.Int("verify-delay", civm.DefaultUpgradeVerifySeconds, "segundos entre start e is-active check")
 	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")
@@ -60,6 +61,7 @@ func runRunnerUpgrade(args []string) int {
 	opts.Unit = *unit
 	opts.Dir = *dir
 	opts.NewVersion = *newVersion
+	opts.RunnerSHA256 = *runnerSHA256
 	opts.BaseDir = *baseDir
 	opts.VerifyDelay = time.Duration(*verifySec) * time.Second
 	opts.Execute = *execute
@@ -128,6 +130,7 @@ func runRunnerAdd(args []string) int {
 	short := fs.String("short", "", "suffix curto do diretorio (ex: cmpx, vitae)")
 	label := fs.String("label", "civm", "labels CSV")
 	runnerVersion := fs.String("runner-version", civm.DefaultRunnerVersion, "versao do actions/runner")
+	runnerSHA256 := fs.String("runner-sha256", "", "sha256 do tarball actions-runner-linux-x64 (default: pin conhecido)")
 	baseDir := fs.String("base-dir", "", "base dir (default: \\$HOME do user atual)")
 	runAs := fs.String("run-as", "", "user que vai rodar o service (default: user atual)")
 	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")
@@ -148,6 +151,7 @@ func runRunnerAdd(args []string) int {
 	opts.Short = *short
 	opts.Label = *label
 	opts.RunnerVersion = *runnerVersion
+	opts.RunnerSHA256 = *runnerSHA256
 	opts.BaseDir = *baseDir
 	opts.RunAsUser = *runAs
 	opts.Execute = *execute

@@ -2,7 +2,11 @@
 package civm
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -14,7 +18,15 @@ const (
 	DefaultTmpDir         = "/tmp"
 	DefaultSystemdDir     = "/etc/systemd/system"
 	DefaultUnitsSourceDir = "/opt/civm/deploy/systemd"
+	DefaultCivmctlPath    = "/usr/local/bin/civmctl"
 	DefaultRunnerVersion  = "2.334.0"
+
+	DefaultGoLinuxAMD64SHA256      = "2b2cfc7148493da5e73981bffbf3353af381d5f93e789c82c79aff64962eb556"
+	DefaultRunnerLinuxX64SHA256    = "048024cd2c848eb6f14d5646d56c13a4def2ae7ee3ad12122bee960c56f3d271"
+	DefaultNodeSourceSetup24SHA256 = "6e3d580f5bd7ccf2aa1e8df8d35c60d78e873c3ff8beb282c9bebd914904ad72"
+	DefaultYQLinuxAMD64SHA256      = "75d893a0d5940d1019cb7cdc60001d9e876623852c31cfc6267047bc31149fa9"
+	DefaultDockerGPGFingerprint    = "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+	DefaultGitHubCLIGPGFingerprint = "2C6106201985B60E6C7AC87323F3D4EA75716059"
 
 	DefaultCleanupTimeoutMinutes      = 30
 	DefaultRunnerTimeoutMinutes       = 10
@@ -26,6 +38,21 @@ const (
 	DefaultReverseMaxAgeHours         = 2
 	DefaultRestartVerifySeconds       = 3
 	DefaultUpgradeVerifySeconds       = 5
+)
+
+var (
+	goLinuxAMD64SHA256 = map[string]string{
+		"1.26.3": DefaultGoLinuxAMD64SHA256,
+	}
+	runnerLinuxX64SHA256 = map[string]string{
+		DefaultRunnerVersion: DefaultRunnerLinuxX64SHA256,
+	}
+	nodeSourceSetupSHA256 = map[string]string{
+		"24": DefaultNodeSourceSetup24SHA256,
+	}
+	yqLinuxAMD64SHA256 = map[string]string{
+		"4.52.5": DefaultYQLinuxAMD64SHA256,
+	}
 )
 
 var (
@@ -115,4 +142,71 @@ func CleanDir(path, field string) (string, error) {
 		return "", fmt.Errorf("%s nao pode ser diretorio atual", field)
 	}
 	return clean, nil
+}
+
+func GoLinuxAMD64SHA256(version string) (string, bool) {
+	value, ok := goLinuxAMD64SHA256[version]
+	return value, ok
+}
+
+func RunnerLinuxX64SHA256(version string) (string, bool) {
+	value, ok := runnerLinuxX64SHA256[version]
+	return value, ok
+}
+
+func NodeSourceSetupSHA256(major string) (string, bool) {
+	value, ok := nodeSourceSetupSHA256[major]
+	return value, ok
+}
+
+func YQLinuxAMD64SHA256(version string) (string, bool) {
+	value, ok := yqLinuxAMD64SHA256[version]
+	return value, ok
+}
+
+func FileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func VerifySHA256(actual, expected, label string) error {
+	actual = strings.ToLower(strings.TrimSpace(actual))
+	expected = strings.ToLower(strings.TrimSpace(expected))
+	if expected == "" {
+		return fmt.Errorf("sha256 esperado ausente para %s", label)
+	}
+	if actual != expected {
+		return fmt.Errorf("sha256 mismatch for %s: got %s want %s", label, actual, expected)
+	}
+	return nil
+}
+
+func VerifyGPGFingerprint(output, expected, label string) error {
+	actual := normalizeFingerprint(output)
+	expected = normalizeFingerprint(expected)
+	if expected == "" {
+		return fmt.Errorf("fingerprint esperado ausente para %s", label)
+	}
+	if !strings.Contains(actual, expected) {
+		return fmt.Errorf("fingerprint mismatch for %s: got output without %s", label, expected)
+	}
+	return nil
+}
+
+func normalizeFingerprint(value string) string {
+	value = strings.ToUpper(value)
+	return strings.Map(func(r rune) rune {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return -1
+	}, value)
 }

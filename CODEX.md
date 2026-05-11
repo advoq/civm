@@ -58,7 +58,14 @@ disco e confirmar host ocioso.
 `civmctl runner restart/remove/upgrade --execute` usa a mesma checagem
 compartilhada (`civmctl idle-check`). Mutação de runner deve abortar antes de
 `systemctl restart/stop`, `config.sh remove`, `rm -rf` ou upgrade de tarball
-quando o host estiver ocupado ou desconhecido.
+quando o host estiver ocupado ou desconhecido. Em `runner remove`, falha real
+em `svc.sh stop` ou `svc.sh uninstall` também deve parar o fluxo antes de
+desregistrar ou remover diretório.
+
+Downloads executados como root devem ter checksum pinado no código antes de
+qualquer extração, instalação ou execução de script. Se o upstream publicar
+nova versão sem checksum pinado, o comando deve falhar pedindo atualização do
+pin, não prosseguir por confiança em HTTPS.
 
 ## Pause rules (modo autônomo)
 
@@ -83,6 +90,7 @@ Após publicar tag/release, revalidar sem mutação:
 gh release view v1.0.0
 git status --short --branch
 gh run list --workflow=ci.yml --branch=main --limit 5
+ssh gha-ubuntu-2404 'civmctl parity'
 ssh gha-ubuntu-2404 'civmctl health'
 ssh gha-ubuntu-2404 'civmctl doctor --json'
 ssh gha-ubuntu-2404 'civmctl idle-check'

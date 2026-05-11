@@ -11,7 +11,7 @@ projetos do mesmo dono (compexhub, vitae, advoq, etc).
   na VM executa **exatamente o .yml do peer repo**, igual ubuntu-latest
   faria.
 - **Provisionamento automatico via `civmctl`** (Go binary deste repo):
-  paridade com Ubuntu 24.04 LTS, Go 1.22-1.25, Node 20/22/24, Python
+  paridade com Ubuntu 24.04 LTS, Go 1.22-1.26, Node 20/22/24, Python
   3.10-3.14, Docker 28.0.4, gh 2.89.0. Bootstrap idempotente.
 - Distribui templates de workflow + runbooks operacionais + disciplinas
   metodológicas + regras granulares que peers podem **copiar** para
@@ -40,6 +40,7 @@ sudo civmctl bootstrap --execute
 sudo cp deploy/systemd/civmctl-*.service deploy/systemd/civmctl-*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-reverse-watchdog.timer
+civmctl parity
 civmctl health
 ```
 
@@ -50,13 +51,14 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | Comando | Função |
 |---|---|
 | `civmctl version-pins` | imprime versoes alvo (paridade com `ubuntu-latest`) |
+| `civmctl parity [--json]` | valida ferramentas instaladas na VM contra os pins autoritativos |
 | `civmctl bootstrap [--execute]` | provisiona VM (default: dry-run) |
 | `civmctl cleanup [--execute]` | limpa Docker, /tmp, artefatos antigos de _work e apt cache; preserva `_work/_tool` e `_work/_actions`; em `--execute` aborta se detectar job/build ativo |
 | `civmctl health` | health check (disk, mem, runners, ultimo cleanup) |
 | `civmctl doctor [--json]` | visão read-only consolidada: host, timers, systemd runners e GitHub runners |
 | `civmctl idle-check [--json]` | detector read-only de ociosidade: exit `0=idle`, `1=busy`, `2=unknown` |
 | `civmctl runner add` | registra runner GitHub Actions self-hosted (mkdir + curl + tar + config.sh + svc.sh install + start) |
-| `civmctl runner remove` | desregistra runner (svc.sh stop + uninstall + config.sh remove + rm -rf dir) |
+| `civmctl runner remove` | desregistra runner; aborta antes de `config.sh remove`/`rm -rf` se stop/uninstall falhar |
 | `civmctl drift` | compara pins locais vs upstream actions/runner-images (HTTP fetch) |
 | `civmctl billing-status` | detector heuristico de billing-block (zero-PAT, GITHUB_TOKEN suficiente) |
 | `civmctl runner list` | lista runners systemd na VM (parsed; suporta `--json`) |
@@ -82,6 +84,8 @@ civmctl runner add --repo=<owner>/<repo> --token=$TOKEN --short=<short> --execut
 Substitui sequencia manual de mkdir + curl + tar + config.sh + svc.sh.
 Token mascarado nos logs (mostrado como `***`). Detalhes em
 `runbooks/MULTI-PROJECT-RUNNER.md` §"Pattern: 1 runner por peer-repo".
+Downloads executados como root têm SHA256 pinado no código antes de
+extração, instalação ou execução de script.
 
 PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 
@@ -193,6 +197,7 @@ Depois de publicar tag/release, confirmar o estado sem executar mutação:
 gh release view v1.0.0
 git status --short --branch
 gh run list --workflow=ci.yml --branch=main --limit 5
+ssh gha-ubuntu-2404 'civmctl parity'
 ssh gha-ubuntu-2404 'civmctl health'
 ssh gha-ubuntu-2404 'civmctl doctor --json'
 ssh gha-ubuntu-2404 'civmctl idle-check'

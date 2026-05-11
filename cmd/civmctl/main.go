@@ -19,6 +19,8 @@ func main() {
 	switch cmd {
 	case "version-pins":
 		os.Exit(runVersionPins(args))
+	case "parity":
+		os.Exit(runParity(args))
 	case "health":
 		os.Exit(runHealth(args))
 	case "doctor":
@@ -66,6 +68,7 @@ USO
 
 COMANDOS
   version-pins    Imprime as versoes alvo (paridade com ubuntu-latest)
+  parity          Valida ferramentas instaladas vs pins ubuntu-latest
   bootstrap       Provisiona Ubuntu 24.04 com tools alvo (idempotente)
   cleanup         Limpa Docker, /tmp, _work, apt cache (cron diario)
   health          Health check (disk, mem, runners, ultimo cleanup)
@@ -83,6 +86,7 @@ COMANDOS
 
 EXEMPLOS
   civmctl version-pins
+  civmctl parity
   civmctl health
   civmctl doctor --json
   civmctl cleanup --dry-run

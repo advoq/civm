@@ -9,6 +9,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/emersonbusson/civm/internal/civm"
@@ -22,10 +23,12 @@ type AddOptions struct {
 	Short         string // suffix do diretorio: ~/actions-runner-<short>
 	Label         string // CSV de labels (default: "civm")
 	RunnerVersion string // ex: "2.334.0"
+	RunnerSHA256  string // sha256 do actions-runner-linux-x64 tarball
 	BaseDir       string // ex: "/home/emdev"
 	RunAsUser     string // ex: "emdev" (passa para svc.sh install)
 	Execute       bool   // false = dry-run; true = aplica
 	RunFn         func(ctx context.Context, name string, args ...string) ([]byte, error)
+	SHA256FileFn  func(path string) (string, error)
 }
 
 // DefaultOptions returns sane production defaults.
@@ -38,8 +41,10 @@ func DefaultOptions() AddOptions {
 	return AddOptions{
 		Label:         "civm",
 		RunnerVersion: civm.DefaultRunnerVersion,
+		RunnerSHA256:  civm.DefaultRunnerLinuxX64SHA256,
 		Execute:       false,
 		RunFn:         defaultRun,
+		SHA256FileFn:  civm.FileSHA256,
 	}
 }
 
@@ -62,11 +67,22 @@ type Result struct {
 
 // Add runs the full install flow (or simulates it when Execute=false).
 func Add(ctx context.Context, opts AddOptions) ([]Result, error) {
+	if opts.RunnerVersion != civm.DefaultRunnerVersion && opts.RunnerSHA256 == civm.DefaultRunnerLinuxX64SHA256 {
+		opts.RunnerSHA256 = ""
+	}
+	if opts.RunnerSHA256 == "" {
+		if expected, ok := civm.RunnerLinuxX64SHA256(opts.RunnerVersion); ok {
+			opts.RunnerSHA256 = expected
+		}
+	}
 	if err := validateOptions(opts); err != nil {
 		return nil, err
 	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
+	}
+	if opts.SHA256FileFn == nil {
+		opts.SHA256FileFn = civm.FileSHA256
 	}
 	dir := filepath.Join(opts.BaseDir, "actions-runner-"+opts.Short)
 	tarball := fmt.Sprintf("https://github.com/actions/runner/releases/download/v%s/actions-runner-linux-x64-%s.tar.gz",
@@ -92,6 +108,18 @@ func Add(ctx context.Context, opts AddOptions) ([]Result, error) {
 			Apply: func(ctx context.Context) error {
 				_, err := opts.RunFn(ctx, "curl", "-fsSL", "-o", dir+"/runner.tar.gz", tarball)
 				return err
+			},
+		},
+		{
+			Name:        "verify_runner_sha256",
+			Description: "Verifica SHA256 do actions/runner v" + opts.RunnerVersion,
+			WouldDo:     "sha256sum " + dir + "/runner.tar.gz",
+			Apply: func(ctx context.Context) error {
+				actual, err := opts.SHA256FileFn(dir + "/runner.tar.gz")
+				if err != nil {
+					return fmt.Errorf("sha256 %s/runner.tar.gz: %w", dir, err)
+				}
+				return civm.VerifySHA256(actual, opts.RunnerSHA256, "actions/runner v"+opts.RunnerVersion)
 			},
 		},
 		{
@@ -170,6 +198,9 @@ func validateOptions(opts AddOptions) error {
 	if err := civm.ValidateSemver(opts.RunnerVersion, "--runner-version"); err != nil {
 		return err
 	}
+	if strings.TrimSpace(opts.RunnerSHA256) == "" {
+		return fmt.Errorf("--runner-sha256 obrigatorio para actions/runner v%s", opts.RunnerVersion)
+	}
 	cleanBase, err := civm.CleanDir(opts.BaseDir, "--base-dir")
 	if err != nil {
 		return err
@@ -238,9 +269,8 @@ func DefaultRemoveOptions() RemoveOptions {
 	}
 }
 
-// Remove undoes Add. All steps are idempotent (best-effort): missing dirs
-// are skip, services already stopped are skip. Designed to be safe to
-// re-run in cleanup automation.
+// Remove undoes Add. Service stop/uninstall fail closed so civmctl does not
+// remove a runner directory while systemd may still have an active unit.
 func Remove(ctx context.Context, opts RemoveOptions) ([]Result, error) {
 	if err := validateRemoveOptions(opts); err != nil {
 		return nil, err
@@ -265,20 +295,19 @@ func Remove(ctx context.Context, opts RemoveOptions) ([]Result, error) {
 		{
 			Name:        "stop_service",
 			Description: "sudo svc.sh stop",
-			WouldDo:     fmt.Sprintf("(cd %s && sudo ./svc.sh stop) || true (idempotente)", dir),
+			WouldDo:     fmt.Sprintf("(cd %s && sudo ./svc.sh stop)", dir),
 			Apply: func(ctx context.Context) error {
-				// best-effort; ignore error if not installed
-				_, _ = opts.RunFn(ctx, "sudo", filepath.Join(dir, "svc.sh"), "stop")
-				return nil
+				_, err := opts.RunFn(ctx, "sudo", filepath.Join(dir, "svc.sh"), "stop")
+				return err
 			},
 		},
 		{
 			Name:        "uninstall_service",
 			Description: "sudo svc.sh uninstall",
-			WouldDo:     fmt.Sprintf("(cd %s && sudo ./svc.sh uninstall) || true", dir),
+			WouldDo:     fmt.Sprintf("(cd %s && sudo ./svc.sh uninstall)", dir),
 			Apply: func(ctx context.Context) error {
-				_, _ = opts.RunFn(ctx, "sudo", filepath.Join(dir, "svc.sh"), "uninstall")
-				return nil
+				_, err := opts.RunFn(ctx, "sudo", filepath.Join(dir, "svc.sh"), "uninstall")
+				return err
 			},
 		},
 		{

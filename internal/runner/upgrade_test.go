@@ -15,6 +15,7 @@ func validUpgradeOpts() UpgradeOptions {
 	return UpgradeOptions{
 		Short:          "civm-1",
 		NewVersion:     "2.335.0",
+		RunnerSHA256:   "valid-sha",
 		BaseDir:        "/home/emdev",
 		Execute:        false,
 		VerifyDelay:    0,
@@ -28,6 +29,9 @@ func validUpgradeOpts() UpgradeOptions {
 				return []byte(fakeListOutput), nil
 			}
 			return nil, nil
+		},
+		SHA256FileFn: func(string) (string, error) {
+			return "valid-sha", nil
 		},
 		SleepFn: func(time.Duration) {},
 	}

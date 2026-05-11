@@ -342,13 +342,6 @@ func ensureIdle(ctx context.Context, opts Options) error {
 	return idle.Ensure(ctx, idleOpts, "cleanup")
 }
 
-func assertIdle(ctx context.Context, activityFn func(context.Context) ([]Activity, error)) error {
-	idleOpts := idle.DefaultOptions()
-	idleOpts.ActivityFn = activityFn
-	idleOpts.ProbeDelay = 0
-	return idle.Ensure(ctx, idleOpts, "cleanup")
-}
-
 func formatActivities(activities []Activity) string {
 	return idle.FormatActivities(activities)
 }

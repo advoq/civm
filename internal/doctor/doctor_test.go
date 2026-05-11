@@ -131,11 +131,11 @@ func TestListGitHubRunnersErrors(t *testing.T) {
 
 func TestClassifyRepoMissingAndUnknown(t *testing.T) {
 	t.Parallel()
-	missing := ClassifyRepo("emersonbusson/advoq", nil, nil)
+	missing := ClassifyRepo("advoq/advoq", nil, nil)
 	if missing.Severity != SeverityWarning || missing.Runners[0].Classification != "missing" {
 		t.Fatalf("missing = %+v", missing)
 	}
-	unknown := ClassifyRepo("emersonbusson/advoq", nil, errors.New("gh auth"))
+	unknown := ClassifyRepo("advoq/advoq", nil, errors.New("gh auth"))
 	if unknown.Severity != SeverityWarning || unknown.Runners[0].Classification != "unknown" {
 		t.Fatalf("unknown = %+v", unknown)
 	}

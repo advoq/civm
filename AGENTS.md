@@ -63,6 +63,7 @@ civmctl cleanup --dry-run
 civmctl cleanup --execute
 
 # Health check
+civmctl parity
 civmctl health
 civmctl doctor --json
 civmctl idle-check
@@ -118,7 +119,9 @@ civm **detecta**, nunca corrige automaticamente. **Nunca**:
   todo job.
 - Não usar `civmctl runner restart/remove/upgrade --execute` durante job em
   curso. Esses comandos agora também abortam fail-closed se `idle-check`
-  encontrar `Runner.Worker`, `_work` ou build Docker ativo.
+  encontrar `Runner.Worker`, `_work` ou build Docker ativo. `runner remove`
+  também aborta antes de `config.sh remove` e `rm -rf` se `svc.sh stop` ou
+  `svc.sh uninstall` falhar.
 - Não usar `civmctl runner add` sem token GitHub válido (peer repo precisa
   registrar seu próprio runner).
 
