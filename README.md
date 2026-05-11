@@ -185,9 +185,10 @@ Commits em `main`:
 - `ci:`, `refactor:`, `perf:` entram no CHANGELOG sem bump (configurável).
 
 Workflow `.github/workflows/release.yml` mantém um PR de release aberto
-com `.release-please-manifest.json` bumpado + `CHANGELOG.md` regerado.
-Mergear esse PR cria a tag e publica o release. Detalhes operacionais
-em `runbooks/RELEASE-AUTOMATION.md` (config, token PAT vs GITHUB_TOKEN,
+com título `chore: release civm v<X.Y.Z>`,
+`.release-please-manifest.json` bumpado e `CHANGELOG.md` regerado.
+Mergear esse PR cria a tag e publica o release. Detalhes operacionais em
+`runbooks/RELEASE-AUTOMATION.md` (config, token PAT vs GITHUB_TOKEN,
 override `release-as`, rollback).
 
 Peer repos podem travar em versão se quiserem (ex.: `git checkout v1.2.0`
