@@ -25,10 +25,13 @@ O repo usa manifest mode com `separate-pull-requests=false`; por isso o
 titulo do PR agrupado e controlado por `group-pull-request-title-pattern`.
 `pull-request-title-pattern` fica igual para manter parsing consistente de
 PRs individuais caso a estrategia mude no futuro.
-Os dois patterns devem usar `${component}` e nao `civm` literal. O titulo
-renderizado continua `chore: release civm v<X.Y.Z>`, mas o placeholder
-permite ao release-please associar o PR mergeado ao componente `civm` e
-criar a tag.
+Os dois patterns usam `civm` como texto cosmetico no titulo, nao como
+`${component}` nem como `package-name`. Em manifest mode agrupado com
+`separate-pull-requests=false`, a branch gerada e
+`release-please--branches--main`, sem componente. Se a config definir
+`package-name: civm`, o release-please espera componente na branch e
+aborta com `PR component: undefined does not match configured component:
+civm` antes de criar a tag.
 
 ## Anchor de bootstrap (`last-release-sha`)
 

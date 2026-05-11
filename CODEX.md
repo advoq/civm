@@ -75,9 +75,10 @@ pin, não prosseguir por confiança em HTTPS.
 `release-please-config.json` + `.release-please-manifest.json`) abre e
 mantem um PR de release em `main` a cada push, calculando bump por
 Conventional Commits. O PR agrupado usa o título
-`chore: release civm v<X.Y.Z>` renderizado via `${component}`. O agente
-NAO faz tag manual nem `gh release create` fora desse fluxo — qualquer
-release passa pelo PR de release, que e mergeado por humano. Detalhes em
+`chore: release civm v<X.Y.Z>`; `civm` e apenas texto cosmetico no
+titulo, nao `package-name`. O agente NAO faz tag manual nem
+`gh release create` fora desse fluxo — qualquer release passa pelo PR de
+release, que e mergeado por humano. Detalhes em
 `runbooks/RELEASE-AUTOMATION.md`.
 
 Quando os artefatos `release-please-*.json` ou `release.yml` mudarem,
