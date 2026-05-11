@@ -21,6 +21,22 @@ Status: ativo desde 2026-05-11. Mantido em `.github/workflows/release.yml`
 4. Mergear esse PR cria a tag `v<version>` e publica o GitHub Release
    automaticamente. release-please nao escreve em `main` fora desse PR.
 
+## Anchor de bootstrap (`last-release-sha`)
+
+`release-please-config.json` define
+`packages[\".\"].last-release-sha` apontando para o merge commit
+`7d987077...` que carrega a tag `v1.1.0`. Esse anchor existe porque o
+release `v1.0.0` foi criado manualmente antes do release-please ser
+adotado, e por isso nao tem PR `autorelease: tagged` associado. Sem o
+anchor, release-please nao reconhecia `v1.1.0` como seu release e
+abortava com `untagged, merged release PRs outstanding` a cada push.
+
+Quando `v2.0.0` for criado pelo proprio release-please (ciclo limpo),
+o anchor pode ser removido com seguranca; ele so existe para colar o
+gap entre a era manual e a era automatizada. Trocar o SHA do anchor
+exige issue + PR como qualquer outra mudanca de config (sync rule
+nao se aplica pois nao toca docs autoritativos).
+
 ## Conventional Commits cheat-sheet
 
 ```

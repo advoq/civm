@@ -25,7 +25,8 @@
   "packages": {
     ".": {
       "package-name": "civm",
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "last-release-sha": "7d987077c52bd3319789905616074de2185f1546"
     }
   }
 }
