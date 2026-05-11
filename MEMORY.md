@@ -612,3 +612,15 @@ brutos aqui.
   - Publicar branch/PR, aguardar CI e merge humano.
   - Apos merge, revalidar que `v1.1.2` foi criado e que o PR `#16`
     mudou de `autorelease: pending` para `autorelease: tagged`.
+
+### Follow-up no PR #18
+
+- Adicionado guard de regressao em
+  `internal/specs/release_please_config_test.go`:
+  `TestReleasePleaseGroupedModeIsComponentless` e
+  `TestReleasePleaseTitlePatternsParseMergedGroupedPR`.
+- O guard le `release-please-config.json`, bloqueia `package-name` no
+  pacote raiz em manifest grouped mode, valida tags `vX.Y.Z` sem
+  componente e garante parsing do titulo `chore: release civm v1.1.2`.
+- `runbooks/RELEASE-AUTOMATION.md` passou a apontar explicitamente esses
+  testes como cobertura do contrato.
