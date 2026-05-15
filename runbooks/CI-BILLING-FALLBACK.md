@@ -252,11 +252,15 @@ variavel nao agenda `ubuntu-latest`.
 Depois que o plano GitHub aceitar a regra de Environment, rodar:
 
 ```bash
-scripts/configure-paid-ci-environment.sh \
-  --repo advoq/menu-orders \
-  --reviewer-login emersonbusson \
-  --reviewer-login Italo-Nogueira \
-  --enable
+cd /home/emdev/codespace/civm
+
+for repo in advoq/civm advoq/advoq advoq/harmya advoq/menu-orders advoq/barbershop advoq/orador-fluido advoq/salon; do
+  scripts/configure-paid-ci-environment.sh \
+    --repo "$repo" \
+    --reviewer-login emersonbusson \
+    --reviewer-login Italo-Nogueira \
+    --enable
+done
 ```
 
 O script cria/atualiza o Environment `paid-github-hosted-ci` com
@@ -270,6 +274,11 @@ ENABLE_PAID_GITHUB_HOSTED_CI=true
 Se o plano ainda nao permitir required reviewers em repo privado, o
 script falha e nao liga a variavel. Nao criar a variavel manualmente
 antes do Environment protegido existir.
+
+Para repos `emersonbusson/*`, precisa existir outro admin/collaborator
+com acesso ao repo para approval real, ou o repo precisa ser movido
+para a org. Com `prevent_self_review=true`, um repo pessoal em que so
+`emersonbusson` e admin fica sem aprovador independente.
 
 ### Rollback
 
