@@ -41,6 +41,16 @@
 > advoq: `devctl ...`; vitae: script proprio). Camada 2 NAO e'
 > uniforme entre peers — cada um decide.
 >
+> **Camada 3 — CI pago com aprovacao:** quando o plano GitHub permitir
+> `required_reviewers` em Environments de repo privado, o peer pode usar
+> o template `templates/ci-paid-approval.yml.template`: primeiro roda
+> tudo em `[self-hosted, civm]`; se passar e a variavel
+> `ENABLE_PAID_GITHUB_HOSTED_CI=true` estiver ligada, um preflight local
+> verifica se o Environment `paid-github-hosted-ci` exige reviewers e
+> impede self-review. So depois disso o job `ubuntu-latest` entra em
+> estado `Waiting` para aprovacao dos admins. Sem o Environment protegido,
+> o job pago nao e' agendado.
+>
 > **O que este runbook NAO entrega:** rotacao do GITHUB_TOKEN
 > (gerenciado pelo GitHub), provisioning do runner civm (ver
 > [`MULTI-PROJECT-RUNNER.md`](./MULTI-PROJECT-RUNNER.md)).
@@ -208,6 +218,72 @@ Em GitHub Settings > Branches > Branch protection rule de `main`:
 Quando billing falhar, `ci-router` roteia para `civm`, gates rodam
 la, `Gates` aggregator passa verde e merge desbloqueia automaticamente.
 Quando billing voltar, mesmo workflow roteia para `ubuntu-latest`.
+
+## Preparar CI pago com aprovacao dos admins (Camada 3)
+
+Use esta camada quando o objetivo nao e' fallback de billing, mas sim
+economizar minutos: todo PR passa primeiro no self-hosted; se e somente
+se esse gate ficar verde, admins aprovam explicitamente o job pago.
+
+O estado seguro por default e' **desligado**. Workflow preparado mas sem
+variavel nao agenda `ubuntu-latest`.
+
+### Requisitos
+
+1. Repo privado em plano que suporte `required_reviewers` em
+   Environments.
+2. Workflow do peer no padrao `ci-paid-approval.yml.template` ou
+   equivalente:
+   - job `validate-civm` em `[self-hosted, civm]`;
+   - job `paid-ci-preflight` tambem em `[self-hosted, civm]`;
+   - job `paid-validate` em `ubuntu-latest` com:
+
+     ```yaml
+     environment:
+       name: paid-github-hosted-ci
+       deployment: false
+     ```
+
+3. Branch protection exige apenas o aggregator:
+   `Gates (typecheck, test, build, invariants)`.
+
+### Ativacao
+
+Depois que o plano GitHub aceitar a regra de Environment, rodar:
+
+```bash
+scripts/configure-paid-ci-environment.sh \
+  --repo advoq/menu-orders \
+  --reviewer-login emersonbusson \
+  --reviewer-login Italo-Nogueira \
+  --enable
+```
+
+O script cria/atualiza o Environment `paid-github-hosted-ci` com
+`prevent_self_review=true`, valida que existe protection rule
+`required_reviewers` e so entao seta:
+
+```bash
+ENABLE_PAID_GITHUB_HOSTED_CI=true
+```
+
+Se o plano ainda nao permitir required reviewers em repo privado, o
+script falha e nao liga a variavel. Nao criar a variavel manualmente
+antes do Environment protegido existir.
+
+### Rollback
+
+Para voltar ao modo 100% self-hosted sem remover workflow:
+
+```bash
+gh variable set ENABLE_PAID_GITHUB_HOSTED_CI --body false --repo owner/repo
+```
+
+Rollback trigger: se um job `paid-validate` iniciar em `ubuntu-latest`
+sem mostrar `Waiting` para o Environment protegido, desligar a variavel
+imediatamente, confirmar que `paid-github-hosted-ci` tem
+`required_reviewers` + `prevent_self_review=true`, e so religar apos
+um run de teste em PR descartavel.
 
 ## Fallback de emergencia (Camada 2): postar Local VM CI manualmente
 
