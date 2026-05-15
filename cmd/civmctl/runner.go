@@ -9,8 +9,8 @@ import (
 	"os/user"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/civm"
-	"github.com/emersonbusson/civm/internal/runner"
+	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/runner"
 )
 
 func runRunner(args []string) int {

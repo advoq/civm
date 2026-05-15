@@ -26,6 +26,7 @@
 #   ./scripts/check-kahneman-consistency.sh --strict        # warns -> failures
 #   ./scripts/check-kahneman-consistency.sh --base <path>   # override $HOME/codespace
 #   ./scripts/check-kahneman-consistency.sh --manifest <f>  # override manifest path
+#   ./scripts/check-kahneman-consistency.sh --sync-missing  # clone missing repos from manifest git_url
 #
 # Exit codes:
 #   0   all checks pass (warns allowed unless --strict)
@@ -45,20 +46,25 @@ BASE="${KAHNEMAN_BASE:-$HOME/codespace}"
 MANIFEST="$SCRIPT_DIR/../disciplines/kahneman-sync-manifest.json"
 JSON_MODE=false
 STRICT=false
+SYNC_MISSING=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --json)     JSON_MODE=true; shift ;;
-    --strict)   STRICT=true; shift ;;
-    --base)     BASE="$2"; shift 2 ;;
-    --manifest) MANIFEST="$2"; shift 2 ;;
-    -h|--help)  usage; exit 0 ;;
-    *)          echo "ERROR: unknown arg: $1" >&2; usage >&2; exit 2 ;;
+    --json)         JSON_MODE=true; shift ;;
+    --strict)       STRICT=true; shift ;;
+    --sync-missing) SYNC_MISSING=true; shift ;;
+    --base)         BASE="$2"; shift 2 ;;
+    --manifest)     MANIFEST="$2"; shift 2 ;;
+    -h|--help)      usage; exit 0 ;;
+    *)              echo "ERROR: unknown arg: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required (https://jqlang.github.io/jq/)" >&2; exit 2; }
 [ -f "$MANIFEST" ]            || { echo "ERROR: manifest not found: $MANIFEST" >&2; exit 2; }
+if $SYNC_MISSING; then
+  command -v git >/dev/null 2>&1 || { echo "ERROR: git is required for --sync-missing" >&2; exit 2; }
+fi
 
 if ! jq -e . "$MANIFEST" >/dev/null 2>&1; then
   echo "ERROR: manifest is not valid JSON: $MANIFEST" >&2
@@ -110,6 +116,41 @@ get_rule5() {
   grep -E '^5\. \*\*' <<< "$1" | head -1 || true
 }
 
+repo_slug_from_url() {
+  sed -E \
+    -e 's#^https://github.com/##' \
+    -e 's#^git@github.com:##' \
+    -e 's#\.git$##' \
+    <<< "$1"
+}
+
+sync_missing_repo() {
+  local name="$1"
+  local repo_full="$2"
+  local git_url="$3"
+  shift 3
+
+  [ -d "$repo_full" ] && return 0
+  $SYNC_MISSING || return 0
+  [ -n "$git_url" ] && [ "$git_url" != "null" ] || return 0
+
+  mkdir -p "$(dirname "$repo_full")"
+  local slug
+  slug="$(repo_slug_from_url "$git_url")"
+  echo "sync: cloning $name from $slug" >&2
+
+  if command -v gh >/dev/null 2>&1 && gh auth status -h github.com >/dev/null 2>&1; then
+    gh repo clone "$slug" "$repo_full" -- \
+      --filter=blob:none --sparse --depth=1 --quiet >/dev/null 2>&1 || true
+  else
+    git clone --filter=blob:none --sparse --depth=1 --quiet "$git_url" "$repo_full" >/dev/null 2>&1 || true
+  fi
+
+  if [ -d "$repo_full/.git" ] && [ "$#" -gt 0 ]; then
+    git -C "$repo_full" sparse-checkout set --no-cone "$@" >/dev/null 2>&1 || true
+  fi
+}
+
 #--------------------------------- main loop -----------------------------------
 
 declare -A STATUS    # repo_name -> ok|warn|fail
@@ -136,8 +177,10 @@ for name in "${REPO_NAMES[@]}"; do
 
   repo_cfg=$(jq -c --arg n "$name" '.repos[] | select(.name==$n)' "$MANIFEST")
   repo_path=$(jq -r '.path'        <<< "$repo_cfg")
+  git_url=$(  jq -r '.git_url // empty' <<< "$repo_cfg")
   doc_rel=$(  jq -r '.doc_path'    <<< "$repo_cfg")
   title_key=$(jq -r '.title'       <<< "$repo_cfg")
+  mapfile -t sparse_paths < <(jq -r '.doc_path, .surfaces[].file' <<< "$repo_cfg" | sort -u)
 
   expected_title=$(jq -r --arg k "$title_key" '.title_patterns[$k] // empty' "$MANIFEST")
   if [ -z "$expected_title" ]; then
@@ -147,6 +190,8 @@ for name in "${REPO_NAMES[@]}"; do
 
   repo_full="$BASE/$repo_path"
   doc_full="$repo_full/$doc_rel"
+
+  sync_missing_repo "$name" "$repo_full" "$git_url" "${sparse_paths[@]}"
 
   # ---- Check 1: repo dir exists --------------------------------------------
   if [ ! -d "$repo_full" ]; then

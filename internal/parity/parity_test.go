@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emersonbusson/civm/internal/specs"
+	"github.com/advoq/civm/internal/specs"
 )
 
 func TestCheckClassifiesInstalledTools(t *testing.T) {

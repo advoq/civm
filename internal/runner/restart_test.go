@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/idle"
+	"github.com/advoq/civm/internal/idle"
 )
 
 func newRestartRunner(commands map[string][]byte, errs map[string]error) func(context.Context, string, ...string) ([]byte, error) {
@@ -28,7 +28,7 @@ func newRestartRunner(commands map[string][]byte, errs map[string]error) func(co
 	}
 }
 
-const fakeListOutput = `actions.runner.emersonbusson-civm.civm-1.service        loaded active running GitHub Actions Runner
+const fakeListOutput = `actions.runner.advoq-civm.civm-1.service        loaded active running GitHub Actions Runner
 actions.runner.emersonbusson-compexhub.civm-cmpx.service loaded active running GitHub Actions Runner
 actions.runner.emersonbusson-vitae.civm-vitae.service    loaded active running GitHub Actions Runner
 `

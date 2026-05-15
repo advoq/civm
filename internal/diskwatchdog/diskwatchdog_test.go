@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emersonbusson/civm/internal/cleanup"
+	"github.com/advoq/civm/internal/cleanup"
 )
 
 func TestCheck_OK_BelowThreshold(t *testing.T) {

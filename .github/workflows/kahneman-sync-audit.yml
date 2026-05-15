@@ -5,8 +5,8 @@ name: kahneman-sync-audit
 # declared style. Runs on a weekly cron + on every change to the manifest or
 # the audit tooling + manual dispatch.
 #
-# Self-hosted runner only — the runner ([self-hosted, civm]) is the local VM
-# that has all 14 peer repos checked out under $HOME/codespace.
+# Self-hosted runner only — the runner ([self-hosted, civm]) can hydrate peer
+# repos from the manifest git_url fields when they are not already present.
 
 on:
   schedule:
@@ -44,15 +44,23 @@ jobs:
       - name: Make script executable
         run: chmod +x scripts/check-kahneman-consistency.sh
 
+      - name: Prepare peer base
+        run: |
+          KAHNEMAN_BASE="$RUNNER_TEMP/kahneman-peers"
+          echo "KAHNEMAN_BASE=$KAHNEMAN_BASE" >> "$GITHUB_ENV"
+          rm -rf "$KAHNEMAN_BASE"
+          mkdir -p "$KAHNEMAN_BASE"
+          ln -s "$GITHUB_WORKSPACE" "$KAHNEMAN_BASE/civm"
+
       - name: Validate manifest is valid JSON
         run: jq -e . disciplines/kahneman-sync-manifest.json > /dev/null
 
       - name: Run audit (human output, recorded in job log)
-        run: ./scripts/check-kahneman-consistency.sh
+        run: ./scripts/check-kahneman-consistency.sh --base "$KAHNEMAN_BASE" --sync-missing
 
       - name: Run audit (JSON, stored as artifact for downstream tooling)
         if: always()
-        run: ./scripts/check-kahneman-consistency.sh --json > kahneman-audit.json || true
+        run: ./scripts/check-kahneman-consistency.sh --base "$KAHNEMAN_BASE" --sync-missing --json > kahneman-audit.json || true
 
       - name: Upload audit artifact
         if: always()

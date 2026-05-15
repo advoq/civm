@@ -77,7 +77,7 @@ Mitigacoes (em ordem de preferencia):
 1. **PAT em secret `RELEASE_PLEASE_TOKEN`** (atual upgrade path)
    - Criar PAT classico em <https://github.com/settings/tokens> com escopos
      `repo` + `workflow`.
-   - Adicionar em <https://github.com/emersonbusson/civm/settings/secrets/actions>
+   - Adicionar em <https://github.com/advoq/civm/settings/secrets/actions>
      como `RELEASE_PLEASE_TOKEN`.
    - Workflow ja faz fallback `secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN`.
 2. **GitHub App** (ideal long-term, mais setup):
@@ -91,13 +91,13 @@ Mitigacoes (em ordem de preferencia):
 
 ```bash
 # Ver PRs de release pendentes
-gh pr list --repo emersonbusson/civm --label "autorelease: pending"
+gh pr list --repo advoq/civm --label "autorelease: pending"
 
 # Inspecionar o PR de release antes do merge
-gh pr view <num> --repo emersonbusson/civm
+gh pr view <num> --repo advoq/civm
 
 # Mergear (squash). Tag + release sao criados imediatamente.
-gh pr merge <num> --repo emersonbusson/civm --squash
+gh pr merge <num> --repo advoq/civm --squash
 ```
 
 ## Override de versao
@@ -113,7 +113,7 @@ commit em `main` direto pela governance normal (issue + branch + PR).
 ## Validacao apos primeiro merge
 
 ```bash
-gh release list --repo emersonbusson/civm
+gh release list --repo advoq/civm
 git fetch --tags origin
 git tag --list 'v*'
 ```

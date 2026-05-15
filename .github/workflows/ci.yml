@@ -37,17 +37,23 @@ jobs:
           # Confere que arquivos referenciados nos READMEs existem.
           missing=0
           while IFS= read -r line; do
-            file=$(printf '%s' "$line" | sed -E 's/.*\(([^)]+)\).*/\1/')
-            case "$file" in
-              http*|/*) continue ;;
-            esac
             base=$(printf '%s' "$line" | cut -d: -f1)
             dir=$(dirname "$base")
-            target="$dir/$file"
-            if [ ! -e "$target" ]; then
-              echo "broken: $base -> $file"
-              missing=$((missing + 1))
-            fi
+            while IFS= read -r link; do
+              [ -n "$link" ] || continue
+              file="${link#](}"
+              file="${file%)}"
+              case "$file" in
+                http*|/*) continue ;;
+              esac
+              target_file="${file%%#*}"
+              target_file="${target_file%%\?*}"
+              target="$dir/$target_file"
+              if [ ! -e "$target" ]; then
+                echo "broken: $base -> $file"
+                missing=$((missing + 1))
+              fi
+            done < <(printf '%s\n' "$line" | grep -oE '\]\(\.[^)]+\)' || true)
           done < <(grep -rn '\](\.' README.md AGENTS.md CODEX.md runbooks/ disciplines/ rules/ templates/ 2>/dev/null || true)
           if [ "$missing" -gt 0 ]; then
             echo "Found $missing broken local links"
@@ -190,7 +196,7 @@ jobs:
           civmctl drift --timeout=15 || true
           # billing-status: zero-PAT, usa GITHUB_TOKEN auto
           # exit 0=ok, 1=blocked, 2=unknown — aceitar todos no smoke
-          civmctl billing-status --repo=emersonbusson/civm --workflow=ci.yml --timeout=15 || true
+          civmctl billing-status --repo=advoq/civm --workflow=ci.yml --timeout=15 || true
 
       - name: civmctl health on self
         run: |

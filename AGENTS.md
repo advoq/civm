@@ -75,8 +75,8 @@ civmctl version-pins
 civmctl billing-status --repo=owner/repo
 
 # Releases (automatizado via release-please)
-gh pr list --repo emersonbusson/civm --label "autorelease: pending"
-gh release list --repo emersonbusson/civm --limit 5
+gh pr list --repo advoq/civm --label "autorelease: pending"
+gh release list --repo advoq/civm --limit 5
 git tag --list 'v*' --sort=-version:refname
 ```
 

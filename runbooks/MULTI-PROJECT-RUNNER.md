@@ -67,7 +67,7 @@ em GitHub Teams/Enterprise).
 
 ```
 gha-ubuntu-2404
-├── ~/actions-runner/                 (civm-1     -> emersonbusson/civm)
+├── ~/actions-runner/                 (civm-1     -> advoq/civm)
 ├── ~/actions-runner-compexhub/       (civm-cmpx  -> emersonbusson/compexhub)
 ├── ~/actions-runner-vitae/           (civm-vitae -> emersonbusson/vitae)
 └── /etc/systemd/system/
@@ -160,7 +160,7 @@ A partir de 2026-05-10, **provisionamento e cleanup são automatizados** via
 
 # 1. Build civmctl (uma vez; precisa Go ≥ 1.26 instalado manualmente OU
 #    rodar bootstrap do compexhub que ja tem Go).
-git clone https://github.com/emersonbusson/civm.git /opt/civm
+git clone https://github.com/advoq/civm.git /opt/civm
 cd /opt/civm && go build -o /usr/local/bin/civmctl ./cmd/civmctl
 
 # 2. Confere versoes alvo (paridade com ubuntu-latest)

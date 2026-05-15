@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/bootstrap"
-	"github.com/emersonbusson/civm/internal/civm"
+	"github.com/advoq/civm/internal/bootstrap"
+	"github.com/advoq/civm/internal/civm"
 )
 
 // runBootstrapEverything wrappa bootstrap + cp dos systemd units.
