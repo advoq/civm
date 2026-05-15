@@ -70,7 +70,7 @@ SPEC traduz PRD em:
 - Diffs SQL com placeholders
 - Validações em handlers (request/response shape)
 - Middleware chains
-- Links para `docs/KAHNEMAN-DISCIPLINES.md` para os passos críticos
+- Links para `disciplines/KAHNEMAN-DISCIPLINES.md` para os passos críticos
 
 ### PASSO 3 — IMPL
 
@@ -84,13 +84,13 @@ Output: `docs/specs/<feature-slug>/IMPL.md` documentando o que foi feito (commit
 2. **Separação fato vs proposta.** Cada item do PRD é "Confirmado em codebase / Confirmado em docs / Inferência". Inferências precisam de validação em SPEC.
 3. **Zero criatividade no IMPL.** Code segue SPEC. Nova decisão → SPEC update → re-aprovação.
 4. **Rastreabilidade por requirement ID.** Cada commit cita `RF-3`, `RNF-2`, etc. PR de IMPL liga aos IDs cobertos.
-5. **Kahneman discipline link.** Passos críticos no SPEC referenciam `docs/KAHNEMAN-DISCIPLINES.md` (ex.: para mudança de schema, link disciplina #2 counterfactual).
+5. **Kahneman discipline link.** Passos críticos no SPEC referenciam `disciplines/KAHNEMAN-DISCIPLINES.md` (ex.: para mudança de schema, link disciplina #2 counterfactual).
 
 ## Localização
 
 - Prompts copiáveis: `docs/SSDV3-PROMPTS.md`.
 - Artifacts: `docs/specs/<feature-slug>/{PRD,SPEC,IMPL}.md`. Slug em kebab-case inglês.
-- Disciplinas Kahneman: `docs/KAHNEMAN-DISCIPLINES.md`.
+- Disciplinas Kahneman: `disciplines/KAHNEMAN-DISCIPLINES.md`.
 
 ## Como linkar SPEC ao código
 

@@ -65,7 +65,7 @@ Regenerar o índice: `npm run docs:index`. Validar sincronia em CI: `npm run doc
 
 ## Referência cognitiva
 
-Quando a mudança envolver risco estrutural, operacional, de segurança, rollout, rollback, migração, cache, contrato, secret, backfill ou tenant isolation, o SPEC deve apontar explicitamente para `docs/KAHNEMAN-DISCIPLINES.md`.
+Quando a mudança envolver risco estrutural, operacional, de segurança, rollout, rollback, migração, cache, contrato, secret, backfill ou tenant isolation, o SPEC deve apontar explicitamente para `disciplines/KAHNEMAN-DISCIPLINES.md`.
 
 O objetivo não é teorizar no documento, mas forçar cada etapa crítica a responder:
 
@@ -90,9 +90,9 @@ O objetivo não é teorizar no documento, mas forçar cada etapa crítica a resp
 5. **Sem criatividade estrutural no Passo 3**
    Se a implementação exigir decisão nova, a decisão volta para o SPEC antes de virar código.
 6. **Sistema 2 explícito nas etapas críticas**
-   Todo SPEC deve apontar, nos passos com risco estrutural, operacional ou de segurança, qual disciplina de `docs/KAHNEMAN-DISCIPLINES.md` está sendo usada para reduzir viés, quais evidências mínimas são exigidas e qual condição objetiva dispara abortar, voltar um passo ou rollback.
+   Todo SPEC deve apontar, nos passos com risco estrutural, operacional ou de segurança, qual disciplina de `disciplines/KAHNEMAN-DISCIPLINES.md` está sendo usada para reduzir viés, quais evidências mínimas são exigidas e qual condição objetiva dispara abortar, voltar um passo ou rollback.
 7. **Passos críticos devem levar ao documento de disciplina**
-   Nenhum item crítico do SPEC fica autocontido só em execução; ele precisa apontar para `docs/KAHNEMAN-DISCIPLINES.md` e registrar como a disciplina afeta a decisão local.
+   Nenhum item crítico do SPEC fica autocontido só em execução; ele precisa apontar para `disciplines/KAHNEMAN-DISCIPLINES.md` e registrar como a disciplina afeta a decisão local.
 
 ---
 
@@ -154,7 +154,7 @@ Antes de escrever o PRD final, siga estas fases:
 - Verifique Redis keys, Pub/Sub channels, locks, cache patterns e invalidação relacionados
 - Leia `docs/config-reference.json` para env vars existentes e categorias disponíveis
 - Leia `docs/events-catalog.json` para eventos Redis Pub/Sub já catalogados
-- Leia `docs/KAHNEMAN-DISCIPLINES.md` quando a mudança envolver risco estrutural, operacional ou de segurança
+- Leia `disciplines/KAHNEMAN-DISCIPLINES.md` quando a mudança envolver risco estrutural, operacional ou de segurança
 - Verifique ADRs existentes em `docs/decisions/` que sejam relevantes
 - Se frontend: leia `web/CLAUDE.md`, `web/src/fsd/`, `web/src/app/`, `shared/ui/`, `shared/tokens/`
 - Se tocar em auth/permissões: verifique o chain `TenantResolver → Auth → Permission` e permissões existentes em `ms-auth`
@@ -215,7 +215,7 @@ Pesquise e valide contra a documentação oficial das tecnologias realmente envo
 - Não proponha novos endpoints, tabelas, eventos ou env vars sem justificar por que os existentes não atendem
 - Aponte breaking changes, estratégia de rollout, rollback e backfill quando aplicável
 - Liste os documentos que precisarão ser atualizados no mesmo commit quando houver impacto estrutural
-- Se a mudança tiver risco alto, antecipe no PRD quais etapas provavelmente exigirão disciplina explícita de `docs/KAHNEMAN-DISCIPLINES.md` no SPEC
+- Se a mudança tiver risco alto, antecipe no PRD quais etapas provavelmente exigirão disciplina explícita de `disciplines/KAHNEMAN-DISCIPLINES.md` no SPEC
 - Mantenha o PRD específico e operacional; evite texto genérico
 
 ### Saída esperada
@@ -399,7 +399,7 @@ CREATE INDEX idx_table_column ON schema.table_name (column);
 - transformar requisitos em tarefas de código com ordem e dependências
 - resolver ambiguidades do PRD antes do código
 - explicitar impactos em contrato, dados, docs, testes e rollout
-- ligar etapas críticas às disciplinas de `docs/KAHNEMAN-DISCIPLINES.md`
+- ligar etapas críticas às disciplinas de `disciplines/KAHNEMAN-DISCIPLINES.md`
 
 ### Prompt
 
@@ -419,7 +419,7 @@ Leia `docs/{feature-slug}/PRD.md` e gere `docs/{feature-slug}/SPEC.md` com decis
 10. Não deixe pseudocódigo estrutural em tipos, handlers, queries ou contratos
 11. Todo requisito funcional do PRD deve ser rastreado por ID no SPEC
 12. Toda mudança estrutural deve dizer quais documentos serão atualizados no mesmo commit
-13. Em etapas com risco estrutural, operacional, de segurança, rollout, rollback, migração, tenant isolation, auth, cache, contrato, secret, retry ou backfill, o SPEC deve apontar explicitamente a disciplina correspondente em `docs/KAHNEMAN-DISCIPLINES.md`
+13. Em etapas com risco estrutural, operacional, de segurança, rollout, rollback, migração, tenant isolation, auth, cache, contrato, secret, retry ou backfill, o SPEC deve apontar explicitamente a disciplina correspondente em `disciplines/KAHNEMAN-DISCIPLINES.md`
 14. Nenhum passo crítico pode ficar só com instrução operacional; ele deve registrar também pergunta obrigatória, evidência mínima e abort trigger
 15. Em qualquer mudança com transação, onboarding, saga, backfill ou múltiplos writes, o SPEC deve declarar explicitamente a fronteira de atomicidade: o que fica atômico nesta issue e o que continua fora dessa garantia
 16. Toda evidência mínima de etapa crítica deve dizer como será produzida no repo de forma executável, observável e reproduzível (`go test`, `yarn test`, query SQL, diff, log esperado, validação manual obrigatória documentada). Não vale evidência implícita, presumida ou sem caminho de execução descrito
@@ -433,7 +433,7 @@ Leia `docs/{feature-slug}/PRD.md` e gere `docs/{feature-slug}/SPEC.md` com decis
 
 Em qualquer ITEM do SPEC que envolva migração, auth, tenant isolation, rollout, rollback, cache, contrato, secret, retry, backfill ou risco de indisponibilidade, incluir um bloco `Disciplina Kahneman` com:
 
-- **Disciplina**: nome exato da disciplina em `docs/KAHNEMAN-DISCIPLINES.md`
+- **Disciplina**: nome exato da disciplina em `disciplines/KAHNEMAN-DISCIPLINES.md`
 - **Link**: caminho do documento e, quando possível, âncora da seção correspondente
 - **Pergunta obrigatória**: pergunta de Sistema 2 que precisa ser respondida antes de avançar
 - **Evidência mínima**: métrica, teste, log, diff, output ou validação objetiva exigida
@@ -488,7 +488,7 @@ Para cada etapa crítica da implementação, rollout, validação ou rollback, p
 
 | Etapa / ITEM | Disciplina Kahneman | Link                           | Pergunta obrigatória | Evidência mínima | Abort trigger |
 | ------------ | ------------------- | ------------------------------ | -------------------- | ---------------- | ------------- |
-| ITEM-3       | ...                 | `docs/KAHNEMAN-DISCIPLINES.md` | ...                  | ...              | ...           |
+| ITEM-3       | ...                 | `disciplines/KAHNEMAN-DISCIPLINES.md` | ...                  | ...              | ...           |
 
 #### Checklist de segurança (pré-implementação)
 
@@ -605,7 +605,7 @@ Preencha explicitamente:
 | `.claude/rules/*.md`                  | Alterar / N/A          | convenção nova?                  |
 | `web/CLAUDE.md`                       | Alterar / N/A          | frontend pattern novo?           |
 | `docs/decisions/ADR-NNN-*.md`         | Criar / N/A            | decisão arquitetural relevante?  |
-| `docs/KAHNEMAN-DISCIPLINES.md`        | Alterar / N/A          | nova disciplina, link ou anchor? |
+| `disciplines/KAHNEMAN-DISCIPLINES.md`        | Alterar / N/A          | nova disciplina, link ou anchor? |
 
 #### Ordem de implementação
 
@@ -668,7 +668,7 @@ Lista numerada, verificável e sem gaps:
 
 **Gates cognitivos**
 
-- [ ] Cada etapa crítica aponta para `docs/KAHNEMAN-DISCIPLINES.md`
+- [ ] Cada etapa crítica aponta para `disciplines/KAHNEMAN-DISCIPLINES.md`
 - [ ] Cada etapa crítica registra pergunta obrigatória, evidência mínima e abort trigger
 - [ ] Não há linguagem vaga em pontos críticos sem critério observável
 
@@ -719,7 +719,7 @@ Quero uma revisão de lacunas com foco em:
 - ausência de disciplina cognitiva explícita nas etapas críticas
 - passos críticos sem pergunta obrigatória, evidência mínima ou abort trigger
 - uso de linguagem vaga (`validar`, `garantir`, `confirmar`, `se necessário`) sem critério observável
-- gaps entre etapas críticas do SPEC e as disciplinas documentadas em `docs/KAHNEMAN-DISCIPLINES.md`
+- gaps entre etapas críticas do SPEC e as disciplinas documentadas em `disciplines/KAHNEMAN-DISCIPLINES.md`
 
 ### Formato da resposta
 
@@ -779,7 +779,7 @@ A cada camada concluída:
 - [ ] Tenant isolation mantida
 - [ ] Contratos atualizados quando necessário
 - [ ] Docs atualizadas quando o item exige
-- [ ] Etapas críticas continuam coerentes com `docs/KAHNEMAN-DISCIPLINES.md`
+- [ ] Etapas críticas continuam coerentes com `disciplines/KAHNEMAN-DISCIPLINES.md`
 
 ### Quando voltar ao SPEC
 
@@ -845,7 +845,7 @@ Só avance se:
 - a ordem de implementação estiver fechada
 - arquivos a criar/modificar estiverem explícitos
 - plano de testes e docs estiverem definidos
-- etapas críticas estiverem mapeadas para `docs/KAHNEMAN-DISCIPLINES.md`
+- etapas críticas estiverem mapeadas para `disciplines/KAHNEMAN-DISCIPLINES.md`
 - cada etapa crítica tiver pergunta obrigatória, evidência mínima e abort trigger
 - se o risco for alto, o Passo 2.5 tiver resultado em `go`
 

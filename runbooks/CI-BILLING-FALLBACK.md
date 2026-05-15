@@ -50,7 +50,7 @@
 A primeira proposta usava PAT classico com escopo `read:billing` para
 chamar `GET /users/{user}/settings/billing/actions` e ler minutos
 disponiveis diretamente. Foi **rejeitada** com base em disciplina
-Kahneman (`docs/KAHNEMAN-DISCIPLINES.md`):
+Kahneman (`disciplines/KAHNEMAN-DISCIPLINES.md`):
 
 1. **WYSIATI:** billing API reporta `total_minutes_used vs included_minutes`.
    Nao reporta diretamente "payment failed" — o caso de uso real. Quando
