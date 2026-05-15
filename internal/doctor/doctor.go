@@ -9,13 +9,13 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/emersonbusson/civm/internal/civm"
-	"github.com/emersonbusson/civm/internal/health"
-	"github.com/emersonbusson/civm/internal/runner"
+	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/health"
+	"github.com/advoq/civm/internal/runner"
 )
 
 var DefaultRepos = []string{
-	"emersonbusson/civm",
+	"advoq/civm",
 	"emersonbusson/compexhub",
 	"emersonbusson/vitae",
 	"advoq/advoq",

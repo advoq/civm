@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/emersonbusson/civm/internal/specs"
+	"github.com/advoq/civm/internal/specs"
 )
 
 func TestRenderSpecJSONValid(t *testing.T) {
@@ -65,8 +65,8 @@ func TestBootstrapEverythingHelpers(t *testing.T) {
 
 func TestSplitCSV(t *testing.T) {
 	t.Parallel()
-	got := splitCSV("emersonbusson/civm, emersonbusson/vitae,,")
-	if len(got) != 2 || got[0] != "emersonbusson/civm" || got[1] != "emersonbusson/vitae" {
+	got := splitCSV("advoq/civm, emersonbusson/vitae,,")
+	if len(got) != 2 || got[0] != "advoq/civm" || got[1] != "emersonbusson/vitae" {
 		t.Fatalf("splitCSV = %#v", got)
 	}
 }

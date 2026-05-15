@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/peerstatus"
+	"github.com/advoq/civm/internal/peerstatus"
 )
 
 func runPeerStatus(args []string) int {

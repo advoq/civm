@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/emersonbusson/civm/internal/civm"
-	"github.com/emersonbusson/civm/internal/specs"
+	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/specs"
 )
 
 // Result is the outcome of one Step.

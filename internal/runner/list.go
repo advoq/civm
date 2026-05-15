@@ -79,7 +79,7 @@ func parseSystemctlList(stdout string) []Status {
 }
 
 // parseRunnerUnit extracts repo and runner-name from a unit like
-// "actions.runner.emersonbusson-civm.civm-1.service".
+// "actions.runner.advoq-civm.civm-1.service".
 func parseRunnerUnit(unit string) (repo, name string) {
 	const prefix = "actions.runner."
 	const suffix = ".service"
@@ -87,14 +87,14 @@ func parseRunnerUnit(unit string) (repo, name string) {
 		return "", ""
 	}
 	rest := strings.TrimSuffix(strings.TrimPrefix(unit, prefix), suffix)
-	// rest = "emersonbusson-civm.civm-1"
+	// rest = "advoq-civm.civm-1"
 	idx := strings.LastIndex(rest, ".")
 	if idx == -1 {
 		return rest, ""
 	}
 	repoSegment := rest[:idx]
 	name = rest[idx+1:]
-	// repoSegment "emersonbusson-civm" → "emersonbusson/civm"
+	// repoSegment "advoq-civm" → "advoq/civm"
 	dashIdx := strings.Index(repoSegment, "-")
 	if dashIdx == -1 {
 		return repoSegment, name

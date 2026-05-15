@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/civm"
-	"github.com/emersonbusson/civm/internal/health"
+	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/health"
 )
 
 func runHealth(args []string) int {

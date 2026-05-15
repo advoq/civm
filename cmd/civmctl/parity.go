@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/parity"
-	"github.com/emersonbusson/civm/internal/specs"
+	"github.com/advoq/civm/internal/parity"
+	"github.com/advoq/civm/internal/specs"
 )
 
 func runParity(args []string) int {

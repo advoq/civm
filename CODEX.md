@@ -107,7 +107,7 @@ Releases sao criados via merge do PR
 merge desse PR, revalidar sem mutação:
 
 ```bash
-gh release view "$(gh release list --repo emersonbusson/civm --limit 1 --json tagName --jq '.[0].tagName')"
+gh release view "$(gh release list --repo advoq/civm --limit 1 --json tagName --jq '.[0].tagName')"
 git fetch --tags origin && git tag --list 'v*' --sort=-version:refname | head -3
 git status --short --branch
 gh run list --workflow=ci.yml --branch=main --limit 5

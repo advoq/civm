@@ -1,4 +1,4 @@
-module github.com/emersonbusson/civm
+module github.com/advoq/civm
 
 go 1.26
 

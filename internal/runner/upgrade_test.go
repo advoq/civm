@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/idle"
+	"github.com/advoq/civm/internal/idle"
 )
 
 func validUpgradeOpts() UpgradeOptions {

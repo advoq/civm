@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emersonbusson/civm/internal/health"
-	"github.com/emersonbusson/civm/internal/runner"
+	"github.com/advoq/civm/internal/health"
+	"github.com/advoq/civm/internal/runner"
 )
 
 func TestClassifyRunner(t *testing.T) {
@@ -144,7 +144,7 @@ func TestClassifyRepoMissingAndUnknown(t *testing.T) {
 func TestCollectAndRenderJSON(t *testing.T) {
 	t.Parallel()
 	opts := DefaultOptions()
-	opts.Repos = []string{"emersonbusson/civm", "emersonbusson/vitae"}
+	opts.Repos = []string{"advoq/civm", "emersonbusson/vitae"}
 	opts.HealthFn = func(context.Context) health.Report {
 		return health.Report{Checks: []health.Check{
 			{Name: "DISK", Detail: "50 GB free", Status: health.StatusOK},
@@ -155,7 +155,7 @@ func TestCollectAndRenderJSON(t *testing.T) {
 		return []runner.Status{{UnitName: "actions.runner.emersonbusson-vitae.civm-vitae.service", Repo: "emersonbusson/vitae", Name: "civm-vitae", ActiveState: "active", SubState: "running"}}, nil
 	}
 	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]GitHubRunner, error) {
-		if repo == "emersonbusson/civm" {
+		if repo == "advoq/civm" {
 			return []GitHubRunner{{Repo: repo, Name: "civm-self", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
 		}
 		return []GitHubRunner{{Repo: repo, Name: "vitae-ci-1", Status: "offline", Labels: []string{"self-hosted", "vitae-ci"}}}, nil

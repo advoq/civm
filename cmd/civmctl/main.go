@@ -97,7 +97,7 @@ EXEMPLOS
   civmctl runner add --repo=owner/repo --token=$(gh api ...) --short=cmpx
   civmctl runner add --repo=owner/repo --token=... --short=cmpx --execute
   civmctl runner remove --short=cmpx --token=$(gh api -X POST .../remove-token) --execute
-  civmctl runner list --json | jq '.runners[] | select(.repo == "emersonbusson/civm")'
+  civmctl runner list --json | jq '.runners[] | select(.repo == "advoq/civm")'
   civmctl runner restart --short=civm-1 --execute
   civmctl runner upgrade --short=cmpx --new-version=2.335.0 --execute
   civmctl reverse-watchdog --max-age-hours=2

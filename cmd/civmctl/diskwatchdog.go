@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/civm"
-	"github.com/emersonbusson/civm/internal/diskwatchdog"
+	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/diskwatchdog"
 )
 
 func runDiskWatchdog(args []string) int {
