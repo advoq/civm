@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 2,
+  "description": "Source-of-truth manifest for the Kahneman discipline pattern across peer repos. Consumed by scripts/check-kahneman-consistency.sh and the kahneman-sync-audit workflow. When a new fork is authorized, add it here.",
+  "title_patterns": {
+    "canonical": "# Kahneman disciplines — hygiene para decisões de IA",
+    "vitae_specific": "# Kahneman disciplines — higiene de decisão no Vitae",
+    "civm_template": "# Kahneman disciplines — template portátil de higiene de decisão",
+    "busson_fork": "# Kahneman disciplines — hygiene para decisões em `busson`",
+    "chatwoot_standalone": "# Kahneman disciplines — local decision hygiene",
+    "advoqwhatsapp_noaccent": "# Kahneman Disciplines — Higiene Para Decisoes De IA"
+  },
+  "rule5_patterns": {
+    "en_canonical": "New lib needs explicit justification",
+    "pt_libraries": "Lib nova exige entrada em",
+    "pt_generic": "Lib nova exige justificativa explícita"
+  },
+  "framing_variants": [
+    "toda mudança neste repo",
+    "every change in this repo",
+    "every commit, PR, SPEC, milestone, and ADR"
+  ],
+  "surface_styles": {
+    "h2_top5": "Full §\"Decision hygiene (Kahneman)\" H2 section with 5 numbered rules + universal framing + doc link.",
+    "inline_bold": "Compact bold preamble paragraph above the first H2: **Decision hygiene (Kahneman) — always on, every change.** ... + universal framing + doc link. No separate Top-5 — those live in the linked CLAUDE.md."
+  },
+  "repos": [
+    {
+      "name": "advoq",
+      "path": "advoq",
+      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "title": "canonical",
+      "surfaces": [
+        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "en_canonical" },
+        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "en_canonical" }
+      ]
+    },
+    {
+      "name": "vitae",
+      "path": "vitae",
+      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "title": "vitae_specific",
+      "surfaces": [
+        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_generic" },
+        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "pt_generic" }
+      ]
+    },
+    {
+      "name": "civm",
+      "path": "civm",
+      "doc_path": "disciplines/KAHNEMAN-DISCIPLINES.md",
+      "title": "civm_template",
+      "surfaces": [
+        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "pt_generic" }
+      ]
+    },
+    {
+      "name": "harmya",
+      "path": "harmya",
+      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "title": "canonical",
+      "surfaces": [
+        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "en_canonical" },
+        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "en_canonical" }
+      ]
+    },
+    {
+      "name": "menu-orders",
+      "path": "menu-orders",
+      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "title": "canonical",
+      "surfaces": [
+        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "en_canonical" },
+        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "en_canonical" }
+      ]
+    },
+    {
+      "name": "orador-fluido",
+      "path": "orador-fluido",
+      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "title": "canonical",
+      "surfaces": [
+        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "en_canonical" },
+        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "en_canonical" }
+      ]
+    },
+    {
+      "name": "barbershop",
+      "path": "barbershop",
+      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "title": "canonical",
+      "surfaces": [
+        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "en_canonical" },
+        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "en_canonical" }
+      ]
+    },
+    {
+      "name": "salon",
+      "path": "salon",
+      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "title": "canonical",
+      "surfaces": [
+        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "en_canonical" },
+        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "en_canonical" }
+      ]
+    },
+    {
+      "name": "n8n-engine",
+      "path": "n8n-engine",
+      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "title": "canonical",
+      "surfaces": [
+        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_libraries" },
+        { "file": "AGENTS.md", "style": "inline_bold" }
+      ]
+    },
+    {
+      "name": "typebot-runtime",
+      "path": "typebot-runtime",
+      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "title": "canonical",
+      "surfaces": [
+        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_libraries" },
+        { "file": "AGENTS.md", "style": "inline_bold" }
+      ]
+    },
+    {
+      "name": "busson",
+      "path": "busson",
+      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "title": "busson_fork",
+      "surfaces": [
+        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_libraries" },
+        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "pt_generic" }
+      ]
+    },
+    {
+      "name": "chatwoot-realtime",
+      "path": "chatwoot-realtime",
+      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "title": "chatwoot_standalone",
+      "surfaces": [
+        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_libraries" },
+        { "file": "AGENTS.md", "style": "inline_bold" }
+      ]
+    },
+    {
+      "name": "advoqwhatsappapi",
+      "path": "advoqwhatsappapi",
+      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "title": "advoqwhatsapp_noaccent",
+      "surfaces": [
+        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_libraries" },
+        { "file": "AGENTS.md", "style": "inline_bold" }
+      ]
+    },
+    {
+      "name": "super-view-project",
+      "path": "super-view-project",
+      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "title": "canonical",
+      "surfaces": [
+        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_generic" }
+      ]
+    }
+  ]
+}

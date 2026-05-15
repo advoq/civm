@@ -111,6 +111,30 @@ PRs ficam em PT-BR seguindo template:
 Toda PR deve linkar issue e ter pelo menos uma label `type:*` e `area:*`.
 PR e issue compartilham assignee.
 
+## Decision hygiene (Kahneman)
+
+Fonte: [`disciplines/KAHNEMAN-DISCIPLINES.md`](disciplines/KAHNEMAN-DISCIPLINES.md) — 12 disciplinas operacionais derivadas de _Thinking, Fast and Slow_ (Kahneman, 2011) e _Noise_ (Kahneman/Sibony/Sunstein, 2021). **Estas regras valem para toda mudança neste repo — todo commit, toda PR, todo runbook, todo template, toda ADR.** Não estão presas a milestone ou release. civm é repo source-of-truth de regras portáteis; quem porta para peer repos espelha estas mesmas 5 regras críticas.
+
+Top-5 regras de operação diária:
+
+1. **WYSIATI** — antes de opinar em decisão crítica, declarar o que **não** foi visto. "Sem ter testado X, estimo Y com confiança Z%".
+2. **Counterfactual obrigatório** — toda decisão não-trivial carrega `Rollback trigger: se X, reverter para Y`. Ausência em commit `feat`/`fix`/`refactor`/`perf` não-trivial é Sistema 1.
+3. **Número, não adjetivo** — claim de perf/qualidade precisa de medição com N rodadas e stddev. Anti-padrões em PR: "é claro que", "obviamente", "definitivamente".
+4. **Débito é dívida com juros** — código morto detectado, remover na hora. `TODO: refactor later` nunca entra. TODOs precisam de owner + data: `// TODO(@user, YYYY-MM-DD): ...`.
+5. **Lib nova exige justificativa explícita** com critério mensurável (peso, alternativa testada, condição de remoção).
+
+Quando a pergunta é qualitativa ("essa arquitetura é boa?"), responder com métrica antes do adjetivo.
+
+### Auditoria cross-repo do padrão
+
+O padrão Kahneman (doc + seção em CLAUDE/AGENTS) é auditado em 14 peer repos via:
+
+- **Manifest:** [`disciplines/kahneman-sync-manifest.json`](disciplines/kahneman-sync-manifest.json) — source-of-truth dos forks autorizados, com estilo por surface (`h2_top5` ou `inline_bold`) e variante rule 5 (`en_canonical`, `pt_libraries`, `pt_generic`).
+- **Script:** [`scripts/check-kahneman-consistency.sh`](scripts/check-kahneman-consistency.sh) — bash, dep apenas `jq`. Roda em ~2s. `--json` pra pipe, `--strict` pra promover warn em fail.
+- **Workflow:** [`.github/workflows/kahneman-sync-audit.yml`](.github/workflows/kahneman-sync-audit.yml) — cron semanal (segunda 12:00 UTC) + push no manifest/script + manual dispatch. Roda no runner `[self-hosted, civm]`. Falha abre issue automaticamente.
+
+Quando adicionar peer repo novo ao padrão: editar manifest, rodar script local, abrir PR — o próprio workflow do PR re-roda a auditoria contra o estado novo.
+
 ## Anti-skynet
 
 civm **detecta**, nunca corrige automaticamente. **Nunca**:
