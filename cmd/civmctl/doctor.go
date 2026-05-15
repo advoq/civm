@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/doctor"
+	"github.com/advoq/civm/internal/doctor"
 )
 
 func runDoctor(args []string) int {

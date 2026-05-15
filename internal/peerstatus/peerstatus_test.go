@@ -13,7 +13,7 @@ import (
 func TestCollect_HappyPath(t *testing.T) {
 	t.Parallel()
 	o := DefaultOptions()
-	o.Repo = "emersonbusson/civm"
+	o.Repo = "advoq/civm"
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		key := name + " " + strings.Join(args, " ")
 		switch {
@@ -37,7 +37,7 @@ func TestCollect_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if s.Repo != "emersonbusson/civm" {
+	if s.Repo != "advoq/civm" {
 		t.Errorf("Repo = %s", s.Repo)
 	}
 	if s.RunnersTotal != 2 {

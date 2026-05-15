@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/civm"
-	"github.com/emersonbusson/civm/internal/cleanup"
+	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/cleanup"
 )
 
 // Decision is the watchdog outcome.

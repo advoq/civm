@@ -11,8 +11,8 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/billing"
-	"github.com/emersonbusson/civm/internal/civm"
+	"github.com/advoq/civm/internal/billing"
+	"github.com/advoq/civm/internal/civm"
 )
 
 // Status agrega informação operacional de um peer-repo.

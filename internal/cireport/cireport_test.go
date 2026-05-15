@@ -10,7 +10,7 @@ import (
 
 func validOpts() Options {
 	o := DefaultOptions()
-	o.Repo = "emersonbusson/civm"
+	o.Repo = "advoq/civm"
 	o.SHA = "abcd1234efgh5678ijkl9012mnop3456qrst7890"
 	o.State = StateSuccess
 	o.Context = "Local VM CI"
@@ -34,7 +34,7 @@ func TestPost_BuildsCorrectGhArgs(t *testing.T) {
 	if string(out) != `{"id":99}` {
 		t.Errorf("out = %s", out)
 	}
-	wantSubstr := []string{"gh", "api", "POST", "/repos/emersonbusson/civm/statuses/abcd",
+	wantSubstr := []string{"gh", "api", "POST", "/repos/advoq/civm/statuses/abcd",
 		"state=success", "context=Local VM CI", "description=all gates green",
 		"target_url=https://example.com/build/123"}
 	joined := strings.Join(capturedArgs, " ")
@@ -155,8 +155,8 @@ func TestRender_Snapshot(t *testing.T) {
 	var buf bytes.Buffer
 	Render(o, []byte(`{}`), &buf)
 	out := buf.String()
-	for _, want := range []string{"emersonbusson/civm", "abcd", "success", "Local VM CI",
-		"manual report", "x.example.com/log", "Statuses API", "github.com/emersonbusson/civm/commit"} {
+	for _, want := range []string{"advoq/civm", "abcd", "success", "Local VM CI",
+		"manual report", "x.example.com/log", "Statuses API", "github.com/advoq/civm/commit"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Render omitiu %q", want)
 		}

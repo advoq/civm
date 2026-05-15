@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/idle"
+	"github.com/advoq/civm/internal/idle"
 )
 
 func runIdleCheck(args []string) int {

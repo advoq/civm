@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/drift"
+	"github.com/advoq/civm/internal/drift"
 )
 
 func runDrift(args []string) int {

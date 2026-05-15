@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/specs"
+	"github.com/advoq/civm/internal/specs"
 )
 
 type Status string

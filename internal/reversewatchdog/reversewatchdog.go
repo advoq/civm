@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/civm"
+	"github.com/advoq/civm/internal/civm"
 )
 
 // Status of a single timer's last-fire age.

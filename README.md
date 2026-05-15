@@ -33,7 +33,7 @@ projetos do mesmo dono (compexhub, vitae, advoq, etc).
 Numa VM Ubuntu 24.04 LTS limpa, como root:
 
 ```bash
-git clone https://github.com/emersonbusson/civm.git /opt/civm
+git clone https://github.com/advoq/civm.git /opt/civm
 cd /opt/civm
 go build -o /usr/local/bin/civmctl ./cmd/civmctl
 sudo civmctl bootstrap --execute

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/idle"
+	"github.com/advoq/civm/internal/idle"
 )
 
 func ensureMutationIdle(ctx context.Context, activityFn func(context.Context) ([]idle.Activity, error), probeDelay time.Duration) error {

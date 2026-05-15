@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emersonbusson/civm/internal/specs"
+	"github.com/advoq/civm/internal/specs"
 )
 
 type runCall struct {

@@ -25,7 +25,7 @@
 ```bash
 cd ~/codespace/ci-vm
 gh repo rename civm --yes
-git remote set-url origin https://github.com/emersonbusson/civm.git
+git remote set-url origin https://github.com/advoq/civm.git
 cd .. && mv ci-vm civm  # opcional: renomear pasta local também
 cd civm
 ```
@@ -39,7 +39,7 @@ cd civm
 ```bash
 cd ~/codespace/civm
 find . -type f \( -name "*.go" -o -name "go.mod" \) \
-  -exec sed -i 's|github.com/emersonbusson/ci-vm|github.com/emersonbusson/civm|g' {} +
+  -exec sed -i 's|github.com/emersonbusson/ci-vm|github.com/advoq/civm|g' {} +
 go test -race -count=1 ./... | tail -5
 git add -A && git commit -m "refactor(civm): module path ci-vm -> civm post-rename"
 git push origin main
@@ -83,7 +83,7 @@ re-register com novo nome + label → install + start.
 #### vitae-ci-1 → civm-self (repo civm/ci-vm)
 
 ```bash
-REPO="emersonbusson/civm"  # ou ci-vm se nao renomeou
+REPO="advoq/civm"  # ou ci-vm se nao renomeou
 SHORT="self"
 DIR="/home/emdev/actions-runner"
 
@@ -166,7 +166,7 @@ ssh gha-ubuntu-2404 "
 
 ```bash
 # 1. Runners online com label civm
-for repo in emersonbusson/civm emersonbusson/compexhub emersonbusson/vitae advoq/advoq; do
+for repo in advoq/civm emersonbusson/compexhub emersonbusson/vitae advoq/advoq; do
   echo "=== $repo ==="
   gh api /repos/$repo/actions/runners --jq '.runners[]|"\(.name) status=\(.status) labels=\(.labels[].name)"' | grep -E "online|civm"
 done
@@ -187,7 +187,7 @@ gh run view <run_id> --repo emersonbusson/compexhub --json jobs \
 
 ## Critérios de sucesso
 
-- [ ] `gh repo view emersonbusson/civm` retorna repo (não mais `ci-vm`)
+- [ ] `gh repo view advoq/civm` retorna repo (não mais `ci-vm`)
 - [ ] 4 runners online: `civm-self`, `civm-compexhub`, `civm-vitae`, `civm-advoq` (todos com label `civm`)
 - [ ] Workflows compexhub e vitae rodam sem mudança aparente (label novo, runner novo)
 - [ ] systemd na VM mostra 4 services `actions.runner.*.civm-*`

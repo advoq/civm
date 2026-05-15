@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emersonbusson/civm/internal/idle"
+	"github.com/advoq/civm/internal/idle"
 )
 
 func validOpts() AddOptions {

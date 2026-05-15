@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/civm"
-	"github.com/emersonbusson/civm/internal/idle"
+	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/idle"
 )
 
 // RestartOptions controls a runner restart.

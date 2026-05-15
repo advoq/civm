@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/bootstrap"
+	"github.com/advoq/civm/internal/bootstrap"
 )
 
 func runBootstrap(args []string) int {

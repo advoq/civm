@@ -11,7 +11,7 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/emersonbusson/civm/internal/civm"
+	"github.com/advoq/civm/internal/civm"
 )
 
 // Status classifies the GitHub Actions billing state.

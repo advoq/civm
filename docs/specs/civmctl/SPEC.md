@@ -28,7 +28,7 @@ Este SPEC nasceu no bootstrap do `civmctl`; o hardening posterior adiciona:
 
 | Path | LoC alvo | Função |
 |---|---|---|
-| `/home/emdev/codespace/civm/go.mod` | 3 | módulo `github.com/emersonbusson/civm`, Go 1.26 |
+| `/home/emdev/codespace/civm/go.mod` | 3 | módulo `github.com/advoq/civm`, Go 1.26 |
 | `/home/emdev/codespace/civm/cmd/civmctl/main.go` | ≤120 | dispatch + help; só roteia |
 | `/home/emdev/codespace/civm/cmd/civmctl/version_pins.go` | ≤40 | comando `version-pins` |
 | `/home/emdev/codespace/civm/cmd/civmctl/health.go` | ≤80 | comando `health` |
@@ -221,7 +221,7 @@ Steps:
 ```
 [Unit]
 Description=civmctl cleanup (disk hygiene da VM civm)
-Documentation=https://github.com/emersonbusson/civm/blob/main/docs/specs/civmctl/PRD.md
+Documentation=https://github.com/advoq/civm/blob/main/docs/specs/civmctl/PRD.md
 After=network-online.target
 
 [Service]

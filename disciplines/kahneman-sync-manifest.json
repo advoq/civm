@@ -27,6 +27,7 @@
     {
       "name": "advoq",
       "path": "advoq",
+      "git_url": "https://github.com/advoq/advoq.git",
       "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
       "title": "canonical",
       "surfaces": [
@@ -37,6 +38,7 @@
     {
       "name": "vitae",
       "path": "vitae",
+      "git_url": "https://github.com/emersonbusson/vitae.git",
       "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
       "title": "vitae_specific",
       "surfaces": [
@@ -47,6 +49,7 @@
     {
       "name": "civm",
       "path": "civm",
+      "git_url": "https://github.com/advoq/civm.git",
       "doc_path": "disciplines/KAHNEMAN-DISCIPLINES.md",
       "title": "civm_template",
       "surfaces": [
@@ -56,6 +59,7 @@
     {
       "name": "harmya",
       "path": "harmya",
+      "git_url": "https://github.com/advoq/harmya.git",
       "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
       "title": "canonical",
       "surfaces": [
@@ -66,6 +70,7 @@
     {
       "name": "menu-orders",
       "path": "menu-orders",
+      "git_url": "https://github.com/advoq/menu-orders.git",
       "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
       "title": "canonical",
       "surfaces": [
@@ -76,6 +81,7 @@
     {
       "name": "orador-fluido",
       "path": "orador-fluido",
+      "git_url": "https://github.com/advoq/orador-fluido.git",
       "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
       "title": "canonical",
       "surfaces": [
@@ -86,6 +92,7 @@
     {
       "name": "barbershop",
       "path": "barbershop",
+      "git_url": "https://github.com/advoq/barbershop.git",
       "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
       "title": "canonical",
       "surfaces": [
@@ -96,6 +103,7 @@
     {
       "name": "salon",
       "path": "salon",
+      "git_url": "https://github.com/advoq/salon.git",
       "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
       "title": "canonical",
       "surfaces": [
@@ -106,6 +114,7 @@
     {
       "name": "n8n-engine",
       "path": "n8n-engine",
+      "git_url": "https://github.com/emersonbusson/n8n-engine.git",
       "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
       "title": "canonical",
       "surfaces": [
@@ -116,6 +125,7 @@
     {
       "name": "typebot-runtime",
       "path": "typebot-runtime",
+      "git_url": "https://github.com/emersonbusson/typebot-runtime.git",
       "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
       "title": "canonical",
       "surfaces": [
@@ -126,6 +136,7 @@
     {
       "name": "busson",
       "path": "busson",
+      "git_url": "https://github.com/emersonbusson/busson.git",
       "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
       "title": "busson_fork",
       "surfaces": [
@@ -136,6 +147,7 @@
     {
       "name": "chatwoot-realtime",
       "path": "chatwoot-realtime",
+      "git_url": "https://github.com/emersonbusson/chatwoot-realtime.git",
       "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
       "title": "chatwoot_standalone",
       "surfaces": [
@@ -146,6 +158,7 @@
     {
       "name": "advoqwhatsappapi",
       "path": "advoqwhatsappapi",
+      "git_url": "https://github.com/emersonbusson/advoqwhatsappapi.git",
       "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
       "title": "advoqwhatsapp_noaccent",
       "surfaces": [
@@ -156,6 +169,7 @@
     {
       "name": "super-view-project",
       "path": "super-view-project",
+      "git_url": "https://github.com/emersonbusson/super-view-project.git",
       "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
       "title": "canonical",
       "surfaces": [
