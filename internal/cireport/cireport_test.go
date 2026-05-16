@@ -176,6 +176,45 @@ func TestRender_NoOptionals(t *testing.T) {
 	}
 }
 
+// TestPost_ContextDeadlineExceeded — gh api pode estourar timeout em
+// rede degradada; o erro precisa ser propagado wrapped para callers
+// fazerem errors.Is.
+func TestPost_ContextDeadlineExceeded(t *testing.T) {
+	t.Parallel()
+	opts := validOpts()
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, context.DeadlineExceeded
+	}
+	_, err := Post(context.Background(), opts)
+	if err == nil {
+		t.Fatal("expected error from timeout, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected wrapped DeadlineExceeded, got %v", err)
+	}
+}
+
+// TestPost_GhAuthFailure — gh sem PAT cai em erro de auth; precisa
+// preservar o output do gh para diagnóstico operacional.
+func TestPost_GhAuthFailure(t *testing.T) {
+	t.Parallel()
+	opts := validOpts()
+	authErr := errors.New("gh: must run gh auth login")
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("auth required"), authErr
+	}
+	out, err := Post(context.Background(), opts)
+	if err == nil {
+		t.Fatal("expected auth error")
+	}
+	if !errors.Is(err, authErr) {
+		t.Errorf("expected wrapped auth err, got %v", err)
+	}
+	if string(out) != "auth required" {
+		t.Errorf("expected gh output preserved, got %q", out)
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	t.Parallel()
 	if got := truncate("abc", 5); got != "abc" {

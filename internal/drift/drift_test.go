@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -417,5 +419,95 @@ func TestDetect_UsesSpecFromOpts(t *testing.T) {
 	}
 	if len(r.Diffs) != len(opts.Spec.Tools) {
 		t.Errorf("len(Diffs) = %d, want %d", len(r.Diffs), len(opts.Spec.Tools))
+	}
+}
+
+// TestDetect_FetcherTimeout cobre o cenário em que o context expira durante
+// a busca de upstream — common em runners com rede instável.
+func TestDetect_FetcherTimeout(t *testing.T) {
+	t.Parallel()
+	opts := DefaultOptions()
+	opts.Fetcher = func(ctx context.Context, _ string) (string, error) {
+		return "", context.DeadlineExceeded
+	}
+	_, err := Detect(context.Background(), opts)
+	if err == nil {
+		t.Fatal("expected error from timeout, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected DeadlineExceeded wrapped, got %v", err)
+	}
+}
+
+// TestHTTPFetch_5xx valida que respostas não-200 são tratadas como erro
+// explícito (não silenciosamente confundidas com body vazio).
+func TestHTTPFetch_5xx(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	body, err := httpFetch(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatalf("expected error for 5xx, got body=%q", body)
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("expected HTTP 500 in error, got %v", err)
+	}
+}
+
+// TestHTTPFetch_RateLimit429 valida tratamento de rate-limit do GitHub raw.
+func TestHTTPFetch_RateLimit429(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+	_, err := httpFetch(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("expected error for 429, got nil")
+	}
+	if !strings.Contains(err.Error(), "429") {
+		t.Errorf("expected HTTP 429 in error, got %v", err)
+	}
+}
+
+// TestHTTPFetch_ContextCancelled valida que cancelamento de context aborta
+// uma request em andamento (corner case operacional: SIGTERM / Ctrl+C).
+func TestHTTPFetch_ContextCancelled(t *testing.T) {
+	t.Parallel()
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		<-done // bloqueia até teste finalizar
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(func() {
+		close(done)
+		srv.Close()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancela ANTES da request
+	_, err := httpFetch(ctx, srv.URL)
+	if err == nil {
+		t.Fatal("expected error from cancelled context")
+	}
+}
+
+// TestHTTPFetch_OK valida o caminho feliz com cabeçalhos esperados.
+func TestHTTPFetch_OK(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("User-Agent"), "civmctl-drift") {
+			t.Errorf("missing User-Agent: %q", r.Header.Get("User-Agent"))
+		}
+		_, _ = w.Write([]byte("hello world"))
+	}))
+	defer srv.Close()
+	body, err := httpFetch(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if body != "hello world" {
+		t.Errorf("body = %q, want %q", body, "hello world")
 	}
 }

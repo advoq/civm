@@ -300,3 +300,68 @@ func TestDetect_MinBlocked_Custom(t *testing.T) {
 		t.Errorf("status = %v, want Blocked com MinBlocked=2", status)
 	}
 }
+
+// TestDetect_ContextDeadlineExceeded — gh subprocess pode estourar timeout
+// quando rede está degradada; o erro deve ser propagado wrapped para
+// callers identificarem a causa via errors.Is.
+func TestDetect_ContextDeadlineExceeded(t *testing.T) {
+	t.Parallel()
+	o := validOpts()
+	o.RunFn = mockRunFn(nil, context.DeadlineExceeded)
+	status, _, err := Detect(context.Background(), o)
+	if err == nil {
+		t.Fatal("expected error from timeout, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected wrapped DeadlineExceeded, got %v", err)
+	}
+	if status != StatusUnknown {
+		t.Errorf("status = %v, want Unknown on timeout", status)
+	}
+}
+
+// TestDetect_EmptyJSONArray — gh retorna [] (sem runs); deve cair em
+// StatusUnknown (regra existente: tooFewRuns), não em error.
+func TestDetect_EmptyJSONArray(t *testing.T) {
+	t.Parallel()
+	o := validOpts()
+	o.RunFn = mockRunFn([]byte("[]"), nil)
+	status, runs, err := Detect(context.Background(), o)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != StatusUnknown {
+		t.Errorf("status = %v, want Unknown for empty array", status)
+	}
+	if len(runs) != 0 {
+		t.Errorf("len(runs) = %d, want 0", len(runs))
+	}
+}
+
+// TestDetect_MalformedJSON_NonArray — gh retorna JSON válido mas com shape
+// errado (object onde array é esperado). Deve falhar com parse error
+// específico, não panic.
+func TestDetect_MalformedJSON_NonArray(t *testing.T) {
+	t.Parallel()
+	o := validOpts()
+	o.RunFn = mockRunFn([]byte(`{"unexpected": "shape"}`), nil)
+	_, _, err := Detect(context.Background(), o)
+	if err == nil {
+		t.Fatal("expected parse error for non-array JSON")
+	}
+	if !strings.Contains(err.Error(), "parse gh output") {
+		t.Errorf("expected parse error message, got %v", err)
+	}
+}
+
+// TestDetect_TruncatedJSON — buffer truncado no meio da string (cenário real
+// quando gh é killado mid-output por OOM). Deve retornar parse error claro.
+func TestDetect_TruncatedJSON(t *testing.T) {
+	t.Parallel()
+	o := validOpts()
+	o.RunFn = mockRunFn([]byte(`[{"databaseId": 1, "status": "comp`), nil)
+	_, _, err := Detect(context.Background(), o)
+	if err == nil {
+		t.Fatal("expected parse error for truncated JSON")
+	}
+}
