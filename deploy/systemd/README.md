@@ -83,3 +83,22 @@ simultâneo se múltiplas VMs convergirem.
 ## Rollback se quebrar disco
 
 Ver `docs/specs/civmctl/PRD.md` §"Rollback trigger".
+
+## GitHub Actions job hooks
+
+Systemd timers handle periodic and pressure-based cleanup. Job hooks handle
+the CI boundary itself.
+
+Install or repair hook wiring with:
+
+```bash
+sudo civmctl hook install --execute
+```
+
+The command installs `/opt/civm/hooks/job-started.sh` and
+`/opt/civm/hooks/job-completed.sh`, then upserts the corresponding
+`ACTIONS_RUNNER_HOOK_JOB_STARTED` and `ACTIONS_RUNNER_HOOK_JOB_COMPLETED`
+entries in every `/home/*/actions-runner*/.env`.
+
+The wrappers are intentionally tiny; all policy lives in Go under
+`internal/hook` and can be tested with `go test ./internal/hook`.
