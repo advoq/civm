@@ -72,6 +72,93 @@ func (fakeEntry) Info() (os.FileInfo, error)   { return nil, nil }
 
 func fakeDirEntry(name string) os.DirEntry { return fakeEntry(name) }
 
+// TestJobCompletedPreservesHotCachesUnderHome valida que job-completed
+// NÃO remove os caches em $HOME (.cache/go-build, .npm, .yarn, .pnpm-store).
+// Esses caches são caros de reconstruir e o wipe a cada job quebrava
+// builds concorrentes na VM compartilhada. Disk pressure cleanup (via
+// job-started com disco alto) ainda os limpa.
+func TestJobCompletedPreservesHotCachesUnderHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("RUNNER_TEMP", "")
+	t.Setenv("GITHUB_WORKSPACE", "")
+	t.Setenv("GITHUB_REPOSITORY", "")
+	t.Setenv("GITHUB_RUN_ID", "")
+
+	// Cria dirs concretos para os caches sob $HOME — se a função tentar
+	// removê-los, vamos detectar via RemoveAllFn captura.
+	cachePathsUnderHome := []string{
+		filepath.Join(home, ".cache", "go-build"),
+		filepath.Join(home, ".npm", "_cacache"),
+		filepath.Join(home, ".yarn", "cache"),
+		filepath.Join(home, ".pnpm-store"),
+	}
+
+	var removed []string
+	opts := DefaultOptionsFromEnv(EventJobCompleted)
+	opts.Execute = true
+	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 60, nil }
+	opts.RemoveAllFn = func(p string) error { removed = append(removed, p); return nil }
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.LogPath = ""
+	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
+	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+
+	res := Run(context.Background(), opts)
+	if res.Decision != DecisionCleanupApplied {
+		t.Fatalf("decision=%v, want cleanup-applied", res.Decision)
+	}
+	for _, cache := range cachePathsUnderHome {
+		for _, r := range removed {
+			if r == cache {
+				t.Errorf("job-completed removed hot cache %s — go-build em particular invalida builds concorrentes", cache)
+			}
+		}
+	}
+}
+
+// TestJobStartedPurgesHotCachesUnderDiskPressure valida o outro lado:
+// quando disk pressure está ativa em job-started (acima de pre-cleanup-pct),
+// os caches sob $HOME SÃO removidos como medida agressiva para liberar
+// espaço antes do job começar.
+func TestJobStartedPurgesHotCachesUnderDiskPressure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("RUNNER_TEMP", "")
+	t.Setenv("GITHUB_WORKSPACE", "")
+	t.Setenv("GITHUB_REPOSITORY", "")
+	t.Setenv("GITHUB_RUN_ID", "")
+
+	var removed []string
+	opts := DefaultOptionsFromEnv(EventJobStarted)
+	opts.Execute = true
+	opts.PreCleanupPct = 50
+	opts.HardFailPct = 95
+	// 80% disco usado, acima de PreCleanupPct → cleanup purga caches
+	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 20, nil }
+	opts.RemoveAllFn = func(p string) error { removed = append(removed, p); return nil }
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.LogPath = ""
+	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
+	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+
+	Run(context.Background(), opts)
+
+	wantCache := filepath.Join(home, ".cache", "go-build")
+	found := false
+	for _, r := range removed {
+		if r == wantCache {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("disk pressure cleanup deveria purgar go-build cache; removed=%v", removed)
+	}
+}
+
 func TestJobStartedRejectsWhenDiskStillTooHigh(t *testing.T) {
 	opts := DefaultOptionsFromEnv(EventJobStarted)
 	opts.Execute = false

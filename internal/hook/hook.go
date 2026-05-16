@@ -107,7 +107,9 @@ func Run(ctx context.Context, opts Options) Result {
 	case EventJobStarted:
 		if usedPct >= opts.PreCleanupPct {
 			res.Decision = DecisionCleanupApplied
-			res.Actions = append(res.Actions, cleanup(opts, ctx)...)
+			// Disk pressure mode: purga caches ($HOME/.cache/go-build, npm, etc.)
+			// para liberar espaço suficiente.
+			res.Actions = append(res.Actions, cleanup(opts, ctx, true)...)
 			if err := firstActionError(res.Actions); err != nil {
 				return finish(opts, errorResult(res, err))
 			}
@@ -122,7 +124,12 @@ func Run(ctx context.Context, opts Options) Result {
 		}
 	case EventJobCompleted:
 		res.Decision = DecisionCleanupApplied
-		res.Actions = append(res.Actions, cleanup(opts, ctx)...)
+		// Modo rotineiro: preserva caches hot ($HOME/.cache/go-build, etc.)
+		// para evitar invalidar build caches entre jobs concorrentes na VM.
+		// Go build cache especialmente é caro de reconstruir (~minutos por
+		// stdlib + deps), e wipe a cada job-completed quebrava lint
+		// concorrente quando outro PR estava em fila.
+		res.Actions = append(res.Actions, cleanup(opts, ctx, false)...)
 		if err := firstActionError(res.Actions); err != nil {
 			return finish(opts, errorResult(res, err))
 		}
@@ -135,15 +142,24 @@ func Run(ctx context.Context, opts Options) Result {
 	return finish(opts, res)
 }
 
-func cleanup(opts Options, ctx context.Context) []Action {
+// cleanup orchestra a limpeza. purgeCaches=true em disk pressure mode
+// remove os caches em $HOME (go-build, npm, yarn, pnpm); false em modo
+// rotineiro (job-completed) os preserva.
+func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	roots := workRoots(opts)
-	caches := cachePaths()
-	actions := make([]Action, 0, len(roots)+len(caches)+4)
+	hotCaches := cachePaths()
+	estCap := len(roots) + 4
+	if purgeCaches {
+		estCap += len(hotCaches)
+	}
+	actions := make([]Action, 0, estCap)
 	for _, root := range roots {
 		actions = append(actions, cleanWorkRoot(opts, root))
 	}
-	for _, path := range caches {
-		actions = append(actions, removePath(opts, path, "cache"))
+	if purgeCaches {
+		for _, path := range hotCaches {
+			actions = append(actions, removePath(opts, path, "cache"))
+		}
 	}
 	actions = append(actions, commandAction(opts, ctx, "docker_prune", "docker", "system", "prune", "-af", "--volumes"))
 	actions = append(actions, commandAction(opts, ctx, "apt_clean", "sudo", "apt-get", "clean"))
