@@ -66,6 +66,8 @@ func main() {
 		os.Exit(runHook(args))
 	case "capacity":
 		os.Exit(runCapacity(args))
+	case "metrics":
+		os.Exit(runMetrics(args))
 	case "reverse-watchdog":
 		os.Exit(runReverseWatchdog(args))
 	case "bootstrap-everything":
@@ -106,6 +108,7 @@ COMANDOS
   ci              Subcomandos CI cross-peer (local-report)
   hook            GitHub Actions job hooks (started/completed)
   capacity        Status JSON estável para Busson/integrações
+  metrics         Prometheus textfile dump (node_exporter collector)
   reverse-watchdog Alerta se disk-watchdog nao disparou em >MaxAge (default 2h)
   bootstrap-everything  Wrapper: cp systemd units + daemon-reload + bootstrap --execute
   peer-status     Consolida billing + runners + last run em 1 view por peer-repo
@@ -137,6 +140,8 @@ EXEMPLOS
   civmctl disk-watchdog --threshold-pct=80 --execute
   civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="Local VM CI"
   civmctl capacity --json
+  civmctl metrics dump --stdout
+  civmctl metrics dump --out=/var/lib/node_exporter/textfile_collector/civm.prom
   civmctl hook job-completed --execute --json
 
 DOCUMENTACAO
