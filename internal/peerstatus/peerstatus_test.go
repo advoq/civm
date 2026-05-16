@@ -210,3 +210,79 @@ func TestRender_LastRunNoConclusion(t *testing.T) {
 		t.Errorf("Render deveria mostrar status quando Conclusion vazio")
 	}
 }
+
+// TestCollect_TimeoutDoesNotCrash — todas as chamadas gh estouram timeout;
+// peerstatus deve degradar graciosamente (sem error), com campos zero.
+// Peer-status é tolerante por design: melhor mostrar "unknown" para um
+// repo do que abortar a coleta inteira em multi-peer view.
+func TestCollect_TimeoutDoesNotCrash(t *testing.T) {
+	t.Parallel()
+	o := DefaultOptions()
+	o.Repo = "advoq/civm"
+	o.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, context.DeadlineExceeded
+	}
+	s, err := Collect(context.Background(), o)
+	if err != nil {
+		t.Fatalf("Collect must tolerate gh timeouts, got err=%v", err)
+	}
+	if s.Repo != "advoq/civm" {
+		t.Errorf("Repo not preserved on timeout: %s", s.Repo)
+	}
+	if s.RunnersTotal != 0 || s.LastRun != nil {
+		t.Errorf("expected zero fields on full timeout, got %+v", s)
+	}
+}
+
+// TestCollect_MalformedRunnersJSON — gh retorna JSON malformado no endpoint
+// /actions/runners; peerstatus deve ignorar (tolerante) e continuar com
+// outros endpoints.
+func TestCollect_MalformedRunnersJSON(t *testing.T) {
+	t.Parallel()
+	o := DefaultOptions()
+	o.Repo = "advoq/civm"
+	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		key := name + " " + strings.Join(args, " ")
+		if strings.Contains(key, "actions/runners") {
+			return []byte("not-json{{{"), nil
+		}
+		// Outros endpoints retornam vazio para isolar o teste no runners.
+		return []byte("[]"), nil
+	}
+	s, err := Collect(context.Background(), o)
+	if err != nil {
+		t.Fatalf("Collect must tolerate malformed JSON, got err=%v", err)
+	}
+	if s.RunnersTotal != 0 {
+		t.Errorf("RunnersTotal = %d, want 0 (parse failed silently)", s.RunnersTotal)
+	}
+}
+
+// TestCollect_PartialFailure — runners OK mas run list timeout. Deve
+// preservar info dos runners e zerar só LastRun.
+func TestCollect_PartialFailure(t *testing.T) {
+	t.Parallel()
+	o := DefaultOptions()
+	o.Repo = "advoq/civm"
+	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		key := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.Contains(key, "actions/runners"):
+			return []byte(`{"runners":[{"name":"civm-1","status":"online"}]}`), nil
+		case strings.Contains(key, "run list"):
+			return nil, errors.New("gh: rate limited")
+		default:
+			return []byte("[]"), nil
+		}
+	}
+	s, err := Collect(context.Background(), o)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if s.RunnersTotal != 1 || s.RunnersOnline != 1 {
+		t.Errorf("runners not preserved across partial failure: %+v", s)
+	}
+	if s.LastRun != nil {
+		t.Errorf("LastRun should be nil on rate-limit, got %+v", s.LastRun)
+	}
+}
