@@ -1,6 +1,6 @@
 // Package hook implements GitHub Actions self-hosted runner job hooks.
-// Shell files installed for ACTIONS_RUNNER_HOOK_* should be thin wrappers
-// that exec civmctl hook. The policy lives here so it is testable.
+// Runtime is dispatched via argv[0] symlink (job-started/job-completed)
+// pointing at civmctl. The policy lives here so it is testable.
 package hook
 
 import (
@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -309,7 +310,25 @@ func appendLog(opts Options, res Result) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	return json.NewEncoder(f).Encode(res)
+	logger := slog.New(slog.NewJSONHandler(f, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	level := slog.LevelInfo
+	switch res.Decision {
+	case DecisionError:
+		level = slog.LevelError
+	case DecisionRejected:
+		level = slog.LevelWarn
+	}
+	logger.LogAttrs(context.Background(), level, "hook event",
+		slog.String("event", string(res.Event)),
+		slog.String("decision", string(res.Decision)),
+		slog.Int("exit_code", res.ExitCode),
+		slog.Int("disk_used_pct", res.DiskUsedPct),
+		slog.String("repository", res.Repository),
+		slog.String("run_id", res.RunID),
+		slog.String("error", res.Error),
+		slog.Any("actions", res.Actions),
+	)
+	return nil
 }
 
 func RenderJSON(w io.Writer, res Result) error {
