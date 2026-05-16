@@ -715,3 +715,55 @@ Cada caso reabre este runbook + atualiza secão Capacity planning.
 - **2026-05-10** — Primeira versão. Criada após pedido de unificar
   CI de compexhub + vitae + advoq no mesmo runner self-hosted. <!-- invariant-waive:#11 -- entrada de historico explicita escopo de adocao -->
   Companion da Camada 1 entregue em ci.yml refactor (commit `7e5835e`).
+
+## Job hooks and integration contract
+
+For a multi-project VM shared by organization repositories and personal
+repositories, the default model remains persistent per-repo runners. The
+host must behave like a managed CI worker by cleaning each job boundary
+without destroying warm runner caches.
+
+Install the hook policy with:
+
+```bash
+sudo civmctl hook install --execute
+```
+
+This writes thin wrappers to `/opt/civm/hooks` and updates each
+`/home/*/actions-runner*/.env` with:
+
+```bash
+ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started.sh
+ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh
+```
+
+The wrappers call `civmctl hook job-started --execute` and
+`civmctl hook job-completed --execute`; the cleanup policy itself is Go code
+inside `internal/hook`.
+
+The hook contract:
+
+- `job-started` checks disk pressure before the job. If disk usage is above
+  the pre-cleanup threshold, it cleans safe workspace/cache paths first. If
+  disk remains above the hard-fail threshold, it rejects the job before the
+  VM is pushed into a bad state.
+- `job-completed` removes per-job workspace and temporary data, prunes
+  reclaimable Docker state, cleans apt/journal noise, and runs `fstrim`.
+- Both hooks preserve `_work/_tool` and `_work/_actions`; these are warm
+  caches for toolchains/actions and must not be removed during normal
+  hygiene.
+- Hook events append structured JSON lines to `/var/log/civm/hooks.jsonl`.
+
+Busson and other integrations should not parse journal output or infer VM
+state from file layout. Use the stable CLI contract instead:
+
+```bash
+civmctl capacity --json
+civmctl health --json
+civmctl doctor --json
+```
+
+`capacity --json` is the lightweight readiness endpoint. It reports disk
+pressure, active runner services, active `Runner.Worker` count, and an
+`accepting_jobs` boolean suitable for dashboards, orchestration, or guarded
+commands in Busson.

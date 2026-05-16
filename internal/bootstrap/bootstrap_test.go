@@ -460,7 +460,7 @@ func TestCopySystemdUnitsCopiesMatchedFilesWithoutShell(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	for _, name := range []string{"civmctl-cleanup.service", "civmctl-cleanup.timer"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("unit"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("unit"), 0644); err != nil { //nolint:gosec // G306: arquivo systemd unit em t.TempDir, replica perm real de /etc/systemd/system
 			t.Fatal(err)
 		}
 	}

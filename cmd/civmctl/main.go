@@ -41,6 +41,10 @@ func main() {
 		os.Exit(runIdleCheck(args))
 	case "ci":
 		os.Exit(runCI(args))
+	case "hook":
+		os.Exit(runHook(args))
+	case "capacity":
+		os.Exit(runCapacity(args))
 	case "reverse-watchdog":
 		os.Exit(runReverseWatchdog(args))
 	case "bootstrap-everything":
@@ -79,6 +83,8 @@ COMANDOS
   disk-watchdog   Trigger cleanup agressivo se disk >threshold (default 80%%)
   idle-check      Read-only: 0=idle, 1=busy, 2=unknown
   ci              Subcomandos CI cross-peer (local-report)
+  hook            GitHub Actions job hooks (started/completed)
+  capacity        Status JSON estável para Busson/integrações
   reverse-watchdog Alerta se disk-watchdog nao disparou em >MaxAge (default 2h)
   bootstrap-everything  Wrapper: cp systemd units + daemon-reload + bootstrap --execute
   peer-status     Consolida billing + runners + last run em 1 view por peer-repo
@@ -109,6 +115,8 @@ EXEMPLOS
   sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute
   civmctl disk-watchdog --threshold-pct=80 --execute
   civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="Local VM CI"
+  civmctl capacity --json
+  civmctl hook job-completed --execute --json
 
 DOCUMENTACAO
   PRD/SPEC: docs/specs/civmctl/
