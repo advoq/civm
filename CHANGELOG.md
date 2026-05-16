@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.2.0](https://github.com/advoq/civm/compare/v1.1.3...v1.2.0) (2026-05-16)
+
+
+### Features
+
+* **ci:** add kahneman-sync audit across 14 peer repos ([e97476f](https://github.com/advoq/civm/commit/e97476ff045f0abd477068eee93aa63d4f685bf1))
+
+
+### Refactor
+
+* **hook:** eliminate shell wrappers via argv[0] dispatch ([#26](https://github.com/advoq/civm/issues/26)) ([1b8ecbe](https://github.com/advoq/civm/commit/1b8ecbefefb7715f70a108a87f9e5e689d2b9cd1))
+
+
+### Documentation
+
+* **governance:** align ssdv3 refs to disciplines/ path ([4375b7f](https://github.com/advoq/civm/commit/4375b7f3e7de2d3cb4354980b150deb188ae18a5))
+
+
+### CI
+
+* paid approval workflow + job hooks + capacity reporting ([#25](https://github.com/advoq/civm/issues/25)) ([0ace9e5](https://github.com/advoq/civm/commit/0ace9e52ac510a3f4926373129cdfe1494ebbaa9))
+
 ## [1.1.3](https://github.com/emersonbusson/civm/compare/v1.1.2...v1.1.3) (2026-05-11)
 
 
