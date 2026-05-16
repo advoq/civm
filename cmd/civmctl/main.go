@@ -74,6 +74,8 @@ func main() {
 		os.Exit(runBootstrapEverything(args))
 	case "peer-status":
 		os.Exit(runPeerStatus(args))
+	case "self-upgrade":
+		os.Exit(runSelfUpgrade(args))
 	case "-h", "--help", "help":
 		printHelp()
 		os.Exit(0)
@@ -112,6 +114,7 @@ COMANDOS
   reverse-watchdog Alerta se disk-watchdog nao disparou em >MaxAge (default 2h)
   bootstrap-everything  Wrapper: cp systemd units + daemon-reload + bootstrap --execute
   peer-status     Consolida billing + runners + last run em 1 view por peer-repo
+  self-upgrade    Rebuilda civmctl do /opt/civm e substitui /usr/local/bin/civmctl
   help            Esta mensagem
 
 EXEMPLOS
@@ -143,6 +146,8 @@ EXEMPLOS
   civmctl metrics dump --stdout
   civmctl metrics dump --out=/var/lib/node_exporter/textfile_collector/civm.prom
   civmctl hook job-completed --execute --json
+  sudo civmctl self-upgrade
+  sudo civmctl self-upgrade --execute
 
 DOCUMENTACAO
   PRD/SPEC: docs/specs/civmctl/
