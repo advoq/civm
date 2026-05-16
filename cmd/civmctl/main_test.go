@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/advoq/civm/internal/specs"
@@ -69,4 +70,39 @@ func TestSplitCSV(t *testing.T) {
 	if len(got) != 2 || got[0] != "advoq/civm" || got[1] != "emersonbusson/vitae" {
 		t.Fatalf("splitCSV = %#v", got)
 	}
+}
+
+// FuzzSplitCSV enforces the post-condition that splitCSV's output never
+// contains empty entries, never contains leading/trailing whitespace, and
+// never contains a comma. Downstream callers (runner add/remove, ci local-report)
+// pass each entry to civm.ValidateRepo, which is regex-strict; we only test
+// the trim+filter contract here.
+func FuzzSplitCSV(f *testing.F) {
+	seeds := []string{
+		"",
+		"advoq/civm",
+		"advoq/civm,vitae/x",
+		",,",
+		" advoq/civm , vitae/x ",
+		"a,,b,,,c",
+		"\tadvoq/civm\n",
+		"single-no-slash",
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		out := splitCSV(raw)
+		for i, part := range out {
+			if part == "" {
+				t.Fatalf("splitCSV(%q)[%d] is empty", raw, i)
+			}
+			if strings.ContainsRune(part, ',') {
+				t.Fatalf("splitCSV(%q)[%d] contains comma: %q", raw, i, part)
+			}
+			if part != strings.TrimSpace(part) {
+				t.Fatalf("splitCSV(%q)[%d] is not trimmed: %q", raw, i, part)
+			}
+		}
+	})
 }

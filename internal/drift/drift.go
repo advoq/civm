@@ -319,8 +319,9 @@ func isSemverAhead(pinned string, upstreamList []string) bool {
 }
 
 func splitVersion(s string) []int {
-	var out []int
-	for _, p := range strings.Split(s, ".") {
+	parts := strings.Split(s, ".")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
 		n := 0
 		for _, c := range p {
 			if c < '0' || c > '9' {
