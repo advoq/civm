@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.3.0](https://github.com/advoq/civm/compare/v1.2.0...v1.3.0) (2026-05-16)
+
+
+### Features
+
+* **metrics:** emit prometheus textfile for node_exporter ([#29](https://github.com/advoq/civm/issues/29)) ([d24611b](https://github.com/advoq/civm/commit/d24611b4db8264ad49a8d7121f66d1ac8504a811))
+
+
+### Bug Fixes
+
+* **hook:** preserve hot caches under \$HOME on job-completed ([#31](https://github.com/advoq/civm/issues/31)) ([de96cbf](https://github.com/advoq/civm/commit/de96cbf39a7de1159984ce55baa55fb950a97131))
+
+
+### Refactor
+
+* **hook:** use slog.JSONHandler for hook event log ([#28](https://github.com/advoq/civm/issues/28)) ([8246ab7](https://github.com/advoq/civm/commit/8246ab7717c43acdcc05a31c1783eb067a65aae0))
+
 ## [1.2.0](https://github.com/advoq/civm/compare/v1.1.3...v1.2.0) (2026-05-16)
 
 
