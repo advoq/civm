@@ -5,11 +5,32 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 const exitUsage = 64
 
+// hookEventFromArgv0 detects when civmctl was invoked as a runner hook
+// (via symlink job-started or job-completed in /opt/civm/hooks). Returns
+// the event name and true when the basename matches; otherwise false.
+// The legacy ".sh" suffix is tolerated for transitional installs.
+func hookEventFromArgv0(arg0 string) (string, bool) {
+	base := strings.TrimSuffix(filepath.Base(arg0), ".sh")
+	switch base {
+	case "job-started", "job-completed":
+		return base, true
+	}
+	return "", false
+}
+
 func main() {
+	// Hook dispatch via argv[0]: symlinks job-started/job-completed (instalados
+	// em /opt/civm/hooks/) apontam para este binário; o nome do invocador
+	// determina o evento. Eliminamos os shell wrappers antigos.
+	if event, ok := hookEventFromArgv0(os.Args[0]); ok {
+		os.Exit(runHook(append([]string{event, "--execute"}, os.Args[1:]...)))
+	}
 	if len(os.Args) < 2 {
 		printHelp()
 		os.Exit(exitUsage)
