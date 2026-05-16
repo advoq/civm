@@ -13,6 +13,13 @@ import (
 
 func TestJobCompletedCleansWorkspaceButPreservesHotCaches(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// DefaultOptionsFromEnv lê RUNNER_TEMP/GITHUB_WORKSPACE/etc. do ambiente;
+	// quando este teste roda no runner self-hosted do próprio civm, esses
+	// vars apontam para um work root REAL fora do mock — limpa para isolar.
+	t.Setenv("RUNNER_TEMP", "")
+	t.Setenv("GITHUB_WORKSPACE", "")
+	t.Setenv("GITHUB_REPOSITORY", "")
+	t.Setenv("GITHUB_RUN_ID", "")
 	var removed []string
 	var commands []string
 	opts := DefaultOptionsFromEnv(EventJobCompleted)
