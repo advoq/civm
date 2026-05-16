@@ -199,7 +199,7 @@ func TestRenderTextHookShowsActions(t *testing.T) {
 	}
 }
 
-func TestAppendLogWritesJSON(t *testing.T) {
+func TestAppendLogWritesSlogJSON(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "hooks.jsonl")
 	opts := Options{
@@ -207,15 +207,55 @@ func TestAppendLogWritesJSON(t *testing.T) {
 		LogPath:    logPath,
 		MkdirAllFn: os.MkdirAll,
 	}
-	if err := appendLog(opts, Result{Event: EventJobStarted, Decision: DecisionOK}); err != nil {
+	res := Result{
+		Event: EventJobStarted, Decision: DecisionOK,
+		Repository: "advoq/civm", RunID: "12345",
+		DiskUsedPct: 42,
+	}
+	if err := appendLog(opts, res); err != nil {
 		t.Fatalf("appendLog: %v", err)
 	}
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"event":"job-started"`) {
-		t.Fatalf("log missing event: %s", data)
+	// slog.JSONHandler adds time/level/msg + attrs as flat keys.
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(data), &rec); err != nil {
+		t.Fatalf("not valid JSON: %v\n%s", err, data)
+	}
+	for _, key := range []string{"time", "level", "msg", "event", "decision", "repository", "run_id", "disk_used_pct"} {
+		if _, ok := rec[key]; !ok {
+			t.Errorf("missing slog field %q in %v", key, rec)
+		}
+	}
+	if rec["event"] != "job-started" || rec["msg"] != "hook event" || rec["level"] != "INFO" {
+		t.Errorf("unexpected slog record: %v", rec)
+	}
+}
+
+func TestAppendLogPromotesErrorLevel(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "hooks.jsonl")
+	opts := Options{Execute: true, LogPath: logPath, MkdirAllFn: os.MkdirAll}
+	cases := map[Decision]string{
+		DecisionError:    "ERROR",
+		DecisionRejected: "WARN",
+		DecisionOK:       "INFO",
+	}
+	for dec, wantLevel := range cases {
+		_ = os.Remove(logPath)
+		if err := appendLog(opts, Result{Event: EventJobStarted, Decision: dec}); err != nil {
+			t.Fatalf("appendLog(%s): %v", dec, err)
+		}
+		data, _ := os.ReadFile(logPath)
+		var rec map[string]any
+		if err := json.Unmarshal(bytes.TrimSpace(data), &rec); err != nil {
+			t.Fatalf("invalid JSON for %s: %v", dec, err)
+		}
+		if rec["level"] != wantLevel {
+			t.Errorf("decision=%s level=%v, want %s", dec, rec["level"], wantLevel)
+		}
 	}
 }
 
