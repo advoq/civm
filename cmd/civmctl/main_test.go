@@ -72,6 +72,33 @@ func TestSplitCSV(t *testing.T) {
 	}
 }
 
+func TestHookEventFromArgv0(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		arg0  string
+		event string
+		ok    bool
+	}{
+		{"/opt/civm/hooks/job-started", "job-started", true},
+		{"/opt/civm/hooks/job-completed", "job-completed", true},
+		{"job-started", "job-started", true},
+		{"./job-completed", "job-completed", true},
+		// Legacy .sh suffix tolerated during transitional installs.
+		{"/opt/civm/hooks/job-started.sh", "job-started", true},
+		{"/usr/local/bin/civmctl", "", false},
+		{"civmctl", "", false},
+		{"", "", false},
+		{"job-other", "", false},
+	}
+	for _, c := range cases {
+		event, ok := hookEventFromArgv0(c.arg0)
+		if ok != c.ok || event != c.event {
+			t.Errorf("hookEventFromArgv0(%q) = (%q,%v); want (%q,%v)",
+				c.arg0, event, ok, c.event, c.ok)
+		}
+	}
+}
+
 // FuzzSplitCSV enforces the post-condition that splitCSV's output never
 // contains empty entries, never contains leading/trailing whitespace, and
 // never contains a comma. Downstream callers (runner add/remove, ci local-report)

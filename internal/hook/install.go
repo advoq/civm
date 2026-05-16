@@ -12,20 +12,25 @@ import (
 )
 
 const (
-	defaultHooksDir = "/opt/civm/hooks"
-	startedWrapper  = "#!/usr/bin/env bash\nexec /usr/local/bin/civmctl hook job-started --execute \"$@\"\n"
-	doneWrapper     = "#!/usr/bin/env bash\nexec /usr/local/bin/civmctl hook job-completed --execute \"$@\"\n"
+	defaultHooksDir   = "/opt/civm/hooks"
+	defaultCivmctlBin = "/usr/local/bin/civmctl"
+	startedHookName   = "job-started"
+	completedHookName = "job-completed"
 )
 
 type InstallOptions struct {
 	Execute        bool
 	HooksDir       string
+	CivmctlPath    string // alvo dos symlinks job-started / job-completed
 	RunnerGlob     string
 	RestartRunners bool
 	GlobFn         func(pattern string) ([]string, error)
 	ReadFileFn     func(path string) ([]byte, error)
 	WriteFileFn    func(path string, data []byte, perm os.FileMode) error
 	MkdirAllFn     func(path string, perm os.FileMode) error
+	SymlinkFn      func(target, link string) error
+	RemoveFn       func(path string) error // remove um único arquivo/symlink (não recursivo)
+	ReadlinkFn     func(path string) (string, error)
 	RunFn          func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
@@ -40,11 +45,15 @@ type InstallResult struct {
 func DefaultInstallOptions() InstallOptions {
 	return InstallOptions{
 		HooksDir:       defaultHooksDir,
+		CivmctlPath:    defaultCivmctlBin,
 		RunnerGlob:     "/home/*/actions-runner*",
 		GlobFn:         filepath.Glob,
 		ReadFileFn:     os.ReadFile,
 		WriteFileFn:    os.WriteFile,
 		MkdirAllFn:     os.MkdirAll,
+		SymlinkFn:      os.Symlink,
+		RemoveFn:       os.Remove,
+		ReadlinkFn:     os.Readlink,
 		RunFn:          defaultRun,
 		RestartRunners: true,
 	}
@@ -57,11 +66,18 @@ func Install(ctx context.Context, opts InstallOptions) InstallResult {
 		if err := opts.MkdirAllFn(opts.HooksDir, 0755); err != nil {
 			return installError(res, err)
 		}
-		if err := opts.WriteFileFn(filepath.Join(opts.HooksDir, "job-started.sh"), []byte(startedWrapper), 0755); err != nil {
-			return installError(res, err)
+		// Cleanup de instalações antigas que escreviam scripts bash com .sh.
+		for _, legacy := range []string{"job-started.sh", "job-completed.sh"} {
+			path := filepath.Join(opts.HooksDir, legacy)
+			if err := opts.RemoveFn(path); err != nil && !os.IsNotExist(err) {
+				return installError(res, err)
+			}
 		}
-		if err := opts.WriteFileFn(filepath.Join(opts.HooksDir, "job-completed.sh"), []byte(doneWrapper), 0755); err != nil {
-			return installError(res, err)
+		for _, name := range []string{startedHookName, completedHookName} {
+			link := filepath.Join(opts.HooksDir, name)
+			if err := ensureSymlink(opts, opts.CivmctlPath, link); err != nil {
+				return installError(res, err)
+			}
 		}
 	}
 	runners, err := opts.GlobFn(opts.RunnerGlob)
@@ -106,10 +122,28 @@ func upsertEnv(opts InstallOptions, envPath string) error {
 		kept = append(kept, line)
 	}
 	kept = append(kept,
-		"ACTIONS_RUNNER_HOOK_JOB_STARTED="+filepath.Join(opts.HooksDir, "job-started.sh"),
-		"ACTIONS_RUNNER_HOOK_JOB_COMPLETED="+filepath.Join(opts.HooksDir, "job-completed.sh"),
+		"ACTIONS_RUNNER_HOOK_JOB_STARTED="+filepath.Join(opts.HooksDir, startedHookName),
+		"ACTIONS_RUNNER_HOOK_JOB_COMPLETED="+filepath.Join(opts.HooksDir, completedHookName),
 	)
 	return opts.WriteFileFn(envPath, []byte(strings.Join(kept, "\n")+"\n"), 0644)
+}
+
+// ensureSymlink garante que `link` é um symlink apontando para `target`.
+// Idempotente: noop se já correto, recria se aponta para outro lugar,
+// e cria caso não exista. Se `link` existir mas não for symlink (ex.:
+// arquivo regular legado), tenta remover; falha explícita se for um
+// diretório ou se a remoção for negada.
+func ensureSymlink(opts InstallOptions, target, link string) error {
+	if existing, err := opts.ReadlinkFn(link); err == nil && existing == target {
+		return nil
+	}
+	if err := opts.RemoveFn(link); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove existing %s: %w", link, err)
+	}
+	if err := opts.SymlinkFn(target, link); err != nil {
+		return fmt.Errorf("symlink %s -> %s: %w", link, target, err)
+	}
+	return nil
 }
 
 func safeRunnerDir(path string) bool {
@@ -151,6 +185,9 @@ func applyInstallDefaults(opts *InstallOptions) {
 	if opts.HooksDir == "" {
 		opts.HooksDir = defaultHooksDir
 	}
+	if opts.CivmctlPath == "" {
+		opts.CivmctlPath = defaultCivmctlBin
+	}
 	if opts.RunnerGlob == "" {
 		opts.RunnerGlob = "/home/*/actions-runner*"
 	}
@@ -165,6 +202,15 @@ func applyInstallDefaults(opts *InstallOptions) {
 	}
 	if opts.MkdirAllFn == nil {
 		opts.MkdirAllFn = os.MkdirAll
+	}
+	if opts.SymlinkFn == nil {
+		opts.SymlinkFn = os.Symlink
+	}
+	if opts.RemoveFn == nil {
+		opts.RemoveFn = os.Remove
+	}
+	if opts.ReadlinkFn == nil {
+		opts.ReadlinkFn = os.Readlink
 	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun

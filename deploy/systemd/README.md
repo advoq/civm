@@ -95,10 +95,15 @@ Install or repair hook wiring with:
 sudo civmctl hook install --execute
 ```
 
-The command installs `/opt/civm/hooks/job-started.sh` and
-`/opt/civm/hooks/job-completed.sh`, then upserts the corresponding
-`ACTIONS_RUNNER_HOOK_JOB_STARTED` and `ACTIONS_RUNNER_HOOK_JOB_COMPLETED`
-entries in every `/home/*/actions-runner*/.env`.
+The command creates two symlinks — `/opt/civm/hooks/job-started` and
+`/opt/civm/hooks/job-completed` — both pointing at the civmctl binary,
+then upserts the corresponding `ACTIONS_RUNNER_HOOK_JOB_STARTED` and
+`ACTIONS_RUNNER_HOOK_JOB_COMPLETED` entries in every
+`/home/*/actions-runner*/.env`. civmctl detects the event from
+`os.Args[0]` (basename) and dispatches to the same Go policy as the
+explicit `civmctl hook job-started|completed --execute` subcommand. The
+installer also cleans up any legacy `.sh` wrappers from previous
+installations.
 
-The wrappers are intentionally tiny; all policy lives in Go under
-`internal/hook` and can be tested with `go test ./internal/hook`.
+All policy lives in Go under `internal/hook` and can be tested with
+`go test ./internal/hook`.

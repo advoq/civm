@@ -51,7 +51,7 @@ func TestRenderInstallTextDryRun(t *testing.T) {
 }
 
 func TestInstallDryRunSkipsWrites(t *testing.T) {
-	var writes []string
+	var writes, symlinks, removes []string
 	opts := InstallOptions{
 		Execute:    false,
 		HooksDir:   "/opt/civm/hooks",
@@ -63,13 +63,15 @@ func TestInstallDryRunSkipsWrites(t *testing.T) {
 			return nil
 		},
 		MkdirAllFn: func(string, os.FileMode) error { return nil },
+		SymlinkFn:  func(_, link string) error { symlinks = append(symlinks, link); return nil },
+		RemoveFn:   func(p string) error { removes = append(removes, p); return nil },
 	}
 	res := Install(context.Background(), opts)
 	if res.Error != "" {
 		t.Fatalf("dry-run failed: %s", res.Error)
 	}
-	if len(writes) != 0 {
-		t.Fatalf("dry-run wrote files: %v", writes)
+	if len(writes) != 0 || len(symlinks) != 0 || len(removes) != 0 {
+		t.Fatalf("dry-run had side effects: writes=%v symlinks=%v removes=%v", writes, symlinks, removes)
 	}
 	if len(res.RunnerEnvFiles) != 1 {
 		t.Fatalf("expected 1 enumerated env file, got %v", res.RunnerEnvFiles)
@@ -94,11 +96,105 @@ func TestInstallPropagatesGlobError(t *testing.T) {
 		HooksDir:    "/opt/civm/hooks",
 		MkdirAllFn:  func(string, os.FileMode) error { return nil },
 		WriteFileFn: func(string, []byte, os.FileMode) error { return nil },
+		SymlinkFn:   func(string, string) error { return nil },
+		RemoveFn:    func(string) error { return os.ErrNotExist },
+		ReadlinkFn:  func(string) (string, error) { return "", os.ErrNotExist },
 		GlobFn:      func(string) ([]string, error) { return nil, fmt.Errorf("pattern bad") },
 	}
 	res := Install(context.Background(), opts)
 	if res.Error == "" {
 		t.Fatalf("expected glob error to surface")
+	}
+}
+
+func TestInstallCreatesSymlinks(t *testing.T) {
+	var symlinks [][2]string
+	opts := InstallOptions{
+		Execute:     true,
+		HooksDir:    "/opt/civm/hooks",
+		CivmctlPath: "/usr/local/bin/civmctl",
+		MkdirAllFn:  func(string, os.FileMode) error { return nil },
+		SymlinkFn: func(target, link string) error {
+			symlinks = append(symlinks, [2]string{target, link})
+			return nil
+		},
+		RemoveFn:   func(string) error { return os.ErrNotExist },
+		ReadlinkFn: func(string) (string, error) { return "", os.ErrNotExist },
+		GlobFn:     func(string) ([]string, error) { return nil, nil },
+	}
+	res := Install(context.Background(), opts)
+	if res.Error != "" {
+		t.Fatalf("install error: %s", res.Error)
+	}
+	want := map[string]string{
+		"/opt/civm/hooks/job-started":   "/usr/local/bin/civmctl",
+		"/opt/civm/hooks/job-completed": "/usr/local/bin/civmctl",
+	}
+	if len(symlinks) != 2 {
+		t.Fatalf("symlinks created = %v, want 2", symlinks)
+	}
+	for _, pair := range symlinks {
+		if want[pair[1]] != pair[0] {
+			t.Fatalf("unexpected symlink %s -> %s", pair[1], pair[0])
+		}
+	}
+}
+
+func TestInstallReusesCorrectSymlink(t *testing.T) {
+	var symlinks, removes []string
+	opts := InstallOptions{
+		Execute:     true,
+		HooksDir:    "/opt/civm/hooks",
+		CivmctlPath: "/usr/local/bin/civmctl",
+		MkdirAllFn:  func(string, os.FileMode) error { return nil },
+		// Já aponta para o lugar certo — não deve remover nem recriar.
+		ReadlinkFn: func(string) (string, error) { return "/usr/local/bin/civmctl", nil },
+		SymlinkFn:  func(_, link string) error { symlinks = append(symlinks, link); return nil },
+		RemoveFn:   func(p string) error { removes = append(removes, p); return nil },
+		GlobFn:     func(string) ([]string, error) { return nil, nil },
+	}
+	res := Install(context.Background(), opts)
+	if res.Error != "" {
+		t.Fatalf("install error: %s", res.Error)
+	}
+	if len(symlinks) != 0 {
+		t.Fatalf("expected no new symlinks (already correct), got %v", symlinks)
+	}
+	// Legacy .sh paths são sempre limpos (ensureSymlink só pula se já correto;
+	// o loop de cleanup roda sempre antes).
+	if len(removes) != 2 {
+		t.Fatalf("expected 2 legacy removes, got %v", removes)
+	}
+}
+
+func TestInstallCleansLegacyShWrappers(t *testing.T) {
+	var removes []string
+	opts := InstallOptions{
+		Execute:     true,
+		HooksDir:    "/opt/civm/hooks",
+		CivmctlPath: "/usr/local/bin/civmctl",
+		MkdirAllFn:  func(string, os.FileMode) error { return nil },
+		ReadlinkFn:  func(string) (string, error) { return "", os.ErrNotExist },
+		SymlinkFn:   func(string, string) error { return nil },
+		RemoveFn:    func(p string) error { removes = append(removes, p); return nil },
+		GlobFn:      func(string) ([]string, error) { return nil, nil },
+	}
+	Install(context.Background(), opts)
+	wantLegacy := []string{
+		"/opt/civm/hooks/job-started.sh",
+		"/opt/civm/hooks/job-completed.sh",
+	}
+	for _, w := range wantLegacy {
+		found := false
+		for _, r := range removes {
+			if r == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("legacy %s not cleaned (removes=%v)", w, removes)
+		}
 	}
 }
 
@@ -136,18 +232,21 @@ func TestInstallUpsertsHookEnv(t *testing.T) {
 		files[path] = data
 		return nil
 	}
+	opts.SymlinkFn = func(string, string) error { return nil }
+	opts.RemoveFn = func(string) error { return os.ErrNotExist }
+	opts.ReadlinkFn = func(string) (string, error) { return "", os.ErrNotExist }
 	res := Install(context.Background(), opts)
 	if res.Error != "" {
 		t.Fatalf("install error: %s", res.Error)
 	}
 	env := string(files["/home/emdev/actions-runner/.env"])
-	for _, want := range []string{"FOO=bar", "ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started.sh", "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh"} {
+	for _, want := range []string{"FOO=bar", "ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started", "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed"} {
 		if !strings.Contains(env, want) {
 			t.Fatalf("env missing %q:\n%s", want, env)
 		}
 	}
-	if len(writes) < 3 {
-		t.Fatalf("expected wrapper and env writes, got %v", writes)
+	if len(writes) < 1 {
+		t.Fatalf("expected at least one env write, got %v", writes)
 	}
 }
 
@@ -172,8 +271,8 @@ func FuzzUpsertEnv(f *testing.F) {
 		f.Add(s)
 	}
 	const envPath = "/tmp/fuzz.env"
-	wantStarted := "ACTIONS_RUNNER_HOOK_JOB_STARTED=" + filepath.Join(defaultHooksDir, "job-started.sh")
-	wantCompleted := "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=" + filepath.Join(defaultHooksDir, "job-completed.sh")
+	wantStarted := "ACTIONS_RUNNER_HOOK_JOB_STARTED=" + filepath.Join(defaultHooksDir, startedHookName)
+	wantCompleted := "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=" + filepath.Join(defaultHooksDir, completedHookName)
 
 	f.Fuzz(func(t *testing.T, initial string) {
 		files := map[string][]byte{envPath: []byte(initial)}

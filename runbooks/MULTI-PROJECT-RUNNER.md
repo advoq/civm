@@ -729,17 +729,19 @@ Install the hook policy with:
 sudo civmctl hook install --execute
 ```
 
-This writes thin wrappers to `/opt/civm/hooks` and updates each
-`/home/*/actions-runner*/.env` with:
+This creates two symlinks in `/opt/civm/hooks` pointing at the civmctl
+binary and updates each `/home/*/actions-runner*/.env` with:
 
 ```bash
-ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started.sh
-ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh
+ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started
+ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed
 ```
 
-The wrappers call `civmctl hook job-started --execute` and
-`civmctl hook job-completed --execute`; the cleanup policy itself is Go code
-inside `internal/hook`.
+civmctl detects the event from `os.Args[0]` (basename) and routes to the
+same code path as `civmctl hook job-started|completed --execute`. No
+shell wrappers are involved; the entire policy is Go inside
+`internal/hook`. Legacy `.sh` wrappers from prior installs are cleaned
+up by the installer.
 
 The hook contract:
 
