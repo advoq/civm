@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// BenchmarkSafeWorkRoot estabelece baseline para o check de path
-// traversal — chamado em cada add() do workRoots(). Sensível porque é
-// pure-string ops em hot path.
+// BenchmarkSafeWorkRoot establishes a baseline for the path traversal guard
+// called by each workRoots add(). This is sensitive because it is pure string
+// work in a hot path.
 func BenchmarkSafeWorkRoot(b *testing.B) {
 	valid := "/home/emdev/actions-runner-advoq/_work"
 	invalid := "../home/actions-runner/_work"
@@ -19,9 +19,9 @@ func BenchmarkSafeWorkRoot(b *testing.B) {
 	}
 }
 
-// BenchmarkCleanup_RoutineNoPressure captura o caminho job-completed
-// (purgeCaches=false): cleanWorkRoot + 4 commandActions, todos com
-// mocks no-op. Detecta regressão em append/alloc.
+// BenchmarkCleanup_RoutineNoPressure captures the job-completed path
+// (purgeCaches=false): cleanWorkRoot plus four commandActions, all with
+// no-op mocks. This catches append/allocation regressions.
 func BenchmarkCleanup_RoutineNoPressure(b *testing.B) {
 	opts := Options{
 		Execute:     true,
@@ -39,9 +39,9 @@ func BenchmarkCleanup_RoutineNoPressure(b *testing.B) {
 	}
 }
 
-// BenchmarkCleanup_DiskPressure captura job-started com purgeCaches=true:
-// cleanWorkRoot + 4 cachePaths + 4 commandActions. Diferença vs routine
-// estima o custo do cache wipe.
+// BenchmarkCleanup_DiskPressure captures job-started with purgeCaches=true:
+// cleanWorkRoot plus four cachePaths plus four commandActions. The delta vs.
+// routine mode estimates cache wipe cost.
 func BenchmarkCleanup_DiskPressure(b *testing.B) {
 	b.Setenv("HOME", "/home/civm-bench")
 	opts := Options{
@@ -60,9 +60,9 @@ func BenchmarkCleanup_DiskPressure(b *testing.B) {
 	}
 }
 
-// BenchmarkAppendLog mede o overhead da emissão slog do hook event.
-// Chamado uma vez por hook invocation; baseline ajuda a notar regressões
-// se evoluirmos para multiple handlers (journald, etc.).
+// BenchmarkAppendLog measures slog emission overhead for hook events. It runs
+// once per hook invocation; the baseline helps catch regressions if this grows
+// to multiple handlers such as journald.
 func BenchmarkAppendLog(b *testing.B) {
 	dir := b.TempDir()
 	opts := Options{

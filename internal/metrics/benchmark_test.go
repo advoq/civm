@@ -5,10 +5,9 @@ import (
 	"testing"
 )
 
-// BenchmarkRender mede a serialização do textfile prometheus.
-// Baseline pra detectar regressão se trocarmos por templating ou
-// adicionarmos overhead em escapeLabelValue. 6 gauges típicos do
-// civmctl metrics dump.
+// BenchmarkRender measures Prometheus textfile serialization. The baseline
+// catches regressions if templating or escapeLabelValue overhead grows. It
+// uses six typical gauges from civmctl metrics dump.
 func BenchmarkRender(b *testing.B) {
 	metrics := []Metric{
 		{Name: "civm_disk_used_pct", Help: "Percentage", Type: TypeGauge, Value: 42},
@@ -26,9 +25,8 @@ func BenchmarkRender(b *testing.B) {
 	}
 }
 
-// BenchmarkRender_WithLabels mede o overhead extra de labels com
-// escaping. Inclui valor com aspas e quebra de linha pra cobrir o
-// caminho real do replacer.
+// BenchmarkRender_WithLabels measures extra label escaping overhead. It
+// includes quotes and a newline to cover the real replacer path.
 func BenchmarkRender_WithLabels(b *testing.B) {
 	metrics := []Metric{
 		{

@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// BenchmarkCheck mede o hot path do dump de métricas (chamado por
-// civmctl-metrics.timer a cada 1 minuto). Mocks neutralizam syscalls
-// reais; mede só a orquestração + parse de saída de gh/systemctl/pgrep.
+// BenchmarkCheck measures the metrics dump hot path invoked by
+// civmctl-metrics.timer every minute. Mocks neutralize real syscalls and
+// isolate orchestration plus gh/systemctl/pgrep output parsing.
 func BenchmarkCheck(b *testing.B) {
 	opts := DefaultOptions()
 	opts.StatfsFn = func(string) (uint64, uint64, error) {
