@@ -39,7 +39,7 @@ type Options struct {
 	Repo        string // "owner/repo"
 	SHA         string // commit SHA (full or 40-char)
 	State       State  // success, failure, pending, error
-	Context     string // ex: "Local VM CI"
+	Context     string // ex: "civm fallback"
 	Description string // breve descricao (<=140 chars)
 	TargetURL   string // optional URL to detalhes (build log, etc)
 	RunFn       func(ctx context.Context, name string, args ...string) ([]byte, error)
@@ -48,7 +48,7 @@ type Options struct {
 // DefaultOptions returns sane defaults.
 func DefaultOptions() Options {
 	return Options{
-		Context: "Local VM CI",
+		Context: "civm fallback",
 		RunFn:   defaultRun,
 	}
 }
@@ -96,7 +96,7 @@ func validateOptions(opts Options) error {
 		return fmt.Errorf("--state invalido %q (valores: success, failure, pending, error)", opts.State)
 	}
 	if opts.Context == "" {
-		return fmt.Errorf("--context obrigatorio (ex: 'Local VM CI')")
+		return fmt.Errorf("--context obrigatorio (ex: 'civm fallback')")
 	}
 	return nil
 }

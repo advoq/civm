@@ -125,9 +125,9 @@ jobs:
             fi
           fi
 
-      - name: Post Local VM CI status to commit (cross-peer reporter)
+      - name: Post civm fallback status to commit (cross-peer reporter)
         # Demonstra padrao civmctl ci local-report. Util quando branch
-        # protection esperar check name fixo "Local VM CI (civm fallback)"
+        # protection esperar check name fixo "civm fallback"
         # mas o job aggregator nao for o source-of-truth do check
         # (ex.: peer adota gradualmente sem mexer em branch protection).
         # Posta status independente do conclusion do job (if: always()).
@@ -147,7 +147,7 @@ jobs:
             --repo="${{ github.repository }}" \
             --sha="${{ github.sha }}" \
             --state="$state" \
-            --context="Local VM CI (civm fallback)" \
+            --context="civm fallback" \
             --description="advoq smoke + go vet multi-module + web typecheck on civm runner" \
             --target-url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             || echo "ci local-report falhou (warning, gates ja decidiram)"

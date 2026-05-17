@@ -141,7 +141,7 @@ EXEMPLOS
   civmctl idle-check --json
   sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute
   civmctl disk-watchdog --threshold-pct=80 --execute
-  civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="Local VM CI"
+  civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="civm fallback"
   civmctl capacity --json
   civmctl metrics dump --stdout
   civmctl metrics dump --out=/var/lib/node_exporter/textfile_collector/civm.prom
