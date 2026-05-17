@@ -113,7 +113,7 @@ COMANDOS
   metrics         Prometheus textfile dump (node_exporter collector)
   reverse-watchdog Alerta se disk-watchdog nao disparou em >MaxAge (default 2h)
   bootstrap-everything  Wrapper: cp systemd units + daemon-reload + bootstrap --execute
-  peer-status     Consolida billing + runners + last run em 1 view por peer-repo
+  peer-status     Consolida billing + runners + last run em 1 view por peer/fleet
   self-upgrade    Rebuilda civmctl do /opt/civm e substitui /usr/local/bin/civmctl
   help            Esta mensagem
 
@@ -136,12 +136,13 @@ EXEMPLOS
   civmctl reverse-watchdog --max-age-hours=2
   sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute
   civmctl peer-status --repo=emersonbusson/compexhub
+  civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml
   civmctl health --json | jq '.exit'
   civmctl reverse-watchdog --max-age-hours=4
   civmctl idle-check --json
   sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute
   civmctl disk-watchdog --threshold-pct=80 --execute
-  civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="Local VM CI"
+  civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="civm fallback"
   civmctl capacity --json
   civmctl metrics dump --stdout
   civmctl metrics dump --out=/var/lib/node_exporter/textfile_collector/civm.prom

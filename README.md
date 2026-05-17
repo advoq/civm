@@ -61,6 +61,7 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl runner remove` | desregistra runner; aborta antes de `config.sh remove`/`rm -rf` se stop/uninstall falhar |
 | `civmctl drift` | compara pins locais vs upstream actions/runner-images (HTTP fetch) |
 | `civmctl billing-status` | detector heuristico de billing-block (zero-PAT, GITHUB_TOKEN suficiente) |
+| `civmctl peer-status` | status read-only de adoção/saúde por peer ou fleet: billing, runners online e último run; `--repos=owner/a,owner/b` retorna exit `0=ok`, `1=warn`, `2=critical` |
 | `civmctl runner list` | lista runners systemd na VM (parsed; suporta `--json`) |
 | `civmctl runner restart` | systemctl restart por --short ou --unit; verifica is-active após delay |
 | `civmctl runner upgrade` | upgrade in-place de versão (preserva .runner/.credentials/_work) |
@@ -112,6 +113,7 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 |---|---|
 | `templates/ci-optimistic.yml.template` | `cp ... .github/workflows/ci.yml` no peer; substituir placeholders |
 | `templates/ci-router.yml.template` | idem, versão Tier 1 com router |
+| `templates/CIVM-USAGE.md` | copiar para `docs/CIVM.md` no peer; ajustar gate local do projeto |
 | `templates/COMMUNICATION-STYLE.md` | copiar bloco entre marcadores BEGIN/END pra CLAUDE/AGENTS/CODEX do peer |
 | `runbooks/CI-BILLING-FALLBACK.md` | leia para entender as 3 camadas de fallback (referência, não copy) |
 | `runbooks/CI-GITHUB-APP-SETUP.md` | rota de upgrade futuro (referência) |
@@ -154,23 +156,33 @@ Não tem 1-comando-mágico — adoção é manual, peer repo decide o que
 faz sentido:
 
 ```bash
-# 1. Copiar template de workflow (escolher tier)
+# 1. Copiar a doc operacional curta do peer
+mkdir -p <peer>/docs
+cp ~/codespace/civm/templates/CIVM-USAGE.md <peer>/docs/CIVM.md
+# Editar o bloco "Gate local do projeto" com o comando real do peer
+
+# 2. Copiar template de workflow (escolher tier)
 cp ~/codespace/civm/templates/ci-optimistic.yml.template \
    <peer>/.github/workflows/ci.yml
 # Editar para substituir placeholders pelos gates reais do peer
 
-# 2. Copiar snippet COMMUNICATION-STYLE
+# 3. Copiar snippet COMMUNICATION-STYLE
 # (copiar bloco entre marcadores BEGIN/END em
 #  ~/codespace/civm/templates/COMMUNICATION-STYLE.md
 #  pra CLAUDE.md, AGENTS.md, CODEX.md do peer)
 
-# 3. Configurar branch protection no GitHub
+# 4. Configurar branch protection no GitHub
 # Settings > Branches > main > require status check:
 #   "Gates (typecheck, test, build, invariants)"
+
+# 5. Verificar adoção/saúde dos peers antes de publicar ou investigar CI
+civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml
 ```
 
 Audit/discipline-checks ficam no projeto do peer (cada um com sua
 própria ferramenta — ex.: compexhub tem `compexhubctl`).
+`peer-status` é observabilidade read-only: consolida sinais para decisão
+humana, mas não corrige workspace ou configuração de peer automaticamente.
 
 ## Versionamento
 
