@@ -1,6 +1,6 @@
 // Package hook implements GitHub Actions self-hosted runner job hooks.
-// Runtime is dispatched via argv[0] symlink (job-started.sh/job-completed.sh)
-// pointing at civmctl. The policy lives here so it is testable.
+// Runtime is dispatched by small runner hook scripts into civmctl. The policy
+// lives here so it is testable.
 package hook
 
 import (

@@ -28,16 +28,14 @@ const (
 type InstallOptions struct {
 	Execute        bool
 	HooksDir       string
-	CivmctlPath    string // alvo dos symlinks job-started.sh / job-completed.sh
+	CivmctlPath    string // binary invoked by job-started.sh / job-completed.sh scripts
 	RunnerGlob     string
 	RestartRunners bool
 	GlobFn         func(pattern string) ([]string, error)
 	ReadFileFn     func(path string) ([]byte, error)
 	WriteFileFn    func(path string, data []byte, perm os.FileMode) error
 	MkdirAllFn     func(path string, perm os.FileMode) error
-	SymlinkFn      func(target, link string) error
-	RemoveFn       func(path string) error // remove um único arquivo/symlink (não recursivo)
-	ReadlinkFn     func(path string) (string, error)
+	RemoveFn       func(path string) error // remove one file or symlink, never recursively
 	RunFn          func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
@@ -58,9 +56,7 @@ func DefaultInstallOptions() InstallOptions {
 		ReadFileFn:     os.ReadFile,
 		WriteFileFn:    os.WriteFile,
 		MkdirAllFn:     os.MkdirAll,
-		SymlinkFn:      os.Symlink,
 		RemoveFn:       os.Remove,
-		ReadlinkFn:     os.Readlink,
 		RunFn:          defaultRun,
 		RestartRunners: true,
 	}
@@ -76,17 +72,24 @@ func Install(ctx context.Context, opts InstallOptions) InstallResult {
 		if err := opts.MkdirAllFn(opts.HooksDir, 0755); err != nil {
 			return installError(res, err)
 		}
-		// Cleanup de uma transição inválida: o runner exige extensão .sh,
-		// .ps1 ou .js nos paths ACTIONS_RUNNER_HOOK_*.
+		// Clean up an invalid transition: the runner requires .sh, .ps1 or
+		// .js suffixes in ACTIONS_RUNNER_HOOK_* paths.
 		for _, legacy := range []string{"job-started", "job-completed"} {
 			path := filepath.Join(opts.HooksDir, legacy)
 			if err := opts.RemoveFn(path); err != nil && !os.IsNotExist(err) {
 				return installError(res, err)
 			}
 		}
-		for _, name := range []string{startedHookName, completedHookName} {
-			link := filepath.Join(opts.HooksDir, name)
-			if err := ensureSymlink(opts, opts.CivmctlPath, link); err != nil {
+		hooks := []struct {
+			name  string
+			event Event
+		}{
+			{startedHookName, EventJobStarted},
+			{completedHookName, EventJobCompleted},
+		}
+		for _, item := range hooks {
+			path := filepath.Join(opts.HooksDir, item.name)
+			if err := ensureHookScript(opts, path, item.event); err != nil {
 				return installError(res, err)
 			}
 		}
@@ -152,22 +155,22 @@ func upsertEnv(opts InstallOptions, envPath string) error {
 	return opts.WriteFileFn(envPath, []byte(strings.Join(kept, "\n")+"\n"), 0644)
 }
 
-// ensureSymlink garante que `link` é um symlink apontando para `target`.
-// Idempotente: noop se já correto, recria se aponta para outro lugar,
-// e cria caso não exista. Se `link` existir mas não for symlink (ex.:
-// arquivo regular legado), tenta remover; falha explícita se for um
-// diretório ou se a remoção for negada.
-func ensureSymlink(opts InstallOptions, target, link string) error {
-	if existing, err := opts.ReadlinkFn(link); err == nil && existing == target {
-		return nil
+func ensureHookScript(opts InstallOptions, path string, event Event) error {
+	if err := opts.RemoveFn(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove existing %s: %w", path, err)
 	}
-	if err := opts.RemoveFn(link); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove existing %s: %w", link, err)
-	}
-	if err := opts.SymlinkFn(target, link); err != nil {
-		return fmt.Errorf("symlink %s -> %s: %w", link, target, err)
+	if err := opts.WriteFileFn(path, []byte(ScriptContent(opts.CivmctlPath, event)), 0755); err != nil {
+		return fmt.Errorf("write hook script %s: %w", path, err)
 	}
 	return nil
+}
+
+func ScriptContent(civmctlPath string, event Event) string {
+	return fmt.Sprintf("#!/usr/bin/env bash\nset -euo pipefail\nexec %s hook %s --execute \"$@\"\n", shellQuote(civmctlPath), event)
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 // IsRunnerDirCandidate returns true for absolute GitHub runner directories
@@ -250,14 +253,8 @@ func applyInstallDefaults(opts *InstallOptions) {
 	if opts.MkdirAllFn == nil {
 		opts.MkdirAllFn = os.MkdirAll
 	}
-	if opts.SymlinkFn == nil {
-		opts.SymlinkFn = os.Symlink
-	}
 	if opts.RemoveFn == nil {
 		opts.RemoveFn = os.Remove
-	}
-	if opts.ReadlinkFn == nil {
-		opts.ReadlinkFn = os.Readlink
 	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun

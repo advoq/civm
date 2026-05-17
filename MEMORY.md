@@ -677,3 +677,23 @@ brutos aqui.
 - Validações locais do fix: `go vet`, `go build`, `go test -race`,
   coverage interna, `node --test`, YAML, `git diff --check`, secret scan,
   `golangci-lint` e `govulncheck` passaram.
+
+### Follow-up do reparo de wrapper bash
+
+- CI remoto `26004088683` confirmou segunda falha: paths `.sh` passaram na
+  validacao de extensao, mas o runner executa `.sh` via `bash`; symlink
+  direto para binario Go retorna exit 126 (`cannot execute binary file`).
+- Contrato corrigido: `civmctl hook install` agora gera scripts `.sh`
+  gerenciados que executam `civmctl hook job-started|completed --execute`.
+  `doctor` passou a validar conteudo dos scripts, nao readlink.
+- Adicionado teste de regressao que executa o hook gerenciado via `bash`.
+- VM `gha-ubuntu-2404` estava idle; binario local validado instalado em
+  `/usr/local/bin/civmctl`; `sudo civmctl hook install --execute --json`
+  reconciliou 9 `.env`, criou scripts `0755` em `/opt/civm/hooks` e
+  reiniciou 9 services `actions.runner.*`.
+- `civmctl doctor --repos=none --json` na VM retornou exit 1 apenas pelo
+  warning conhecido `LAST cleanup timer nunca rodou`; hook checks OK e
+  `RUNNER_SERVICES` OK com 9/9 services active/running.
+- Validações locais do estado final: `go build`, `go test -race`,
+  coverage interna, `node --test`, YAML, `git diff --check`, secret scan,
+  `golangci-lint` e `govulncheck` passaram.

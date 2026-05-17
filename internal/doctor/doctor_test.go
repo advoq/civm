@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/advoq/civm/internal/health"
+	"github.com/advoq/civm/internal/hook"
 	"github.com/advoq/civm/internal/runner"
 )
 
@@ -205,25 +206,21 @@ func TestCollectReportsHookContractFailures(t *testing.T) {
 	opts.GlobFn = func(string) ([]string, error) {
 		return []string{"/home/emdev/actions-runner"}, nil
 	}
-	opts.ReadlinkFn = func(path string) (string, error) {
+	opts.ReadFileFn = func(path string) ([]byte, error) {
 		switch path {
 		case "/opt/civm/hooks/job-started.sh":
-			return "/usr/local/bin/civmctl", nil
+			return []byte(hook.ScriptContent("/usr/local/bin/civmctl", hook.EventJobStarted)), nil
 		case "/opt/civm/hooks/job-completed.sh":
-			return "", errors.New("regular file, not symlink")
+			return []byte("#!/usr/bin/env bash\necho legacy\n"), nil
+		case "/home/emdev/actions-runner/.env":
+			return []byte(strings.Join([]string{
+				"ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started",
+				"ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh",
+				"",
+			}, "\n")), nil
 		default:
-			return "", errors.New("unexpected readlink path: " + path)
+			return nil, errors.New("unexpected read path: " + path)
 		}
-	}
-	opts.ReadFileFn = func(path string) ([]byte, error) {
-		if path != "/home/emdev/actions-runner/.env" {
-			return nil, errors.New("unexpected env path: " + path)
-		}
-		return []byte(strings.Join([]string{
-			"ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started",
-			"ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh",
-			"",
-		}, "\n")), nil
 	}
 
 	report, err := Collect(context.Background(), opts)
@@ -233,7 +230,7 @@ func TestCollectReportsHookContractFailures(t *testing.T) {
 	if report.Exit != 2 {
 		t.Fatalf("Exit = %d, want critical 2; hook_checks=%+v", report.Exit, report.HookChecks)
 	}
-	assertHookCheck(t, report, "HOOK_JOB_COMPLETED", SeverityCritical, "not symlink")
+	assertHookCheck(t, report, "HOOK_JOB_COMPLETED", SeverityCritical, "content mismatch")
 	assertHookCheck(t, report, "HOOK_RUNNER_ENVS", SeverityCritical, "job-started")
 	assertHookCheck(t, report, "RUNNER_SERVICES", SeverityCritical, "1/2")
 }
@@ -322,22 +319,20 @@ func stubHookContractOK(opts *Options) {
 	opts.GlobFn = func(string) ([]string, error) {
 		return []string{"/home/emdev/actions-runner"}, nil
 	}
-	opts.ReadlinkFn = func(path string) (string, error) {
-		switch path {
-		case "/opt/civm/hooks/job-started.sh", "/opt/civm/hooks/job-completed.sh":
-			return "/usr/local/bin/civmctl", nil
-		default:
-			return "", errors.New("unexpected readlink path: " + path)
-		}
-	}
 	opts.ReadFileFn = func(path string) ([]byte, error) {
-		if path != "/home/emdev/actions-runner/.env" {
-			return nil, errors.New("unexpected env path: " + path)
+		switch path {
+		case "/opt/civm/hooks/job-started.sh":
+			return []byte(hook.ScriptContent("/usr/local/bin/civmctl", hook.EventJobStarted)), nil
+		case "/opt/civm/hooks/job-completed.sh":
+			return []byte(hook.ScriptContent("/usr/local/bin/civmctl", hook.EventJobCompleted)), nil
+		case "/home/emdev/actions-runner/.env":
+			return []byte(strings.Join([]string{
+				"ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started.sh",
+				"ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh",
+				"",
+			}, "\n")), nil
+		default:
+			return nil, errors.New("unexpected read path: " + path)
 		}
-		return []byte(strings.Join([]string{
-			"ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started.sh",
-			"ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh",
-			"",
-		}, "\n")), nil
 	}
 }

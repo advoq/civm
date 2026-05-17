@@ -19,7 +19,7 @@ func runDoctor(args []string) int {
 	reposRaw := fs.String("repos", "auto", "repos: auto, default, none ou owner/repo separados por virgula")
 	workflow := fs.String("workflow", "ci.yml", "nome do workflow file")
 	hooksDir := fs.String("hooks-dir", defaults.HooksDir, "diretorio dos hooks ACTIONS_RUNNER_HOOK_*")
-	civmctlPath := fs.String("civmctl-path", defaults.CivmctlPath, "binario alvo dos symlinks de hook")
+	civmctlPath := fs.String("civmctl-path", defaults.CivmctlPath, "binario esperado nos scripts de hook")
 	runnerGlob := fs.String("runner-glob", defaults.RunnerGlob, "glob dos diretorios actions-runner*")
 	jsonOut := fs.Bool("json", false, "saida JSON estruturada")
 	timeoutSec := fs.Int("timeout", 20, "timeout em segundos")

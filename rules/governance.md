@@ -54,7 +54,8 @@ do PR e nao pode expor secrets a fork.
   ou ficar marcadas como historicas.
 - Documentacao operacional ativa nao deve usar `vitae-ci`, `ci-result`,
   `make ci-vm`, `CI_VM_*`, `advoq-ci-vm-autoclean.timer` ou wrappers
-  `.sh` de hook como estado atual.
+  `.sh` customizados de hook como estado atual. O estado atual usa scripts
+  `.sh` gerenciados por `civmctl hook install`.
 
 ## Issues
 

@@ -74,8 +74,9 @@ pin, não prosseguir por confiança em HTTPS.
 ## Peer observability
 
 `civmctl doctor --repos=auto --json` é o diagnóstico genérico da VM: infere
-repos a partir dos services `actions.runner.*`, valida hooks de job e não
-depende da fleet `advoq/*` estar hardcoded. Use `--repos=owner/a,owner/b`
+repos a partir dos services `actions.runner.*`, valida scripts `.sh`
+gerenciados de hooks de job e não depende da fleet `advoq/*` estar hardcoded.
+Use `--repos=owner/a,owner/b`
 quando o nome do service não puder representar o repo sem ambiguidade, e
 `--repos=none` para pular GitHub em auditoria local/offline.
 

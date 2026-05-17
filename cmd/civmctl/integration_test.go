@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/advoq/civm/internal/hook"
 )
 
 // civmctlBin is the path to a built civmctl binary, set up once per
@@ -95,6 +97,38 @@ func TestIntegration_LegacyShSymlinkDispatch(t *testing.T) {
 	}
 	if res["event"] != "job-started" {
 		t.Errorf("legacy .sh basename did not dispatch: event=%v\n%s", res["event"], out)
+	}
+}
+
+func TestIntegration_ManagedHookScriptDispatchViaBash(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "job-started.sh")
+	if err := os.WriteFile(script, []byte(hook.ScriptContent(civmctlBin, hook.EventJobStarted)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", script,
+		"--pre-cleanup-pct=99",
+		"--hard-fail-pct=100",
+		"--json",
+	)
+	cmd.Env = []string{
+		"HOME=" + dir,
+		"PATH=/usr/bin:/bin",
+		"RUNNER_TEMP=" + filepath.Join(dir, "fake-runner-temp"),
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("managed hook script failed: %v\n%s", err, out)
+	}
+	var res map[string]any
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if res["event"] != "job-started" {
+		t.Errorf("managed script did not dispatch: event=%v\n%s", res["event"], out)
+	}
+	if res["decision"] != "ok" {
+		t.Errorf("decision=%v, want ok\n%s", res["decision"], out)
 	}
 }
 

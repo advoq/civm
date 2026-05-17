@@ -1,8 +1,8 @@
 # Security policy
 
 civm is operational infrastructure: a self-hosted GitHub Actions runner
-provisioning toolkit (`civmctl`) plus systemd timers and runner hook
-binaries. This doc describes the threat surface, the validations that
+provisioning toolkit (`civmctl`) plus systemd timers and managed runner
+hook scripts. This doc describes the threat surface, the validations that
 defend it, and how to report issues.
 
 ## Reporting a vulnerability
@@ -34,10 +34,10 @@ The trusted set is:
 - `civmctl` binary at `/usr/local/bin/civmctl` (only operators can
   install or replace; see `civmctl self-upgrade`)
 - systemd unit files in `/etc/systemd/system/civmctl-*.{service,timer}`
-- Target-state hook symlinks at `/opt/civm/hooks/job-{started,completed}`
-  pointing at the trusted binary. Some legacy VMs can still have `.sh`
-  wrappers until `civmctl hook install --execute` is run with a fresh
-  binary; see `runbooks/MULTI-PROJECT-RUNNER.md`.
+- Target-state hook scripts at `/opt/civm/hooks/job-{started,completed}.sh`
+  executing the trusted binary. Some legacy VMs can still have invalid
+  `.sh` symlinks until `civmctl hook install --execute` is run with a
+  fresh binary; see `runbooks/MULTI-PROJECT-RUNNER.md`.
 
 Implicit assumptions:
 
@@ -88,16 +88,16 @@ gated by these validators (see `.golangci.yml` for the rationale).
 
 ### Privilege boundary
 
-Hook policy in `internal/hook` is exercised through symlinks at
-`/opt/civm/hooks/job-{started,completed}` that resolve to civmctl.
-civmctl detects the basename via `os.Args[0]` and dispatches to the
-hook subcommand with `--execute` — never as a separate shell wrapper.
+Hook policy in `internal/hook` is exercised through managed scripts at
+`/opt/civm/hooks/job-{started,completed}.sh`. Each script contains only a
+static `exec /usr/local/bin/civmctl hook <event> --execute "$@"` adapter
+because the GitHub Actions runner executes `.sh` hooks through bash.
 This means:
 
 - The runner can never invoke arbitrary code via the hook env vars,
-  only the validated civmctl binary.
-- A compromise of the hook binary path requires write access to
-  `/usr/local/bin/` (root-only).
+  only the managed script and validated civmctl binary.
+- A compromise of the hook path or binary path requires write access to
+  `/opt/civm/hooks/` or `/usr/local/bin/` (root-only).
 - `civmctl self-upgrade` performs the binary swap via `os.Rename`
   inside the same directory (atomic per POSIX) so concurrent
   invocations never see a half-written file.
@@ -157,8 +157,8 @@ If a deployed civmctl version is found to have a security issue:
    build the release binary from a trusted checkout, copy it to the VM,
    and install it atomically with `sudo install -m 0755 <binary>
    /usr/local/bin/civmctl`. Then run `sudo civmctl hook install
-   --execute` to replace legacy `.sh` hook wrappers with symlinks to the
-   trusted binary.
+   --execute` to replace legacy `.sh` hook symlinks or custom wrappers
+   with managed scripts that execute the trusted binary.
 4. **Re-enable hooks.** Reverse step 1 on each runner.
 
 ## Known operational notes

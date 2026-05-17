@@ -47,7 +47,7 @@ histórico/migração explicitamente marcado:
 - `~/.config/advoq/ci-vm.env`
 - `advoq-ci-vm-autoclean.timer`
 - wrappers shell customizados em hooks de job; o contrato atual usa
-  symlinks `.sh` gerenciados por `civmctl hook install`
+  scripts `.sh` gerenciados por `civmctl hook install`
 
 ## Passo 0 — Backup do estado atual
 

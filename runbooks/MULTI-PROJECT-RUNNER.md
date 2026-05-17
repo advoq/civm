@@ -210,8 +210,8 @@ sudo civmctl self-upgrade --execute --json
 #  "verified":true,"swapped":true,"old_size":7160073,"new_size":7158912}
 ```
 
-Re-instalacao de hooks **nao** e' necessaria: os symlinks
-`/opt/civm/hooks/job-{started,completed}` continuam apontando para
+Re-instalacao de hooks **nao** e' necessaria: os scripts
+`/opt/civm/hooks/job-{started,completed}.sh` continuam invocando
 `/usr/local/bin/civmctl` (que acaba de ser substituido in-place).
 
 `health`/`doctor` podem retornar warning `LAST cleanup timer nunca rodou`
@@ -715,26 +715,25 @@ Instale ou reconcilie a política de hooks com:
 sudo civmctl hook install --execute
 ```
 
-Estado alvo: o comando cria dois symlinks em `/opt/civm/hooks` apontando
-para o binário canônico e atualiza cada `/home/*/actions-runner*/.env`.
-O GitHub Actions runner exige que o path do hook termine em `.sh`, `.ps1`
-ou `.js`; por isso os symlinks têm sufixo `.sh`, mas apontam diretamente
-para o binário Go:
+Estado alvo: o comando cria dois scripts executaveis em `/opt/civm/hooks`
+que invocam o binário canônico e atualiza cada
+`/home/*/actions-runner*/.env`. O GitHub Actions runner exige que o path do
+hook termine em `.sh`, `.ps1` ou `.js`; por isso os scripts têm sufixo
+`.sh`:
 
 ```bash
 ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started.sh
 ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh
 ```
 
-`civmctl` detecta o evento por `os.Args[0]` (basename sem sufixo `.sh`) e
-roteia para o mesmo caminho de código de
-`civmctl hook job-started|completed --execute`. Não há wrapper shell no
-estado alvo; a política fica em Go dentro de `internal/hook`. Wrappers
-shell legados `.sh` de instalações anteriores são substituídos por symlink
-para `/usr/local/bin/civmctl`.
+Cada script executa `civmctl hook job-started|completed --execute`. A
+política fica em Go dentro de `internal/hook`; o shell script gerenciado é
+apenas o adaptador exigido pelo runner para paths `.sh`. Symlinks `.sh`
+legados de instalações anteriores são substituídos por esses scripts
+gerenciados.
 
 Para VMs cujo layout não usa `/home/*/actions-runner*`, não edite código nem
-crie wrapper local. Passe o layout como flag:
+crie script local. Passe o layout como flag:
 
 ```bash
 sudo civmctl hook install --execute \

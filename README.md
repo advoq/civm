@@ -57,7 +57,7 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl health` | health check (disk, mem, runners, ultimo cleanup) |
 | `civmctl doctor [--repos=auto\|owner/repo,...\|none] [--json]` | visão read-only consolidada: host, hooks, systemd runners e GitHub runners; `auto` infere repos pelos services locais |
 | `civmctl idle-check [--json]` | detector read-only de ociosidade: exit `0=idle`, `1=busy`, `2=unknown` |
-| `civmctl hook install [--execute] [--runner-glob=...]` | reconcilia symlinks `ACTIONS_RUNNER_HOOK_*` e `.env` dos runners sem wrappers shell |
+| `civmctl hook install [--execute] [--runner-glob=...]` | reconcilia scripts `ACTIONS_RUNNER_HOOK_*` e `.env` dos runners |
 | `civmctl runner add` | registra runner GitHub Actions self-hosted (mkdir + curl + tar + config.sh + svc.sh install + start) |
 | `civmctl runner remove` | desregistra runner; aborta antes de `config.sh remove`/`rm -rf` se stop/uninstall falhar |
 | `civmctl drift` | compara pins locais vs upstream actions/runner-images (HTTP fetch) |

@@ -118,7 +118,6 @@ type Options struct {
 	RunFn           func(ctx context.Context, name string, args ...string) ([]byte, error)
 	GlobFn          func(pattern string) ([]string, error)
 	ReadFileFn      func(path string) ([]byte, error)
-	ReadlinkFn      func(path string) (string, error)
 }
 
 func DefaultOptions() Options {
@@ -222,9 +221,6 @@ func applyDefaults(opts *Options) {
 	if opts.ReadFileFn == nil {
 		opts.ReadFileFn = os.ReadFile
 	}
-	if opts.ReadlinkFn == nil {
-		opts.ReadlinkFn = os.Readlink
-	}
 	if opts.HealthFn == nil {
 		opts.HealthFn = func(ctx context.Context) health.Report {
 			return health.NewDefaultCollector(opts.WorkDir).Collect(ctx)
@@ -279,8 +275,8 @@ func inferReposFromSystemd(systemd []runner.Status) []string {
 
 func collectHookChecks(opts Options, systemd []runner.Status, systemdErr error) ([]HookCheck, Severity) {
 	checks := []HookCheck{
-		checkHookSymlink(opts, "HOOK_JOB_STARTED", hook.StartedHookName),
-		checkHookSymlink(opts, "HOOK_JOB_COMPLETED", hook.CompletedHookName),
+		checkHookScript(opts, "HOOK_JOB_STARTED", hook.StartedHookName, hook.EventJobStarted),
+		checkHookScript(opts, "HOOK_JOB_COMPLETED", hook.CompletedHookName, hook.EventJobCompleted),
 		checkRunnerEnvHooks(opts),
 		checkRunnerServices(systemd, systemdErr),
 	}
@@ -291,27 +287,28 @@ func collectHookChecks(opts Options, systemd []runner.Status, systemdErr error) 
 	return checks, worst
 }
 
-func checkHookSymlink(opts Options, checkName, hookName string) HookCheck {
+func checkHookScript(opts Options, checkName, hookName string, event hook.Event) HookCheck {
 	path := filepath.Join(opts.HooksDir, hookName)
-	target, err := opts.ReadlinkFn(path)
+	data, err := opts.ReadFileFn(path)
 	if err != nil {
-		detail := fmt.Sprintf("readlink %s: %v", path, err)
+		detail := fmt.Sprintf("read %s: %v", path, err)
 		if os.IsNotExist(err) {
 			detail = fmt.Sprintf("%s missing; run sudo civmctl hook install --execute", path)
 		}
 		return HookCheck{Name: checkName, Severity: SeverityCritical, Detail: detail}
 	}
-	if target != opts.CivmctlPath {
+	want := hook.ScriptContent(opts.CivmctlPath, event)
+	if string(data) != want {
 		return HookCheck{
 			Name:     checkName,
 			Severity: SeverityCritical,
-			Detail:   fmt.Sprintf("%s -> %s, want %s", path, target, opts.CivmctlPath),
+			Detail:   fmt.Sprintf("%s content mismatch; run sudo civmctl hook install --execute", path),
 		}
 	}
 	return HookCheck{
 		Name:     checkName,
 		Severity: SeverityOK,
-		Detail:   fmt.Sprintf("%s -> %s", path, target),
+		Detail:   fmt.Sprintf("%s execs %s hook %s", path, opts.CivmctlPath, event),
 	}
 }
 
@@ -347,7 +344,7 @@ func checkRunnerEnvHooks(opts Options) HookCheck {
 	if len(bad) > 0 {
 		return HookCheck{Name: "HOOK_RUNNER_ENVS", Severity: SeverityCritical, Detail: strings.Join(bad, "; ")}
 	}
-	return HookCheck{Name: "HOOK_RUNNER_ENVS", Severity: SeverityOK, Detail: fmt.Sprintf("%d runner .env files use civmctl hook symlinks", checked)}
+	return HookCheck{Name: "HOOK_RUNNER_ENVS", Severity: SeverityOK, Detail: fmt.Sprintf("%d runner .env files use civmctl hook scripts", checked)}
 }
 
 func parseHookEnvLines(content string) (started, completed string) {

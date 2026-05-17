@@ -49,7 +49,7 @@ Nao usar estes nomes em documentacao operacional nova:
 - `~/.config/advoq/ci-vm.env`
 - `advoq-ci-vm-autoclean.timer`
 - wrappers shell customizados em hooks de job; o contrato atual usa
-  symlinks `.sh` gerenciados por `civmctl hook install`
+  scripts `.sh` gerenciados por `civmctl hook install`
 
 Se algum termo acima aparecer, ele deve estar em arquivo historico,
 arquivo de migracao ou bloco explicitamente marcado como legado.

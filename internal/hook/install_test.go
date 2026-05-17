@@ -51,7 +51,7 @@ func TestRenderInstallTextDryRun(t *testing.T) {
 }
 
 func TestInstallDryRunSkipsWrites(t *testing.T) {
-	var writes, symlinks, removes []string
+	var writes, removes []string
 	opts := InstallOptions{
 		Execute:    false,
 		HooksDir:   "/opt/civm/hooks",
@@ -63,15 +63,14 @@ func TestInstallDryRunSkipsWrites(t *testing.T) {
 			return nil
 		},
 		MkdirAllFn: func(string, os.FileMode) error { return nil },
-		SymlinkFn:  func(_, link string) error { symlinks = append(symlinks, link); return nil },
 		RemoveFn:   func(p string) error { removes = append(removes, p); return nil },
 	}
 	res := Install(context.Background(), opts)
 	if res.Error != "" {
 		t.Fatalf("dry-run failed: %s", res.Error)
 	}
-	if len(writes) != 0 || len(symlinks) != 0 || len(removes) != 0 {
-		t.Fatalf("dry-run had side effects: writes=%v symlinks=%v removes=%v", writes, symlinks, removes)
+	if len(writes) != 0 || len(removes) != 0 {
+		t.Fatalf("dry-run had side effects: writes=%v removes=%v", writes, removes)
 	}
 	if len(res.RunnerEnvFiles) != 1 {
 		t.Fatalf("expected 1 enumerated env file, got %v", res.RunnerEnvFiles)
@@ -96,9 +95,7 @@ func TestInstallPropagatesGlobError(t *testing.T) {
 		HooksDir:    "/opt/civm/hooks",
 		MkdirAllFn:  func(string, os.FileMode) error { return nil },
 		WriteFileFn: func(string, []byte, os.FileMode) error { return nil },
-		SymlinkFn:   func(string, string) error { return nil },
 		RemoveFn:    func(string) error { return os.ErrNotExist },
-		ReadlinkFn:  func(string) (string, error) { return "", os.ErrNotExist },
 		GlobFn:      func(string) ([]string, error) { return nil, fmt.Errorf("pattern bad") },
 	}
 	res := Install(context.Background(), opts)
@@ -125,74 +122,87 @@ func TestInstallRejectsRelativeMutationPaths(t *testing.T) {
 	}
 }
 
-func TestInstallCreatesSymlinks(t *testing.T) {
-	var symlinks [][2]string
+func TestInstallWritesHookScripts(t *testing.T) {
+	writes := map[string]string{}
+	perms := map[string]os.FileMode{}
 	opts := InstallOptions{
 		Execute:     true,
 		HooksDir:    "/opt/civm/hooks",
 		CivmctlPath: "/usr/local/bin/civmctl",
 		MkdirAllFn:  func(string, os.FileMode) error { return nil },
-		SymlinkFn: func(target, link string) error {
-			symlinks = append(symlinks, [2]string{target, link})
+		WriteFileFn: func(path string, data []byte, perm os.FileMode) error {
+			writes[path] = string(data)
+			perms[path] = perm
 			return nil
 		},
-		RemoveFn:   func(string) error { return os.ErrNotExist },
-		ReadlinkFn: func(string) (string, error) { return "", os.ErrNotExist },
-		GlobFn:     func(string) ([]string, error) { return nil, nil },
+		RemoveFn: func(string) error { return os.ErrNotExist },
+		GlobFn:   func(string) ([]string, error) { return nil, nil },
 	}
 	res := Install(context.Background(), opts)
 	if res.Error != "" {
 		t.Fatalf("install error: %s", res.Error)
 	}
 	want := map[string]string{
-		"/opt/civm/hooks/job-started.sh":   "/usr/local/bin/civmctl",
-		"/opt/civm/hooks/job-completed.sh": "/usr/local/bin/civmctl",
+		"/opt/civm/hooks/job-started.sh":   ScriptContent("/usr/local/bin/civmctl", EventJobStarted),
+		"/opt/civm/hooks/job-completed.sh": ScriptContent("/usr/local/bin/civmctl", EventJobCompleted),
 	}
-	if len(symlinks) != 2 {
-		t.Fatalf("symlinks created = %v, want 2", symlinks)
+	if len(writes) != len(want) {
+		t.Fatalf("writes = %v, want %v", writes, want)
 	}
-	for _, pair := range symlinks {
-		if want[pair[1]] != pair[0] {
-			t.Fatalf("unexpected symlink %s -> %s", pair[1], pair[0])
+	for path, content := range want {
+		if writes[path] != content {
+			t.Fatalf("write %s = %q, want %q", path, writes[path], content)
+		}
+		if perms[path] != 0755 {
+			t.Fatalf("perm %s = %v, want 0755", path, perms[path])
 		}
 	}
 }
 
-func TestInstallReusesCorrectSymlink(t *testing.T) {
-	var symlinks, removes []string
+func TestInstallReplacesExistingHookPaths(t *testing.T) {
+	var removes []string
+	writes := map[string]string{}
 	opts := InstallOptions{
 		Execute:     true,
 		HooksDir:    "/opt/civm/hooks",
 		CivmctlPath: "/usr/local/bin/civmctl",
 		MkdirAllFn:  func(string, os.FileMode) error { return nil },
-		// Já aponta para o lugar certo — não deve remover nem recriar.
-		ReadlinkFn: func(string) (string, error) { return "/usr/local/bin/civmctl", nil },
-		SymlinkFn:  func(_, link string) error { symlinks = append(symlinks, link); return nil },
-		RemoveFn:   func(p string) error { removes = append(removes, p); return nil },
-		GlobFn:     func(string) ([]string, error) { return nil, nil },
+		WriteFileFn: func(path string, data []byte, _ os.FileMode) error {
+			writes[path] = string(data)
+			return nil
+		},
+		RemoveFn: func(p string) error { removes = append(removes, p); return nil },
+		GlobFn:   func(string) ([]string, error) { return nil, nil },
 	}
 	res := Install(context.Background(), opts)
 	if res.Error != "" {
 		t.Fatalf("install error: %s", res.Error)
 	}
-	if len(symlinks) != 0 {
-		t.Fatalf("expected no new symlinks (already correct), got %v", symlinks)
+	for _, path := range []string{"/opt/civm/hooks/job-started", "/opt/civm/hooks/job-completed", "/opt/civm/hooks/job-started.sh", "/opt/civm/hooks/job-completed.sh"} {
+		found := false
+		for _, removed := range removes {
+			if removed == path {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected remove %s, removes=%v", path, removes)
+		}
 	}
-	// No-extension hook paths are always removed; the runner rejects them.
-	if len(removes) != 2 {
-		t.Fatalf("expected 2 legacy removes, got %v", removes)
+	if len(writes) != 2 {
+		t.Fatalf("writes = %v, want 2 hook scripts", writes)
 	}
 }
 
-func TestInstallCleansLegacyShWrappers(t *testing.T) {
+func TestInstallReplacesExistingShHooks(t *testing.T) {
 	var removes []string
 	opts := InstallOptions{
 		Execute:     true,
 		HooksDir:    "/opt/civm/hooks",
 		CivmctlPath: "/usr/local/bin/civmctl",
 		MkdirAllFn:  func(string, os.FileMode) error { return nil },
-		ReadlinkFn:  func(string) (string, error) { return "", os.ErrNotExist },
-		SymlinkFn:   func(string, string) error { return nil },
+		WriteFileFn: func(string, []byte, os.FileMode) error { return nil },
 		RemoveFn:    func(p string) error { removes = append(removes, p); return nil },
 		GlobFn:      func(string) ([]string, error) { return nil, nil },
 	}
@@ -279,9 +289,7 @@ func TestInstallUpsertsHookEnv(t *testing.T) {
 		files[path] = data
 		return nil
 	}
-	opts.SymlinkFn = func(string, string) error { return nil }
 	opts.RemoveFn = func(string) error { return os.ErrNotExist }
-	opts.ReadlinkFn = func(string) (string, error) { return "", os.ErrNotExist }
 	res := Install(context.Background(), opts)
 	if res.Error != "" {
 		t.Fatalf("install error: %s", res.Error)

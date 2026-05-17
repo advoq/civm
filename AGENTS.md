@@ -69,7 +69,7 @@ civmctl health
 civmctl doctor --repos=auto --json
 civmctl idle-check
 
-# Hooks de job
+# Hooks de job (scripts .sh gerenciados)
 sudo civmctl hook install --execute
 
 # Ver versoes alvo (sync com upstream actions/runner-images)
