@@ -207,10 +207,10 @@ func TestCollectReportsHookContractFailures(t *testing.T) {
 	}
 	opts.ReadlinkFn = func(path string) (string, error) {
 		switch path {
-		case "/opt/civm/hooks/job-started":
+		case "/opt/civm/hooks/job-started.sh":
 			return "/usr/local/bin/civmctl", nil
-		case "/opt/civm/hooks/job-completed":
-			return "/opt/civm/hooks/job-completed.sh", nil
+		case "/opt/civm/hooks/job-completed.sh":
+			return "", errors.New("regular file, not symlink")
 		default:
 			return "", errors.New("unexpected readlink path: " + path)
 		}
@@ -220,8 +220,8 @@ func TestCollectReportsHookContractFailures(t *testing.T) {
 			return nil, errors.New("unexpected env path: " + path)
 		}
 		return []byte(strings.Join([]string{
-			"ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started.sh",
-			"ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed",
+			"ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started",
+			"ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh",
 			"",
 		}, "\n")), nil
 	}
@@ -233,8 +233,8 @@ func TestCollectReportsHookContractFailures(t *testing.T) {
 	if report.Exit != 2 {
 		t.Fatalf("Exit = %d, want critical 2; hook_checks=%+v", report.Exit, report.HookChecks)
 	}
-	assertHookCheck(t, report, "HOOK_JOB_COMPLETED", SeverityCritical, "job-completed.sh")
-	assertHookCheck(t, report, "HOOK_RUNNER_ENVS", SeverityCritical, ".sh")
+	assertHookCheck(t, report, "HOOK_JOB_COMPLETED", SeverityCritical, "not symlink")
+	assertHookCheck(t, report, "HOOK_RUNNER_ENVS", SeverityCritical, "job-started")
 	assertHookCheck(t, report, "RUNNER_SERVICES", SeverityCritical, "1/2")
 }
 
@@ -324,7 +324,7 @@ func stubHookContractOK(opts *Options) {
 	}
 	opts.ReadlinkFn = func(path string) (string, error) {
 		switch path {
-		case "/opt/civm/hooks/job-started", "/opt/civm/hooks/job-completed":
+		case "/opt/civm/hooks/job-started.sh", "/opt/civm/hooks/job-completed.sh":
 			return "/usr/local/bin/civmctl", nil
 		default:
 			return "", errors.New("unexpected readlink path: " + path)
@@ -335,8 +335,8 @@ func stubHookContractOK(opts *Options) {
 			return nil, errors.New("unexpected env path: " + path)
 		}
 		return []byte(strings.Join([]string{
-			"ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started",
-			"ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed",
+			"ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started.sh",
+			"ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh",
 			"",
 		}, "\n")), nil
 	}

@@ -295,13 +295,11 @@ func checkHookSymlink(opts Options, checkName, hookName string) HookCheck {
 	path := filepath.Join(opts.HooksDir, hookName)
 	target, err := opts.ReadlinkFn(path)
 	if err != nil {
-		sev := SeverityWarning
 		detail := fmt.Sprintf("readlink %s: %v", path, err)
 		if os.IsNotExist(err) {
-			sev = SeverityCritical
 			detail = fmt.Sprintf("%s missing; run sudo civmctl hook install --execute", path)
 		}
-		return HookCheck{Name: checkName, Severity: sev, Detail: detail}
+		return HookCheck{Name: checkName, Severity: SeverityCritical, Detail: detail}
 	}
 	if target != opts.CivmctlPath {
 		return HookCheck{
@@ -338,11 +336,7 @@ func checkRunnerEnvHooks(opts Options) HookCheck {
 			bad = append(bad, fmt.Sprintf("%s read failed: %v", envPath, err))
 			continue
 		}
-		started, completed, legacy := parseHookEnvLines(string(data))
-		if legacy {
-			bad = append(bad, envPath+" uses .sh hook")
-			continue
-		}
+		started, completed := parseHookEnvLines(string(data))
 		if started != wantStarted || completed != wantCompleted {
 			bad = append(bad, fmt.Sprintf("%s has %q / %q, want %q / %q", envPath, started, completed, wantStarted, wantCompleted))
 		}
@@ -356,23 +350,17 @@ func checkRunnerEnvHooks(opts Options) HookCheck {
 	return HookCheck{Name: "HOOK_RUNNER_ENVS", Severity: SeverityOK, Detail: fmt.Sprintf("%d runner .env files use civmctl hook symlinks", checked)}
 }
 
-func parseHookEnvLines(content string) (started, completed string, legacy bool) {
+func parseHookEnvLines(content string) (started, completed string) {
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "ACTIONS_RUNNER_HOOK_JOB_STARTED=") {
 			started = line
-			if strings.Contains(line, ".sh") {
-				legacy = true
-			}
 		}
 		if strings.HasPrefix(line, "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=") {
 			completed = line
-			if strings.Contains(line, ".sh") {
-				legacy = true
-			}
 		}
 	}
-	return started, completed, legacy
+	return started, completed
 }
 
 func checkRunnerServices(systemd []runner.Status, systemdErr error) HookCheck {

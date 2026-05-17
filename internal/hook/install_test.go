@@ -145,8 +145,8 @@ func TestInstallCreatesSymlinks(t *testing.T) {
 		t.Fatalf("install error: %s", res.Error)
 	}
 	want := map[string]string{
-		"/opt/civm/hooks/job-started":   "/usr/local/bin/civmctl",
-		"/opt/civm/hooks/job-completed": "/usr/local/bin/civmctl",
+		"/opt/civm/hooks/job-started.sh":   "/usr/local/bin/civmctl",
+		"/opt/civm/hooks/job-completed.sh": "/usr/local/bin/civmctl",
 	}
 	if len(symlinks) != 2 {
 		t.Fatalf("symlinks created = %v, want 2", symlinks)
@@ -178,8 +178,7 @@ func TestInstallReusesCorrectSymlink(t *testing.T) {
 	if len(symlinks) != 0 {
 		t.Fatalf("expected no new symlinks (already correct), got %v", symlinks)
 	}
-	// Legacy .sh paths são sempre limpos (ensureSymlink só pula se já correto;
-	// o loop de cleanup roda sempre antes).
+	// No-extension hook paths are always removed; the runner rejects them.
 	if len(removes) != 2 {
 		t.Fatalf("expected 2 legacy removes, got %v", removes)
 	}
@@ -288,7 +287,7 @@ func TestInstallUpsertsHookEnv(t *testing.T) {
 		t.Fatalf("install error: %s", res.Error)
 	}
 	env := string(files["/home/emdev/actions-runner/.env"])
-	for _, want := range []string{"FOO=bar", "ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started", "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed"} {
+	for _, want := range []string{"FOO=bar", "ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started.sh", "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh"} {
 		if !strings.Contains(env, want) {
 			t.Fatalf("env missing %q:\n%s", want, env)
 		}

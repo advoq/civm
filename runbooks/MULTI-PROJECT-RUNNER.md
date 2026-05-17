@@ -716,19 +716,22 @@ sudo civmctl hook install --execute
 ```
 
 Estado alvo: o comando cria dois symlinks em `/opt/civm/hooks` apontando
-para o binário canônico e atualiza cada
-`/home/*/actions-runner*/.env` com:
+para o binário canônico e atualiza cada `/home/*/actions-runner*/.env`.
+O GitHub Actions runner exige que o path do hook termine em `.sh`, `.ps1`
+ou `.js`; por isso os symlinks têm sufixo `.sh`, mas apontam diretamente
+para o binário Go:
 
 ```bash
-ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started
-ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed
+ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started.sh
+ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh
 ```
 
-`civmctl` detecta o evento por `os.Args[0]` (basename) e roteia para o
-mesmo caminho de código de `civmctl hook job-started|completed --execute`.
-Não há wrapper shell no estado alvo; a política fica em Go dentro de
-`internal/hook`. Wrappers legados `.sh` de instalações anteriores são
-removidos pelo installer.
+`civmctl` detecta o evento por `os.Args[0]` (basename sem sufixo `.sh`) e
+roteia para o mesmo caminho de código de
+`civmctl hook job-started|completed --execute`. Não há wrapper shell no
+estado alvo; a política fica em Go dentro de `internal/hook`. Wrappers
+shell legados `.sh` de instalações anteriores são substituídos por symlink
+para `/usr/local/bin/civmctl`.
 
 Para VMs cujo layout não usa `/home/*/actions-runner*`, não edite código nem
 crie wrapper local. Passe o layout como flag:
@@ -790,11 +793,11 @@ Para inspeção manual dos `.env`, use:
 ssh gha-ubuntu-2404 'for f in /home/*/actions-runner*/.env; do echo "$f"; grep ^ACTIONS_RUNNER_HOOK_ "$f"; done'
 ```
 
-Todos os valores devem apontar para paths sem `.sh`:
+Todos os valores devem apontar para paths `.sh` gerenciados pelo civmctl:
 
 ```bash
-ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started
-ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed
+ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started.sh
+ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh
 ```
 
 Por fim, confirme adoção/saúde dos peers críticos:

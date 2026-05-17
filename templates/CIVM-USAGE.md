@@ -48,8 +48,8 @@ Nao usar estes nomes em documentacao operacional nova:
 - `CI_VM_HOST`, `CI_VM_USER`, `CI_VM_PASSWORD`
 - `~/.config/advoq/ci-vm.env`
 - `advoq-ci-vm-autoclean.timer`
-- hooks legados `/opt/civm/hooks/job-started.sh` e
-  `/opt/civm/hooks/job-completed.sh`
+- wrappers shell customizados em hooks de job; o contrato atual usa
+  symlinks `.sh` gerenciados por `civmctl hook install`
 
 Se algum termo acima aparecer, ele deve estar em arquivo historico,
 arquivo de migracao ou bloco explicitamente marcado como legado.

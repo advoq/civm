@@ -660,3 +660,20 @@ brutos aqui.
 - **Open items:**
   - Push para `origin/main` continua bloqueado para humano.
   - Revalidar no GitHub Actions remoto depois do push humano.
+
+### Follow-up remoto no mesmo dia
+
+- Humano autorizou push para `origin/main`; commit `4d47cf6` publicado.
+- CI remoto `26003850520` falhou em setup antes do checkout porque
+  `ACTIONS_RUNNER_HOOK_*` apontava para paths sem extensão. GitHub Actions
+  exige hook path terminando em `.sh`, `.ps1` ou `.js`.
+- VM `gha-ubuntu-2404` estava idle; reparo operacional aplicado:
+  9 arquivos `.env` atualizados para `/opt/civm/hooks/job-started.sh` e
+  `/opt/civm/hooks/job-completed.sh`, symlinks `.sh` apontando para
+  `/usr/local/bin/civmctl`, e 9 services `actions.runner.*` reiniciados
+  ativos/running.
+- Código/docs corrigidos para tratar `.sh` como symlink gerenciado, não
+  wrapper shell legado.
+- Validações locais do fix: `go vet`, `go build`, `go test -race`,
+  coverage interna, `node --test`, YAML, `git diff --check`, secret scan,
+  `golangci-lint` e `govulncheck` passaram.

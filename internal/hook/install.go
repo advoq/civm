@@ -15,8 +15,8 @@ const (
 	defaultHooksDir   = "/opt/civm/hooks"
 	defaultCivmctlBin = "/usr/local/bin/civmctl"
 	defaultRunnerGlob = "/home/*/actions-runner*"
-	startedHookName   = "job-started"
-	completedHookName = "job-completed"
+	startedHookName   = "job-started.sh"
+	completedHookName = "job-completed.sh"
 
 	DefaultHooksDir   = defaultHooksDir
 	DefaultCivmctlBin = defaultCivmctlBin
@@ -28,7 +28,7 @@ const (
 type InstallOptions struct {
 	Execute        bool
 	HooksDir       string
-	CivmctlPath    string // alvo dos symlinks job-started / job-completed
+	CivmctlPath    string // alvo dos symlinks job-started.sh / job-completed.sh
 	RunnerGlob     string
 	RestartRunners bool
 	GlobFn         func(pattern string) ([]string, error)
@@ -76,8 +76,9 @@ func Install(ctx context.Context, opts InstallOptions) InstallResult {
 		if err := opts.MkdirAllFn(opts.HooksDir, 0755); err != nil {
 			return installError(res, err)
 		}
-		// Cleanup de instalações antigas que escreviam scripts bash com .sh.
-		for _, legacy := range []string{"job-started.sh", "job-completed.sh"} {
+		// Cleanup de uma transição inválida: o runner exige extensão .sh,
+		// .ps1 ou .js nos paths ACTIONS_RUNNER_HOOK_*.
+		for _, legacy := range []string{"job-started", "job-completed"} {
 			path := filepath.Join(opts.HooksDir, legacy)
 			if err := opts.RemoveFn(path); err != nil && !os.IsNotExist(err) {
 				return installError(res, err)
