@@ -20,14 +20,16 @@ civm permite execução autônoma para:
   `.release-please-manifest.json` (release automation e CI gates)
 - ✅ Build e test local (`go build`, `go test`)
 - ✅ Commit local (sem push)
+- ✅ Modificar peer repos quando houver autorização explícita do humano para
+  trabalho cross-repo, preservando WIP e committando só arquivos tocados
 
 civm **NÃO** permite autonomamente:
 
 - ❌ `git push` para `origin/main` (sempre humano)
 - ❌ Alterar `.git/config` ou hooks
 - ❌ Criar/deletar repos no GitHub via `gh repo create`/`gh repo delete`
-- ❌ Modificar repos peer (compexhub, vitae, advoq) — escopo cross-repo
-  exige autorização explícita do humano
+- ❌ Modificar repos peer (compexhub, vitae, advoq) sem autorização
+  explícita do humano para o escopo cross-repo
 - ❌ Executar `civmctl bootstrap` ou `civmctl cleanup --execute` na máquina
   do dev (destinado à VM dedicada; agente sandboxed não tem SSH)
 - ❌ Persistir secret em qualquer arquivo (mesmo `.env.example`)
@@ -68,6 +70,18 @@ Downloads executados como root devem ter checksum pinado no código antes de
 qualquer extração, instalação ou execução de script. Se o upstream publicar
 nova versão sem checksum pinado, o comando deve falhar pedindo atualização do
 pin, não prosseguir por confiança em HTTPS.
+
+## Peer observability
+
+`civmctl peer-status --repo=owner/repo --json` preserva o contrato JSON de um
+peer único. `civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml`
+é a visão fleet para checar adoção/saúde dos peers antes de publicar ou
+investigar CI.
+
+O modo fleet é read-only: consolida billing, runners online e último run por
+peer, com resumo `ok/warn/critical` e exit `0=ok`, `1=warn`, `2=critical`.
+Ele nunca corrige workflow, runner, branch protection, workspace ou config de
+peer automaticamente.
 
 ## Release automation
 
@@ -191,6 +205,7 @@ em produção, reavaliar (talvez voltar para runbook puro + Ansible playbook).
 - `AGENTS.md` — resumo geral
 - `MEMORY.md` — log temporal append-only
 - `runbooks/MULTI-PROJECT-RUNNER.md` — fluxo de provisionamento
+- `templates/CIVM-USAGE.md` — fonte de `docs/CIVM.md` nos peer repos
 - `cmd/civmctl/` — código do CLI
 
 <!-- COMMUNICATION-STYLE:BEGIN -->

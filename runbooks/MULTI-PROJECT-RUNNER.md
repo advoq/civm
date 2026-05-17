@@ -765,8 +765,8 @@ Install the hook policy with:
 sudo civmctl hook install --execute
 ```
 
-This creates two symlinks in `/opt/civm/hooks` pointing at the civmctl
-binary and updates each `/home/*/actions-runner*/.env` with:
+Target state: this creates two symlinks in `/opt/civm/hooks` pointing at
+the civmctl binary and updates each `/home/*/actions-runner*/.env` with:
 
 ```bash
 ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started
@@ -778,6 +778,15 @@ same code path as `civmctl hook job-started|completed --execute`. No
 shell wrappers are involved; the entire policy is Go inside
 `internal/hook`. Legacy `.sh` wrappers from prior installs are cleaned
 up by the installer.
+
+**Observed state on 2026-05-17:** the production VM still had only
+`/opt/civm/hooks/job-started.sh` and `/opt/civm/hooks/job-completed.sh`,
+with no Git checkout in `/opt/civm`. Several runner `.env` files still
+pointed at those `.sh` wrappers, and the Advoq runners used a custom
+completed hook at `/home/emdev/bin/civm-hook-job-completed-advoq.sh`.
+Until `civmctl hook install --execute` is run with a fresh binary, docs
+must describe the symlink form above as target state, not as deployed
+fact.
 
 The hook contract:
 
