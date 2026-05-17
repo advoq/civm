@@ -6,8 +6,8 @@
 
 ## Pré-requisitos
 
-- [ ] civm repo presente em `~/codespace/civm/` (local OK; quando
-      migrar pra GitHub, ajustar refs)
+- [ ] civm repo presente localmente (ex.: `~/codespace/civm/`; ajuste o path
+      para a máquina do operador)
 - [ ] Runner GitHub do peer registrado e online com label `civm`
 - [ ] Workflow usa `runs-on: [self-hosted, civm]` nos jobs que devem cair
       no runner local
@@ -27,7 +27,7 @@ Fonte canônica para copiar:
 
 ```bash
 mkdir -p docs
-cp ~/codespace/civm/templates/CIVM-USAGE.md docs/CIVM.md
+cp "${CIVM_REPO:-$HOME/codespace/civm}/templates/CIVM-USAGE.md" docs/CIVM.md
 ```
 
 Depois de copiar, substituir apenas o bloco "Gate local do projeto" pelo
@@ -81,7 +81,7 @@ git checkout -b chore/adopt-civm
 
 ```bash
 mkdir -p docs
-cp ~/codespace/civm/templates/CIVM-USAGE.md docs/CIVM.md
+cp "${CIVM_REPO:-$HOME/codespace/civm}/templates/CIVM-USAGE.md" docs/CIVM.md
 ```
 
 Editar `docs/CIVM.md` para trocar o gate de exemplo pelo comando real
@@ -98,10 +98,10 @@ do passo seguinte + histórico).
 
 Copiar bloco entre marcadores `<!-- COMMUNICATION-STYLE:BEGIN -->`
 e `<!-- COMMUNICATION-STYLE:END -->` de
-`~/codespace/civm/templates/COMMUNICATION-STYLE.md` para o final
+`<civm>/templates/COMMUNICATION-STYLE.md` para o final
 de cada arquivo `CLAUDE.md`, `AGENTS.md`, `CODEX.md`.
 
-Adicionar logo abaixo: `> Source canônico: ~/codespace/civm/templates/COMMUNICATION-STYLE.md`
+Adicionar logo abaixo: `> Source canônico: <civm>/templates/COMMUNICATION-STYLE.md`
 
 ## Passo 6 — Criar MEMORY.md se não existir
 
@@ -116,11 +116,11 @@ Primeira entrada documenta esta adoção.
 mkdir -p .github/workflows
 
 # Tier 3 (recomendado para repos novos — zero auth, self-healing):
-cp ~/codespace/civm/templates/ci-optimistic.yml.template \
+cp "${CIVM_REPO:-$HOME/codespace/civm}/templates/ci-optimistic.yml.template" \
    .github/workflows/ci.yml
 
 # OU Tier 1 (router pattern):
-cp ~/codespace/civm/templates/ci-router.yml.template \
+cp "${CIVM_REPO:-$HOME/codespace/civm}/templates/ci-router.yml.template" \
    .github/workflows/ci.yml
 ```
 
@@ -155,8 +155,8 @@ Antes de publicar PR de adoção ou investigar CI quebrado, consolidar os
 sinais operacionais dos peers:
 
 ```bash
-civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml
-civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml --json
+civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml
+civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml --json
 ```
 
 Exit codes: `0=ok`, `1=warn`, `2=critical`. O comando é read-only:
@@ -171,7 +171,7 @@ for f in CLAUDE.md AGENTS.md CODEX.md; do
 done
 [ -f .github/workflows/ci.yml ] && python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))" && echo "ci.yml OK"
 rg -n "vitae-ci|ci-result|make ci-vm|CI_VM_|advoq-ci-vm|ci-vm" README.md AGENTS.md CLAUDE.md CODEX.md docs .github/workflows
-civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml
+civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml
 ```
 
 ## Histórico

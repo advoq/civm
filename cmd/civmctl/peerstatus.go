@@ -14,7 +14,7 @@ import (
 func runPeerStatus(args []string) int {
 	fs := flag.NewFlagSet("peer-status", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	repo := fs.String("repo", "", "owner/repo (ex: emersonbusson/compexhub)")
+	repo := fs.String("repo", "", "owner/repo (ex: owner/repo)")
 	reposRaw := fs.String("repos", "", "repos owner/repo separados por virgula")
 	workflow := fs.String("workflow", "ci.yml", "nome do workflow file")
 	jsonOut := fs.Bool("json", false, "saida JSON")

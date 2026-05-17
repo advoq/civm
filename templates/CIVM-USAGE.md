@@ -3,7 +3,7 @@
 > Como adotar: copiar este arquivo para `docs/CIVM.md` no peer repo e
 > ajustar apenas o bloco "Gate local do projeto". Nao copiar runbook de
 > administracao da VM para o peer; essa fonte permanece em
-> `~/codespace/civm/runbooks/`.
+> `<civm>/runbooks/`.
 
 # civm — CI compartilhado deste repo
 
@@ -16,8 +16,8 @@ do proprio repo, rodado antes de push.
 - Workflow GitHub Actions: `.github/workflows/ci.yml`
 - Runner label: `runs-on: [self-hosted, civm]`
 - Check required em branch protection: `Gates (typecheck, test, build, invariants)`
-- Fonte operacional da VM: `~/codespace/civm`
-- Runbook admin da VM: `~/codespace/civm/runbooks/MULTI-PROJECT-RUNNER.md`
+- Fonte operacional da VM: checkout local do repo `civm`
+- Runbook admin da VM: `<civm>/runbooks/MULTI-PROJECT-RUNNER.md`
 
 ## Gate local do projeto
 
@@ -67,4 +67,4 @@ explicitamente marcado.
 ## Histórico
 
 - 2026-05-17 — template criado para padronizar a documentacao de VM/civm
-  entre os repos em `~/codespace`.
+  entre os repos que compartilham a VM.

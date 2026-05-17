@@ -40,7 +40,7 @@ func runRunner(args []string) int {
 func runRunnerUpgrade(args []string) int {
 	fs := flag.NewFlagSet("runner upgrade", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	short := fs.String("short", "", "suffix curto (ex: cmpx, vitae, advoq)")
+	short := fs.String("short", "", "suffix curto (ex: api, web, worker)")
 	unit := fs.String("unit", "", "unit name explícito (sobreescreve --short)")
 	dir := fs.String("dir", "", "diretorio do runner explicito (override do guess BaseDir/actions-runner-Short)")
 	newVersion := fs.String("new-version", "", "nova versao (ex: 2.335.0)")
@@ -88,7 +88,7 @@ func runRunnerUpgrade(args []string) int {
 func runRunnerRestart(args []string) int {
 	fs := flag.NewFlagSet("runner restart", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	short := fs.String("short", "", "suffix curto (ex: cmpx, vitae, advoq)")
+	short := fs.String("short", "", "suffix curto (ex: api, web, worker)")
 	unit := fs.String("unit", "", "unit name explícito (sobreescreve --short)")
 	verifySec := fs.Int("verify-delay", civm.DefaultRestartVerifySeconds, "segundos entre restart e is-active check")
 	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")
@@ -125,9 +125,9 @@ func runRunnerRestart(args []string) int {
 func runRunnerAdd(args []string) int {
 	fs := flag.NewFlagSet("runner add", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	repo := fs.String("repo", "", "owner/repo (ex: emersonbusson/compexhub)")
+	repo := fs.String("repo", "", "owner/repo (ex: owner/repo)")
 	token := fs.String("token", "", "registration token (efemero ~1h via gh api)")
-	short := fs.String("short", "", "suffix curto do diretorio (ex: cmpx, vitae)")
+	short := fs.String("short", "", "suffix curto do diretorio (ex: api, web)")
 	label := fs.String("label", "civm", "labels CSV")
 	runnerVersion := fs.String("runner-version", civm.DefaultRunnerVersion, "versao do actions/runner")
 	runnerSHA256 := fs.String("runner-sha256", "", "sha256 do tarball actions-runner-linux-x64 (default: pin conhecido)")
@@ -209,7 +209,7 @@ func runRunnerList(args []string) int {
 func runRunnerRemove(args []string) int {
 	fs := flag.NewFlagSet("runner remove", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	short := fs.String("short", "", "suffix curto (ex: cmpx, vitae, advoq)")
+	short := fs.String("short", "", "suffix curto (ex: api, web, worker)")
 	token := fs.String("token", "", "remove-token (gh api -X POST /repos/.../actions/runners/remove-token)")
 	baseDir := fs.String("base-dir", "", "base dir (default: $HOME)")
 	execute := fs.Bool("execute", false, "aplicar (default: dry-run)")

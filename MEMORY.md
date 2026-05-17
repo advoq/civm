@@ -624,3 +624,39 @@ brutos aqui.
   componente e garante parsing do titulo `chore: release civm v1.1.2`.
 - `runbooks/RELEASE-AUTOMATION.md` passou a apontar explicitamente esses
   testes como cobertura do contrato.
+
+## 2026-05-17 — generic-ci-hooks-and-doctor-audit
+
+- **Branch:** main
+- **Scope:** auditoria do WIP local de CI condicional, hooks de job e
+  `doctor`, com foco em portabilidade para outros operadores.
+- **Actions:**
+  - `civmctl doctor` passou a usar `--repos=auto` por padrão, inferindo
+    repos pelos services `actions.runner.*`; `--repos=default` preserva a
+    fleet civm conhecida e `--repos=none` permite auditoria offline.
+  - `civmctl doctor` agora valida contrato de hooks: symlinks
+    `job-started`/`job-completed`, `.env` dos runners e services ativos.
+  - `civmctl hook install` ganhou `--runner-glob`, `--hooks-dir` e
+    `--civmctl-path`; paths mutáveis precisam ser absolutos e runner dirs
+    fora de roots de sistema/temporários.
+  - CI passou a detectar changes e a pular build completo em doc-only,
+    mantendo aggregate `CI` e fallback para PR synchronize doc-only depois
+    de commit anterior com full CI verde.
+  - Docs ativas foram generalizadas para `owner/repo`, `CIVM_REPO` e
+    overrides de path; runbook removeu comandos copy-paste com downloads
+    root sem checksum e `curl | bash`.
+- **Validations:**
+  - `go vet ./...` passou.
+  - `go build ./...` passou.
+  - `go test -race -count=1 ./...` passou.
+  - `go test -count=1 -cover ./internal/...` passou; todos `internal/**`
+    ficaram >=80%.
+  - `node --test scripts/tests/detect-changes.test.mjs` passou.
+  - YAML templates + `.github/workflows/ci.yml` passaram parse.
+  - Link check local, `git diff --check`, secret scan e supply-chain doc
+    scan passaram.
+  - `golangci-lint run ./... --timeout=5m` passou com 0 issues.
+  - `govulncheck ./...` passou com `No vulnerabilities found`.
+- **Open items:**
+  - Push para `origin/main` continua bloqueado para humano.
+  - Revalidar no GitHub Actions remoto depois do push humano.

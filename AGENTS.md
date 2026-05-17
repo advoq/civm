@@ -66,8 +66,11 @@ civmctl cleanup --execute
 # Health check
 civmctl parity
 civmctl health
-civmctl doctor --json
+civmctl doctor --repos=auto --json
 civmctl idle-check
+
+# Hooks de job
+sudo civmctl hook install --execute
 
 # Ver versoes alvo (sync com upstream actions/runner-images)
 civmctl version-pins

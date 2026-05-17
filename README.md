@@ -55,8 +55,9 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl bootstrap [--execute]` | provisiona VM (default: dry-run) |
 | `civmctl cleanup [--execute]` | limpa Docker, /tmp, artefatos antigos de _work e apt cache; preserva `_work/_tool` e `_work/_actions`; em `--execute` aborta se detectar job/build ativo |
 | `civmctl health` | health check (disk, mem, runners, ultimo cleanup) |
-| `civmctl doctor [--json]` | visão read-only consolidada: host, timers, systemd runners e GitHub runners |
+| `civmctl doctor [--repos=auto\|owner/repo,...\|none] [--json]` | visão read-only consolidada: host, hooks, systemd runners e GitHub runners; `auto` infere repos pelos services locais |
 | `civmctl idle-check [--json]` | detector read-only de ociosidade: exit `0=idle`, `1=busy`, `2=unknown` |
+| `civmctl hook install [--execute] [--runner-glob=...]` | reconcilia symlinks `ACTIONS_RUNNER_HOOK_*` e `.env` dos runners sem wrappers shell |
 | `civmctl runner add` | registra runner GitHub Actions self-hosted (mkdir + curl + tar + config.sh + svc.sh install + start) |
 | `civmctl runner remove` | desregistra runner; aborta antes de `config.sh remove`/`rm -rf` se stop/uninstall falhar |
 | `civmctl drift` | compara pins locais vs upstream actions/runner-images (HTTP fetch) |
@@ -158,17 +159,17 @@ faz sentido:
 ```bash
 # 1. Copiar a doc operacional curta do peer
 mkdir -p <peer>/docs
-cp ~/codespace/civm/templates/CIVM-USAGE.md <peer>/docs/CIVM.md
+cp "${CIVM_REPO:-$HOME/codespace/civm}/templates/CIVM-USAGE.md" <peer>/docs/CIVM.md
 # Editar o bloco "Gate local do projeto" com o comando real do peer
 
 # 2. Copiar template de workflow (escolher tier)
-cp ~/codespace/civm/templates/ci-optimistic.yml.template \
+cp "${CIVM_REPO:-$HOME/codespace/civm}/templates/ci-optimistic.yml.template" \
    <peer>/.github/workflows/ci.yml
 # Editar para substituir placeholders pelos gates reais do peer
 
 # 3. Copiar snippet COMMUNICATION-STYLE
 # (copiar bloco entre marcadores BEGIN/END em
-#  ~/codespace/civm/templates/COMMUNICATION-STYLE.md
+#  ${CIVM_REPO:-$HOME/codespace/civm}/templates/COMMUNICATION-STYLE.md
 #  pra CLAUDE.md, AGENTS.md, CODEX.md do peer)
 
 # 4. Configurar branch protection no GitHub
@@ -176,7 +177,7 @@ cp ~/codespace/civm/templates/ci-optimistic.yml.template \
 #   "Gates (typecheck, test, build, invariants)"
 
 # 5. Verificar adoção/saúde dos peers antes de publicar ou investigar CI
-civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml
+civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml
 ```
 
 Audit/discipline-checks ficam no projeto do peer (cada um com sua
@@ -231,7 +232,7 @@ git status --short --branch
 gh run list --workflow=ci.yml --branch=main --limit 5
 ssh gha-ubuntu-2404 'civmctl parity'
 ssh gha-ubuntu-2404 'civmctl health'
-ssh gha-ubuntu-2404 'civmctl doctor --json'
+ssh gha-ubuntu-2404 'civmctl doctor --repos=auto --json'
 ssh gha-ubuntu-2404 'civmctl idle-check'
 ```
 

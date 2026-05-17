@@ -30,7 +30,7 @@ func runCI(args []string) int {
 func runCILocalReport(args []string) int {
 	fs := flag.NewFlagSet("ci local-report", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	repo := fs.String("repo", "", "owner/repo (ex: emersonbusson/compexhub)")
+	repo := fs.String("repo", "", "owner/repo (ex: owner/repo)")
 	sha := fs.String("sha", "", "commit SHA (full 40-char)")
 	state := fs.String("state", "", "success | failure | pending | error")
 	checkContext := fs.String("context", "civm fallback", "check context (ex: 'civm fallback')")

@@ -14,8 +14,15 @@ import (
 const (
 	defaultHooksDir   = "/opt/civm/hooks"
 	defaultCivmctlBin = "/usr/local/bin/civmctl"
+	defaultRunnerGlob = "/home/*/actions-runner*"
 	startedHookName   = "job-started"
 	completedHookName = "job-completed"
+
+	DefaultHooksDir   = defaultHooksDir
+	DefaultCivmctlBin = defaultCivmctlBin
+	DefaultRunnerGlob = defaultRunnerGlob
+	StartedHookName   = startedHookName
+	CompletedHookName = completedHookName
 )
 
 type InstallOptions struct {
@@ -46,7 +53,7 @@ func DefaultInstallOptions() InstallOptions {
 	return InstallOptions{
 		HooksDir:       defaultHooksDir,
 		CivmctlPath:    defaultCivmctlBin,
-		RunnerGlob:     "/home/*/actions-runner*",
+		RunnerGlob:     defaultRunnerGlob,
 		GlobFn:         filepath.Glob,
 		ReadFileFn:     os.ReadFile,
 		WriteFileFn:    os.WriteFile,
@@ -62,6 +69,9 @@ func DefaultInstallOptions() InstallOptions {
 func Install(ctx context.Context, opts InstallOptions) InstallResult {
 	applyInstallDefaults(&opts)
 	res := InstallResult{Executed: opts.Execute, HooksDir: opts.HooksDir}
+	if err := validateInstallOptions(opts); err != nil {
+		return installError(res, err)
+	}
 	if opts.Execute {
 		if err := opts.MkdirAllFn(opts.HooksDir, 0755); err != nil {
 			return installError(res, err)
@@ -106,6 +116,19 @@ func Install(ctx context.Context, opts InstallOptions) InstallResult {
 	return res
 }
 
+func validateInstallOptions(opts InstallOptions) error {
+	if strings.ContainsRune(opts.HooksDir, 0) || !filepath.IsAbs(filepath.Clean(opts.HooksDir)) {
+		return fmt.Errorf("hooks-dir must be an absolute path")
+	}
+	if strings.ContainsRune(opts.CivmctlPath, 0) || !filepath.IsAbs(filepath.Clean(opts.CivmctlPath)) {
+		return fmt.Errorf("civmctl-path must be an absolute path")
+	}
+	if strings.ContainsRune(opts.RunnerGlob, 0) {
+		return fmt.Errorf("runner-glob contains NUL byte")
+	}
+	return nil
+}
+
 func upsertEnv(opts InstallOptions, envPath string) error {
 	data, err := opts.ReadFileFn(envPath)
 	if err != nil && !os.IsNotExist(err) {
@@ -146,9 +169,32 @@ func ensureSymlink(opts InstallOptions, target, link string) error {
 	return nil
 }
 
-func safeRunnerDir(path string) bool {
+// IsRunnerDirCandidate returns true for absolute GitHub runner directories
+// that are safe for hook .env reconciliation.
+func IsRunnerDirCandidate(path string) bool {
+	if strings.ContainsRune(path, 0) {
+		return false
+	}
 	path = filepath.Clean(path)
-	return strings.HasPrefix(path, "/home/") && strings.Contains(filepath.Base(path), "actions-runner")
+	if !filepath.IsAbs(path) || path == string(os.PathSeparator) {
+		return false
+	}
+	base := filepath.Base(path)
+	if !strings.HasPrefix(base, "actions-runner") {
+		return false
+	}
+	sep := string(os.PathSeparator)
+	blockedRoots := []string{"/bin", "/boot", "/dev", "/etc", "/proc", "/run", "/sys", "/tmp", "/usr", "/var/tmp"}
+	for _, root := range blockedRoots {
+		if path == root || strings.HasPrefix(path, root+sep) {
+			return false
+		}
+	}
+	return true
+}
+
+func safeRunnerDir(path string) bool {
+	return IsRunnerDirCandidate(path)
 }
 
 func installError(res InstallResult, err error) InstallResult {
@@ -189,7 +235,7 @@ func applyInstallDefaults(opts *InstallOptions) {
 		opts.CivmctlPath = defaultCivmctlBin
 	}
 	if opts.RunnerGlob == "" {
-		opts.RunnerGlob = "/home/*/actions-runner*"
+		opts.RunnerGlob = defaultRunnerGlob
 	}
 	if opts.GlobFn == nil {
 		opts.GlobFn = filepath.Glob

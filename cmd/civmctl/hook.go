@@ -57,9 +57,12 @@ func runHookEvent(args []string) int {
 func runHookInstall(args []string) int {
 	fs := flag.NewFlagSet("hook install", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	defaults := hook.DefaultInstallOptions()
 	execute := fs.Bool("execute", false, "instalar wrappers e atualizar .env dos runners")
 	jsonOut := fs.Bool("json", false, "saida JSON")
-	hooksDir := fs.String("hooks-dir", "/opt/civm/hooks", "diretorio dos wrappers")
+	hooksDir := fs.String("hooks-dir", defaults.HooksDir, "diretorio dos hooks ACTIONS_RUNNER_HOOK_*")
+	civmctlPath := fs.String("civmctl-path", defaults.CivmctlPath, "binario alvo dos symlinks de hook")
+	runnerGlob := fs.String("runner-glob", defaults.RunnerGlob, "glob dos diretorios actions-runner*")
 	noRestart := fs.Bool("no-restart", false, "nao reiniciar services actions.runner.*")
 	timeoutMin := fs.Int("timeout", civm.DefaultRunnerTimeoutMinutes, "timeout em minutos")
 	if err := fs.Parse(args); err != nil {
@@ -68,9 +71,11 @@ func runHookInstall(args []string) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutMin)*time.Minute)
 	defer cancel()
-	opts := hook.DefaultInstallOptions()
+	opts := defaults
 	opts.Execute = *execute
 	opts.HooksDir = *hooksDir
+	opts.CivmctlPath = *civmctlPath
+	opts.RunnerGlob = *runnerGlob
 	opts.RestartRunners = !*noRestart
 	res := hook.Install(ctx, opts)
 	if *jsonOut {

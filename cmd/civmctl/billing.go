@@ -15,7 +15,7 @@ import (
 func runBilling(args []string) int {
 	fs := flag.NewFlagSet("billing-status", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	repo := fs.String("repo", "", "owner/repo (ex: emersonbusson/compexhub)")
+	repo := fs.String("repo", "", "owner/repo (ex: owner/repo)")
 	workflow := fs.String("workflow", "ci.yml", "nome do workflow file (ex: ci.yml)")
 	limit := fs.Int("limit", 5, "numero de runs a fetchar")
 	thresholdSec := fs.Int("threshold-sec", 10, "duracao maxima (segundos) pra considerar 'morto cedo'")

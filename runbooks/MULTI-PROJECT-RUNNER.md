@@ -1,21 +1,20 @@
 # Runbook — civm como runner self-hosted compartilhado entre projetos
 
-> **Quando usar:** múltiplos repositórios (compexhub, vitae, advoq) precisam <!-- invariant-waive:#11 -- runbook operacional documenta runner self-hosted compartilhado entre projetos paralelos do autor por design (cf. plano usuario 2026-05-10) -->
+> **Quando usar:** múltiplos repositórios do mesmo operador precisam
 > rodar CI em paralelo no mesmo runner self-hosted `civm`, sem conflito
 > de portas, volumes Docker, work directories ou crosstalk de dados.
 >
 > **Modelo conceitual (importante):** civm e' **mirror visivel no
 > GitHub**, nao gate alternativo de validacao. O gate de verdade do
-> projeto e' o gate local do peer (ex.: `compexhubctl ci local --clean`
-> no compexhub) que cada dev roda no laptop
+> projeto e' o gate local do peer (ex.: `make ci`, `npm test`,
+> `go test ./...` ou comando equivalente) que cada dev roda no laptop
 > ANTES de push (ver [`LOCAL-CI-DISCIPLINE.md`](./LOCAL-CI-DISCIPLINE.md) §"Modelo conceitual").
 > Este runner self-hosted existe pra postar checkmark verde no PR sem
 > custo de Actions minutes — a validacao real ja aconteceu antes do
 > push, em cada laptop.
 >
-> Aplica-se identicamente aos 3 repos: dev valida local primeiro,
-> depois push, depois civm posta verde. Mesmo padrao em compexhub,
-> vitae e advoq. <!-- invariant-waive:#11 -- runbook operacional lista repos peer com mesmo padrao de validacao -->
+> Aplica-se identicamente a qualquer peer repo: dev valida local primeiro,
+> depois push, depois civm posta verde.
 >
 > **Companion runbooks:**
 > - [`CI-BILLING-FALLBACK.md`](./CI-BILLING-FALLBACK.md) — Camada 1+2 do
@@ -30,9 +29,9 @@
 | VM "civm" (Ubuntu 22.04+, 4+ cores, 16GB+ RAM)  |
 |                                                      |
 |  systemd services:                                   |
-|   - actions.runner.<owner>.compexhub-1.service       |
-|   - actions.runner.<owner>.compexhub-2.service       |
-|   - actions.runner.<owner>.compexhub-3.service       |
+|   - actions.runner.<owner>-<repo-a>.civm-a.service   |
+|   - actions.runner.<owner>-<repo-b>.civm-b.service   |
+|   - actions.runner.<owner>-<repo-c>.civm-c.service   |
 |     (or org-level if 3 repos)                        |
 |                                                      |
 |  Cada runner tem:                                    |
@@ -53,9 +52,8 @@ GitHub auto-distribui jobs entre runners disponíveis. Com N=3 runners, até
 3 jobs simultâneos (distribuídos entre os 3 repos). Sobrando demanda, jobs
 ficam em queue até runner liberar.
 
-**Dimensionamento:** começar com N = número de repos ativos (3 hoje:
-compexhub, vitae, advoq). Escalar para 5 ou 6 se o gate `Gates (typecheck, <!-- invariant-waive:#11 -- runbook lista repos compartilhando runner -->
-test, build, invariants)` ficar consistentemente em queue >2 minutos.
+**Dimensionamento:** começar com N = número de repos ativos. Escalar se o
+gate requerido do peer ficar consistentemente em queue >2 minutos.
 
 ## Pattern: 1 runner por peer-repo na mesma VM
 
@@ -63,41 +61,37 @@ GitHub Actions roteia jobs do repo X **somente** pro runner registrado
 em X. Não existe runner cross-repo em conta personal (só org-runners
 em GitHub Teams/Enterprise).
 
-**Topologia validada nesta VM:**
+**Topologia padrão:**
 
 ```
-gha-ubuntu-2404
-├── ~/actions-runner/                 (civm-1     -> advoq/civm)
-├── ~/actions-runner-compexhub/       (civm-cmpx  -> emersonbusson/compexhub)
-├── ~/actions-runner-vitae/           (civm-vitae -> emersonbusson/vitae)
+<vm>
+├── ~/actions-runner-a/               (civm-a -> owner/repo-a)
+├── ~/actions-runner-b/               (civm-b -> owner/repo-b)
+├── ~/actions-runner-c/               (civm-c -> owner/repo-c)
 └── /etc/systemd/system/
-    ├── actions.runner.emersonbusson-civm.civm-1.service
-    ├── actions.runner.emersonbusson-compexhub.civm-cmpx.service
-    └── actions.runner.emersonbusson-vitae.civm-vitae.service
+    ├── actions.runner.owner-repo-a.civm-a.service
+    ├── actions.runner.owner-repo-b.civm-b.service
+    └── actions.runner.owner-repo-c.civm-c.service
 ```
 
 Cada runner usa o mesmo label `civm`. Workflows com
 `runs-on: [self-hosted, civm]` no peer X só serão executados pelo
 runner de X. Sem crosstalk entre repos.
 
-### Adicionar runner pra novo peer (sequencia replicada)
+### Adicionar runner pra novo peer (1 comando)
 
 ```bash
 # 1. Token de registracao (efemero ~1h, GH escopo "repo")
-TOKEN=$(gh api -X POST /repos/emersonbusson/<REPO>/actions/runners/registration-token --jq .token)
+TOKEN=$(gh api -X POST /repos/<owner>/<repo>/actions/runners/registration-token --jq .token)
 
-# 2. Diretorio dedicado por peer
-ssh gha-ubuntu-2404 "mkdir -p ~/actions-runner-<REPO> && cd ~/actions-runner-<REPO> &&
-  curl -fsSL -o runner.tar.gz https://github.com/actions/runner/releases/download/v2.334.0/actions-runner-linux-x64-2.334.0.tar.gz &&
-  tar xzf runner.tar.gz && rm runner.tar.gz &&
-  ./config.sh --unattended --url https://github.com/emersonbusson/<REPO> \
-    --token '$TOKEN' --labels civm --name civm-<SHORT> \
-    --work _work --replace &&
-  sudo ./svc.sh install emdev &&
-  sudo ./svc.sh start"
+# 2. Dry-run primeiro
+civmctl runner add --repo=<owner>/<repo> --token="$TOKEN" --short=<short>
 
-# 3. Verificar online
-gh api /repos/emersonbusson/<REPO>/actions/runners --jq '.runners[]|"\(.name) \(.status)"'
+# 3. Aplicar na VM
+sudo civmctl runner add --repo=<owner>/<repo> --token="$TOKEN" --short=<short> --execute
+
+# 4. Verificar online
+gh api /repos/<owner>/<repo>/actions/runners --jq '.runners[]|"\(.name) \(.status)"'
 ```
 
 ### Runner persistente com workspace limpo por job
@@ -116,7 +110,7 @@ Resultado: cada job comeca do zero, sem crosstalk.
 ### Rollback de runner peer (1 comando)
 
 ```bash
-TOKEN=$(gh api -X POST /repos/emersonbusson/<REPO>/actions/runners/remove-token --jq .token)
+TOKEN=$(gh api -X POST /repos/<owner>/<repo>/actions/runners/remove-token --jq .token)
 civmctl runner remove --short=<short> --token="$TOKEN" --execute
 ```
 
@@ -131,10 +125,10 @@ registro GitHub automaticamente. Depois de confirmar que o runner offline
 nao e mais usado:
 
 ```bash
-gh api /repos/emersonbusson/<REPO>/actions/runners \
+gh api /repos/<owner>/<repo>/actions/runners \
   --jq '.runners[] | select(.status=="offline") | "\(.id) \(.name)"'
 
-gh api -X DELETE /repos/emersonbusson/<REPO>/actions/runners/<RUNNER_ID>
+gh api -X DELETE /repos/<owner>/<repo>/actions/runners/<RUNNER_ID>
 ```
 
 Equivalente manual (se civmctl indisponivel):
@@ -181,7 +175,7 @@ sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer ci
 # 6. Health check (deve retornar exit 0)
 civmctl parity
 civmctl health
-civmctl doctor --json
+civmctl doctor --repos=auto --json
 ```
 
 ### Atualizar civmctl em runner existente
@@ -277,60 +271,32 @@ Nesses casos, ver "## Setup operacional (manual)" abaixo.
 
 ### 1. Provisionar a VM
 
+O caminho suportado é o bootstrap idempotente. Ele baixa artefatos root com
+SHA256/fingerprint pinado no código antes de instalar:
+
 ```bash
-# Como root ou sudo
-adduser --system --group --home /home/runner runner
-apt update
-apt install -y git curl jq build-essential
-
-# Go 1.26
-GO_VERSION=1.26.0  # ajustar
-curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz
-ln -s /usr/local/go/bin/go /usr/local/bin/go
-
-# gh CLI
-type -p curl >/dev/null
-curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
-apt update && apt install -y gh
+sudo civmctl bootstrap --execute
+civmctl parity
 ```
+
+Setup manual sem checksum pinado não é caminho operacional suportado. Se uma
+VM não-Ubuntu precisar de port, portar o step correspondente de
+`internal/bootstrap` para a distro alvo mantendo o mesmo contrato: download em
+arquivo temporário, verificação SHA256/fingerprint e só então instalação.
 
 ### 2. Registrar N runners (1 por repo, escalável)
 
 Cada repo gera um token de registro próprio em GitHub Settings > Actions >
-Runners > New self-hosted runner. Repetir para cada N:
+Runners > New self-hosted runner ou via `gh api`. Repetir para cada repo:
 
 ```bash
-# Como user 'runner'
-sudo -u runner -i
-
-cd /home/runner
-mkdir actions-runner-N && cd actions-runner-N
-RUNNER_VERSION=2.331.0  # latest at provisioning time
-curl -fsSL -o runner.tar.gz \
-  "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
-tar xzf runner.tar.gz
-rm runner.tar.gz
-
-# Substituir <TOKEN> pelo token de registro do repo
-./config.sh \
-  --url "https://github.com/<owner>/<repo>" \
-  --token "<TOKEN>" \
-  --labels "civm" \
-  --name "civm-N" \
-  --work "_work-N" \
-  --unattended \
-  --replace
-
-# Instalar como systemd service (require root depois)
-sudo ./svc.sh install runner
-sudo ./svc.sh start
-sudo ./svc.sh status
+TOKEN=$(gh api -X POST /repos/<owner>/<repo>/actions/runners/registration-token --jq .token)
+civmctl runner add --repo=<owner>/<repo> --token="$TOKEN" --short=<short>
+sudo civmctl runner add --repo=<owner>/<repo> --token="$TOKEN" --short=<short> --execute
 ```
 
-Repetir mudando `actions-runner-N` para `actions-runner-2`, `actions-runner-3`,
-etc. Cada um aponta para um repo diferente OU todos para o mesmo repo (se
-quiser N runners para 1 repo só).
+`civmctl runner add` baixa o tarball do actions/runner com SHA256 pinado,
+configura `config.sh`, instala `svc.sh` e mascara o token nos logs.
 
 **Alternativa org-level:** se os 3 repos estão sob a mesma org, registrar runner
 no nível da org (Settings > Actions > Runners da organização). 1 runner serve
@@ -433,27 +399,21 @@ ubuntu-latest, instalar:
 
 ### Toolchains de linguagem
 
+Preferir `sudo civmctl bootstrap --execute`. Ele instala Go, Node, Python,
+Docker, gh e yq conforme `civmctl version-pins`, com checksum/fingerprint
+pinado quando há download fora do apt.
+
 ```bash
-# Go (multi-version via go env GOTOOLCHAIN auto)
-GO_VERSION=1.26.3
-curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | sudo tar -C /usr/local -xz
-sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go
-
-# Node via fnm (multi-version sem hassle)
-curl -fsSL https://fnm.vercel.app/install | bash
-fnm install 24
-fnm install 22
-fnm install 20
-fnm default 24
-
-# Python (default Ubuntu suficiente; pip/venv)
-sudo apt install -y python3 python3-pip python3-venv
-
-# Ruby (se necessario)
-# sudo apt install -y ruby-full
+civmctl version-pins
+sudo civmctl bootstrap --execute
+civmctl parity
 ```
 
 ### Ferramentas de build
+
+Para depuração manual, instalar apenas pacotes de distro via apt. Não usar
+instaladores remotos pipe-to-shell; se precisar de tarball/binário direto,
+copiar o padrão de verificação de `internal/bootstrap`.
 
 ```bash
 sudo apt install -y \
@@ -481,18 +441,8 @@ sudo apt install -y docker-compose-plugin
 ### CLIs essenciais
 
 ```bash
-# gh CLI (autenticado via GITHUB_TOKEN no workflow)
-type -p curl >/dev/null
-curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list
-sudo apt update && sudo apt install -y gh
-
-# actionlint (validar workflows)
-go install github.com/rhysd/actionlint/cmd/actionlint@latest
-
-# yq (yaml processor)
-# Preferir `sudo civmctl bootstrap --execute`: ele instala o yq pinado com SHA256.
-civmctl version-pins | grep yq
+sudo civmctl bootstrap --execute
+civmctl parity
 ```
 
 ### Verificar parity
@@ -752,62 +702,114 @@ Cada caso reabre este runbook + atualiza secão Capacity planning.
   CI de compexhub + vitae + advoq no mesmo runner self-hosted. <!-- invariant-waive:#11 -- entrada de historico explicita escopo de adocao -->
   Companion da Camada 1 entregue em ci.yml refactor (commit `7e5835e`).
 
-## Job hooks and integration contract
+## Hooks de job e contrato de integração
 
-For a multi-project VM shared by organization repositories and personal
-repositories, the default model remains persistent per-repo runners. The
-host must behave like a managed CI worker by cleaning each job boundary
-without destroying warm runner caches.
+Numa VM multi-projeto compartilhada por repos de organização e pessoais, o
+modelo padrão continua sendo runners persistentes por repo. O host deve se
+comportar como worker gerenciado: limpar fronteiras de job sem destruir
+caches quentes de runner.
 
-Install the hook policy with:
+Instale ou reconcilie a política de hooks com:
 
 ```bash
 sudo civmctl hook install --execute
 ```
 
-Target state: this creates two symlinks in `/opt/civm/hooks` pointing at
-the civmctl binary and updates each `/home/*/actions-runner*/.env` with:
+Estado alvo: o comando cria dois symlinks em `/opt/civm/hooks` apontando
+para o binário canônico e atualiza cada
+`/home/*/actions-runner*/.env` com:
 
 ```bash
 ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started
 ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed
 ```
 
-civmctl detects the event from `os.Args[0]` (basename) and routes to the
-same code path as `civmctl hook job-started|completed --execute`. No
-shell wrappers are involved; the entire policy is Go inside
-`internal/hook`. Legacy `.sh` wrappers from prior installs are cleaned
-up by the installer.
+`civmctl` detecta o evento por `os.Args[0]` (basename) e roteia para o
+mesmo caminho de código de `civmctl hook job-started|completed --execute`.
+Não há wrapper shell no estado alvo; a política fica em Go dentro de
+`internal/hook`. Wrappers legados `.sh` de instalações anteriores são
+removidos pelo installer.
 
-**Observed state on 2026-05-17:** the production VM still had only
-`/opt/civm/hooks/job-started.sh` and `/opt/civm/hooks/job-completed.sh`,
-with no Git checkout in `/opt/civm`. Several runner `.env` files still
-pointed at those `.sh` wrappers, and the Advoq runners used a custom
-completed hook at `/home/emdev/bin/civm-hook-job-completed-advoq.sh`.
-Until `civmctl hook install --execute` is run with a fresh binary, docs
-must describe the symlink form above as target state, not as deployed
-fact.
+Para VMs cujo layout não usa `/home/*/actions-runner*`, não edite código nem
+crie wrapper local. Passe o layout como flag:
 
-The hook contract:
+```bash
+sudo civmctl hook install --execute \
+  --runner-glob='/srv/ci/actions-runner*' \
+  --hooks-dir=/opt/civm/hooks \
+  --civmctl-path=/usr/local/bin/civmctl
+```
 
-- `job-started` checks disk pressure before the job. If disk usage is above
-  the pre-cleanup threshold, it cleans safe workspace/cache paths first. If
-  disk remains above the hard-fail threshold, it rejects the job before the
-  VM is pushed into a bad state.
-- `job-completed` removes per-job workspace and temporary data, prunes
-  reclaimable Docker state, cleans apt/journal noise, and runs `fstrim`.
-- Both hooks preserve `_work/_tool` and `_work/_actions`; these are warm
-  caches for toolchains/actions and must not be removed during normal
-  hygiene.
-- Hook events append structured JSON lines to `/var/log/civm/hooks.jsonl`.
+`--hooks-dir` e `--civmctl-path` precisam ser paths absolutos. O installer só
+atualiza diretórios absolutos cujo basename começa com `actions-runner`, e
+recusa roots de sistema/temporários como `/etc`, `/usr`, `/proc`, `/sys`,
+`/run`, `/tmp` e `/var/tmp`.
 
-Busson and other integrations should not parse journal output or infer VM
-state from file layout. Use the stable CLI contract instead:
+Contrato dos hooks:
+
+- `job-started` checa pressão de disco antes do job. Se o uso estiver acima
+  do limite de pré-cleanup, limpa paths seguros de workspace/cache primeiro.
+  Se o disco continuar acima do limite hard-fail, rejeita o job antes de a
+  VM entrar em estado ruim.
+- `job-completed` remove workspace e temporários por job, poda estado Docker
+  recuperável, limpa apt/journal e roda `fstrim`.
+- Ambos preservam `_work/_tool` e `_work/_actions`; estes são caches quentes
+  de toolchains/actions e não devem ser removidos na higiene normal.
+- Eventos de hook acrescentam JSON lines estruturadas em
+  `/var/log/civm/hooks.jsonl`.
+
+### Pós-release do binário na VM
+
+Depois de publicar e instalar um novo `/usr/local/bin/civmctl`, valide que a
+VM está ociosa antes de reiniciar runners:
+
+```bash
+ssh gha-ubuntu-2404 'civmctl idle-check'
+```
+
+Se retornar `idle` com exit `0`, reconcilie hooks e reinicie os services:
+
+```bash
+ssh gha-ubuntu-2404 'sudo civmctl hook install --execute --json'
+```
+
+Valide o contrato com o `doctor`; o JSON deve trazer `hook_checks` com
+`HOOK_JOB_STARTED`, `HOOK_JOB_COMPLETED`, `HOOK_RUNNER_ENVS` e
+`RUNNER_SERVICES` em severidade `ok`. O modo padrão `--repos=auto` infere
+repos pelos services `actions.runner.*`; use `--repos=owner/a,owner/b` se o
+nome do service for ambíguo, e `--repos=none` para auditoria offline sem
+GitHub:
+
+```bash
+ssh gha-ubuntu-2404 'civmctl doctor --repos=auto --json'
+```
+
+Para inspeção manual dos `.env`, use:
+
+```bash
+ssh gha-ubuntu-2404 'for f in /home/*/actions-runner*/.env; do echo "$f"; grep ^ACTIONS_RUNNER_HOOK_ "$f"; done'
+```
+
+Todos os valores devem apontar para paths sem `.sh`:
+
+```bash
+ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started
+ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed
+```
+
+Por fim, confirme adoção/saúde dos peers críticos:
+
+```bash
+ssh gha-ubuntu-2404 'civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml'
+```
+
+Busson e outras integrações não devem parsear journal nem inferir estado da
+VM pelo layout de arquivos. Use o contrato CLI estável:
 
 ```bash
 civmctl capacity --json
 civmctl health --json
-civmctl doctor --json
+civmctl doctor --repos=auto --json
 ```
 
 `capacity --json` is the lightweight readiness endpoint. It reports disk

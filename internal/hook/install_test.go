@@ -107,6 +107,24 @@ func TestInstallPropagatesGlobError(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsRelativeMutationPaths(t *testing.T) {
+	opts := DefaultInstallOptions()
+	opts.Execute = true
+	opts.HooksDir = "relative/hooks"
+	res := Install(context.Background(), opts)
+	if res.Error == "" || !strings.Contains(res.Error, "absolute") {
+		t.Fatalf("expected absolute path error, got %q", res.Error)
+	}
+
+	opts = DefaultInstallOptions()
+	opts.Execute = true
+	opts.CivmctlPath = "bin/civmctl"
+	res = Install(context.Background(), opts)
+	if res.Error == "" || !strings.Contains(res.Error, "absolute") {
+		t.Fatalf("expected absolute path error, got %q", res.Error)
+	}
+}
+
 func TestInstallCreatesSymlinks(t *testing.T) {
 	var symlinks [][2]string
 	opts := InstallOptions{
@@ -213,6 +231,36 @@ func TestInstallSkipsUnsafeRunnerDirs(t *testing.T) {
 	}
 	if !strings.HasPrefix(res.RunnerEnvFiles[0], "/home/runner/") {
 		t.Fatalf("expected /home/runner path, got %q", res.RunnerEnvFiles[0])
+	}
+}
+
+func TestInstallAllowsConfiguredRunnerRoot(t *testing.T) {
+	opts := DefaultInstallOptions()
+	opts.Execute = false
+	opts.RunnerGlob = "/srv/ci/actions-runner*"
+	opts.GlobFn = func(pattern string) ([]string, error) {
+		if pattern != "/srv/ci/actions-runner*" {
+			t.Fatalf("pattern = %q", pattern)
+		}
+		return []string{"/srv/ci/actions-runner-team"}, nil
+	}
+	opts.ReadFileFn = func(string) ([]byte, error) { return nil, nil }
+	opts.WriteFileFn = func(string, []byte, os.FileMode) error { return nil }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	res := Install(context.Background(), opts)
+	if res.Error != "" {
+		t.Fatalf("install error: %s", res.Error)
+	}
+	if len(res.RunnerEnvFiles) != 1 || res.RunnerEnvFiles[0] != "/srv/ci/actions-runner-team/.env" {
+		t.Fatalf("runner env files = %v", res.RunnerEnvFiles)
+	}
+}
+
+func TestRunnerDirCandidateRejectsSystemAndTemporaryRoots(t *testing.T) {
+	for _, path := range []string{"/etc/actions-runner", "/usr/local/actions-runner", "/tmp/actions-runner", "actions-runner"} {
+		if IsRunnerDirCandidate(path) {
+			t.Fatalf("IsRunnerDirCandidate(%q) = true, want false", path)
+		}
 	}
 }
 

@@ -6,14 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/advoq/civm/internal/civm"
 	"github.com/advoq/civm/internal/health"
+	"github.com/advoq/civm/internal/hook"
 	"github.com/advoq/civm/internal/runner"
 )
 
+// DefaultRepos is the civm maintainer fleet used only when callers request
+// the explicit "default" repo mode. Generic doctor runs infer local repos.
 var DefaultRepos = []string{
 	"advoq/civm",
 	"emersonbusson/compexhub",
@@ -44,6 +50,12 @@ type HostCheck struct {
 	Name     string `json:"name"`
 	Detail   string `json:"detail"`
 	Severity string `json:"severity"`
+}
+
+type HookCheck struct {
+	Name     string   `json:"name"`
+	Detail   string   `json:"detail"`
+	Severity Severity `json:"severity"`
 }
 
 type SystemdRunner struct {
@@ -85,6 +97,7 @@ type RepoDiagnosis struct {
 type Report struct {
 	WorkflowFile   string          `json:"workflow_file"`
 	HostChecks     []HostCheck     `json:"host_checks"`
+	HookChecks     []HookCheck     `json:"hook_checks"`
 	SystemdRunners []SystemdRunner `json:"systemd_runners"`
 	GitHubRepos    []RepoDiagnosis `json:"github_repos"`
 	Exit           int             `json:"exit"`
@@ -92,20 +105,30 @@ type Report struct {
 
 type Options struct {
 	Repos        []string
+	InferRepos   bool
 	WorkflowFile string
 	WorkDir      string
+	HooksDir     string
+	CivmctlPath  string
+	RunnerGlob   string
 
 	HealthFn        func(ctx context.Context) health.Report
 	SystemRunnersFn func(ctx context.Context) ([]runner.Status, error)
 	GitHubRunnersFn func(ctx context.Context, repo string) ([]GitHubRunner, error)
 	RunFn           func(ctx context.Context, name string, args ...string) ([]byte, error)
+	GlobFn          func(pattern string) ([]string, error)
+	ReadFileFn      func(path string) ([]byte, error)
+	ReadlinkFn      func(path string) (string, error)
 }
 
 func DefaultOptions() Options {
 	return Options{
-		Repos:        append([]string(nil), DefaultRepos...),
+		InferRepos:   true,
 		WorkflowFile: "ci.yml",
 		WorkDir:      civm.DefaultHealthDiskPath,
+		HooksDir:     hook.DefaultHooksDir,
+		CivmctlPath:  hook.DefaultCivmctlBin,
+		RunnerGlob:   hook.DefaultRunnerGlob,
 		RunFn:        defaultRun,
 	}
 }
@@ -118,6 +141,7 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 	report := Report{
 		WorkflowFile:   opts.WorkflowFile,
 		HostChecks:     []HostCheck{},
+		HookChecks:     []HookCheck{},
 		SystemdRunners: []SystemdRunner{},
 		GitHubRepos:    []RepoDiagnosis{},
 	}
@@ -134,13 +158,13 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 		worst = maxSeverity(worst, sev)
 	}
 
-	systemd, err := opts.SystemRunnersFn(ctx)
-	if err != nil {
+	systemd, systemdErr := opts.SystemRunnersFn(ctx)
+	if systemdErr != nil {
 		worst = maxSeverity(worst, SeverityWarning)
 		report.SystemdRunners = append(report.SystemdRunners, SystemdRunner{
 			UnitName:    "(unknown)",
 			ActiveState: "unknown",
-			SubState:    err.Error(),
+			SubState:    systemdErr.Error(),
 		})
 	} else {
 		for _, r := range systemd {
@@ -151,7 +175,18 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 		}
 	}
 
-	for _, repo := range opts.Repos {
+	hookChecks, hookSeverity := collectHookChecks(opts, systemd, systemdErr)
+	report.HookChecks = hookChecks
+	worst = maxSeverity(worst, hookSeverity)
+
+	repos := append([]string(nil), opts.Repos...)
+	if opts.InferRepos && len(repos) == 0 && systemdErr == nil {
+		repos = inferReposFromSystemd(systemd)
+	}
+	if err := validateRepos(repos); err != nil {
+		return Report{}, err
+	}
+	for _, repo := range repos {
 		runners, err := opts.GitHubRunnersFn(ctx, repo)
 		diag := ClassifyRepo(repo, runners, err)
 		report.GitHubRepos = append(report.GitHubRepos, diag)
@@ -163,17 +198,32 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 }
 
 func applyDefaults(opts *Options) {
-	if len(opts.Repos) == 0 {
-		opts.Repos = append([]string(nil), DefaultRepos...)
-	}
 	if opts.WorkflowFile == "" {
 		opts.WorkflowFile = "ci.yml"
 	}
 	if opts.WorkDir == "" {
 		opts.WorkDir = civm.DefaultHealthDiskPath
 	}
+	if opts.HooksDir == "" {
+		opts.HooksDir = hook.DefaultHooksDir
+	}
+	if opts.CivmctlPath == "" {
+		opts.CivmctlPath = hook.DefaultCivmctlBin
+	}
+	if opts.RunnerGlob == "" {
+		opts.RunnerGlob = hook.DefaultRunnerGlob
+	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
+	}
+	if opts.GlobFn == nil {
+		opts.GlobFn = filepath.Glob
+	}
+	if opts.ReadFileFn == nil {
+		opts.ReadFileFn = os.ReadFile
+	}
+	if opts.ReadlinkFn == nil {
+		opts.ReadlinkFn = os.Readlink
 	}
 	if opts.HealthFn == nil {
 		opts.HealthFn = func(ctx context.Context) health.Report {
@@ -195,12 +245,157 @@ func applyDefaults(opts *Options) {
 }
 
 func validateOptions(opts Options) error {
-	for _, repo := range opts.Repos {
+	if err := validateRepos(opts.Repos); err != nil {
+		return err
+	}
+	return civm.ValidateWorkflowFile(opts.WorkflowFile)
+}
+
+func validateRepos(repos []string) error {
+	for _, repo := range repos {
 		if err := civm.ValidateRepo(repo); err != nil {
 			return err
 		}
 	}
-	return civm.ValidateWorkflowFile(opts.WorkflowFile)
+	return nil
+}
+
+func inferReposFromSystemd(systemd []runner.Status) []string {
+	seen := map[string]bool{}
+	var repos []string
+	for _, status := range systemd {
+		if status.Repo == "" || seen[status.Repo] {
+			continue
+		}
+		if civm.ValidateRepo(status.Repo) != nil {
+			continue
+		}
+		seen[status.Repo] = true
+		repos = append(repos, status.Repo)
+	}
+	sort.Strings(repos)
+	return repos
+}
+
+func collectHookChecks(opts Options, systemd []runner.Status, systemdErr error) ([]HookCheck, Severity) {
+	checks := []HookCheck{
+		checkHookSymlink(opts, "HOOK_JOB_STARTED", hook.StartedHookName),
+		checkHookSymlink(opts, "HOOK_JOB_COMPLETED", hook.CompletedHookName),
+		checkRunnerEnvHooks(opts),
+		checkRunnerServices(systemd, systemdErr),
+	}
+	worst := SeverityOK
+	for _, check := range checks {
+		worst = maxSeverity(worst, check.Severity)
+	}
+	return checks, worst
+}
+
+func checkHookSymlink(opts Options, checkName, hookName string) HookCheck {
+	path := filepath.Join(opts.HooksDir, hookName)
+	target, err := opts.ReadlinkFn(path)
+	if err != nil {
+		sev := SeverityWarning
+		detail := fmt.Sprintf("readlink %s: %v", path, err)
+		if os.IsNotExist(err) {
+			sev = SeverityCritical
+			detail = fmt.Sprintf("%s missing; run sudo civmctl hook install --execute", path)
+		}
+		return HookCheck{Name: checkName, Severity: sev, Detail: detail}
+	}
+	if target != opts.CivmctlPath {
+		return HookCheck{
+			Name:     checkName,
+			Severity: SeverityCritical,
+			Detail:   fmt.Sprintf("%s -> %s, want %s", path, target, opts.CivmctlPath),
+		}
+	}
+	return HookCheck{
+		Name:     checkName,
+		Severity: SeverityOK,
+		Detail:   fmt.Sprintf("%s -> %s", path, target),
+	}
+}
+
+func checkRunnerEnvHooks(opts Options) HookCheck {
+	runners, err := opts.GlobFn(opts.RunnerGlob)
+	if err != nil {
+		return HookCheck{Name: "HOOK_RUNNER_ENVS", Severity: SeverityWarning, Detail: fmt.Sprintf("glob %s: %v", opts.RunnerGlob, err)}
+	}
+	sort.Strings(runners)
+	wantStarted := "ACTIONS_RUNNER_HOOK_JOB_STARTED=" + filepath.Join(opts.HooksDir, hook.StartedHookName)
+	wantCompleted := "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=" + filepath.Join(opts.HooksDir, hook.CompletedHookName)
+	checked := 0
+	var bad []string
+	for _, runnerDir := range runners {
+		if !hook.IsRunnerDirCandidate(runnerDir) {
+			continue
+		}
+		checked++
+		envPath := filepath.Join(runnerDir, ".env")
+		data, err := opts.ReadFileFn(envPath)
+		if err != nil {
+			bad = append(bad, fmt.Sprintf("%s read failed: %v", envPath, err))
+			continue
+		}
+		started, completed, legacy := parseHookEnvLines(string(data))
+		if legacy {
+			bad = append(bad, envPath+" uses .sh hook")
+			continue
+		}
+		if started != wantStarted || completed != wantCompleted {
+			bad = append(bad, fmt.Sprintf("%s has %q / %q, want %q / %q", envPath, started, completed, wantStarted, wantCompleted))
+		}
+	}
+	if checked == 0 {
+		return HookCheck{Name: "HOOK_RUNNER_ENVS", Severity: SeverityWarning, Detail: fmt.Sprintf("nenhum runner .env encontrado por %s", opts.RunnerGlob)}
+	}
+	if len(bad) > 0 {
+		return HookCheck{Name: "HOOK_RUNNER_ENVS", Severity: SeverityCritical, Detail: strings.Join(bad, "; ")}
+	}
+	return HookCheck{Name: "HOOK_RUNNER_ENVS", Severity: SeverityOK, Detail: fmt.Sprintf("%d runner .env files use civmctl hook symlinks", checked)}
+}
+
+func parseHookEnvLines(content string) (started, completed string, legacy bool) {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ACTIONS_RUNNER_HOOK_JOB_STARTED=") {
+			started = line
+			if strings.Contains(line, ".sh") {
+				legacy = true
+			}
+		}
+		if strings.HasPrefix(line, "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=") {
+			completed = line
+			if strings.Contains(line, ".sh") {
+				legacy = true
+			}
+		}
+	}
+	return started, completed, legacy
+}
+
+func checkRunnerServices(systemd []runner.Status, systemdErr error) HookCheck {
+	if systemdErr != nil {
+		return HookCheck{Name: "RUNNER_SERVICES", Severity: SeverityWarning, Detail: fmt.Sprintf("systemd runner status unknown: %v", systemdErr)}
+	}
+	if len(systemd) == 0 {
+		return HookCheck{Name: "RUNNER_SERVICES", Severity: SeverityCritical, Detail: "0 actions.runner.* services found"}
+	}
+	active := 0
+	var inactive []string
+	for _, status := range systemd {
+		if status.ActiveState == "active" && status.SubState == "running" {
+			active++
+			continue
+		}
+		inactive = append(inactive, fmt.Sprintf("%s(%s/%s)", status.UnitName, status.ActiveState, status.SubState))
+	}
+	detail := fmt.Sprintf("%d/%d actions.runner.* services active/running", active, len(systemd))
+	if len(inactive) > 0 {
+		return HookCheck{Name: "RUNNER_SERVICES", Severity: SeverityCritical, Detail: detail + "; inactive: " + strings.Join(inactive, ", ")}
+	}
+	return HookCheck{Name: "RUNNER_SERVICES", Severity: SeverityOK, Detail: detail}
 }
 
 func ClassifyRepo(repo string, runners []GitHubRunner, err error) RepoDiagnosis {
@@ -313,6 +508,16 @@ func (r Report) Render(w io.Writer) {
 	fmt.Fprintf(w, "%-16s %-10s %s\n", "CHECK", "SEVERITY", "DETAIL")
 	for _, c := range r.HostChecks {
 		fmt.Fprintf(w, "%-16s %-10s %s\n", c.Name, c.Severity, c.Detail)
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "HOOKS")
+	if len(r.HookChecks) == 0 {
+		fmt.Fprintln(w, "  nenhum hook check coletado")
+	} else {
+		fmt.Fprintf(w, "%-20s %-10s %s\n", "CHECK", "SEVERITY", "DETAIL")
+		for _, c := range r.HookChecks {
+			fmt.Fprintf(w, "%-20s %-10s %s\n", c.Name, c.Severity, c.Detail)
+		}
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "SYSTEMD RUNNERS")

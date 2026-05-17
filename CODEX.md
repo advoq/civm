@@ -73,6 +73,12 @@ pin, não prosseguir por confiança em HTTPS.
 
 ## Peer observability
 
+`civmctl doctor --repos=auto --json` é o diagnóstico genérico da VM: infere
+repos a partir dos services `actions.runner.*`, valida hooks de job e não
+depende da fleet `advoq/*` estar hardcoded. Use `--repos=owner/a,owner/b`
+quando o nome do service não puder representar o repo sem ambiguidade, e
+`--repos=none` para pular GitHub em auditoria local/offline.
+
 `civmctl peer-status --repo=owner/repo --json` preserva o contrato JSON de um
 peer único. `civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml`
 é a visão fleet para checar adoção/saúde dos peers antes de publicar ou
@@ -128,7 +134,7 @@ gh run list --workflow=ci.yml --branch=main --limit 5
 gh run list --workflow=release.yml --branch=main --limit 3
 ssh gha-ubuntu-2404 'civmctl parity'
 ssh gha-ubuntu-2404 'civmctl health'
-ssh gha-ubuntu-2404 'civmctl doctor --json'
+ssh gha-ubuntu-2404 'civmctl doctor --repos=auto --json'
 ssh gha-ubuntu-2404 'civmctl idle-check'
 ```
 

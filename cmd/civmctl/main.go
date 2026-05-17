@@ -121,7 +121,7 @@ EXEMPLOS
   civmctl version-pins
   civmctl parity
   civmctl health
-  civmctl doctor --json
+  civmctl doctor --repos=auto --json
   civmctl cleanup --dry-run
   sudo civmctl bootstrap --execute
   civmctl drift
@@ -130,13 +130,13 @@ EXEMPLOS
   civmctl runner add --repo=owner/repo --token=$(gh api ...) --short=cmpx
   civmctl runner add --repo=owner/repo --token=... --short=cmpx --execute
   civmctl runner remove --short=cmpx --token=$(gh api -X POST .../remove-token) --execute
-  civmctl runner list --json | jq '.runners[] | select(.repo == "advoq/civm")'
+  civmctl runner list --json | jq '.runners[] | select(.repo == "owner/repo")'
   civmctl runner restart --short=civm-1 --execute
   civmctl runner upgrade --short=cmpx --new-version=2.335.0 --execute
   civmctl reverse-watchdog --max-age-hours=2
   sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute
-  civmctl peer-status --repo=emersonbusson/compexhub
-  civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml
+  civmctl peer-status --repo=owner/repo
+  civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml
   civmctl health --json | jq '.exit'
   civmctl reverse-watchdog --max-age-hours=4
   civmctl idle-check --json
@@ -147,6 +147,7 @@ EXEMPLOS
   civmctl metrics dump --stdout
   civmctl metrics dump --out=/var/lib/node_exporter/textfile_collector/civm.prom
   civmctl hook job-completed --execute --json
+  sudo civmctl hook install --execute --runner-glob='/srv/ci/actions-runner*'
   sudo civmctl self-upgrade
   sudo civmctl self-upgrade --execute
 

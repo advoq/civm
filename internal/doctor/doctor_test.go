@@ -154,6 +154,7 @@ func TestCollectAndRenderJSON(t *testing.T) {
 	opts.SystemRunnersFn = func(context.Context) ([]runner.Status, error) {
 		return []runner.Status{{UnitName: "actions.runner.emersonbusson-vitae.civm-vitae.service", Repo: "emersonbusson/vitae", Name: "civm-vitae", ActiveState: "active", SubState: "running"}}, nil
 	}
+	stubHookContractOK(&opts)
 	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]GitHubRunner, error) {
 		if repo == "advoq/civm" {
 			return []GitHubRunner{{Repo: repo, Name: "civm-self", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
@@ -177,6 +178,97 @@ func TestCollectAndRenderJSON(t *testing.T) {
 	}
 	if len(parsed.GitHubRepos) != 2 || parsed.GitHubRepos[1].Runners[0].Classification != "legacy_stale" {
 		t.Fatalf("parsed = %+v", parsed)
+	}
+	if len(parsed.HookChecks) != 4 {
+		t.Fatalf("hook checks not rendered in JSON: %+v", parsed.HookChecks)
+	}
+}
+
+func TestCollectReportsHookContractFailures(t *testing.T) {
+	t.Parallel()
+	opts := DefaultOptions()
+	opts.Repos = []string{"advoq/civm"}
+	opts.HealthFn = func(context.Context) health.Report {
+		return health.Report{Checks: []health.Check{
+			{Name: "DISK", Detail: "50 GB free", Status: health.StatusOK},
+		}}
+	}
+	opts.SystemRunnersFn = func(context.Context) ([]runner.Status, error) {
+		return []runner.Status{
+			{UnitName: "actions.runner.advoq-civm.civm-self.service", Repo: "advoq/civm", Name: "civm-self", ActiveState: "active", SubState: "running"},
+			{UnitName: "actions.runner.emersonbusson-vitae.civm-vitae.service", Repo: "emersonbusson/vitae", Name: "civm-vitae", ActiveState: "inactive", SubState: "dead"},
+		}, nil
+	}
+	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]GitHubRunner, error) {
+		return []GitHubRunner{{Repo: repo, Name: "civm-self", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
+	}
+	opts.GlobFn = func(string) ([]string, error) {
+		return []string{"/home/emdev/actions-runner"}, nil
+	}
+	opts.ReadlinkFn = func(path string) (string, error) {
+		switch path {
+		case "/opt/civm/hooks/job-started":
+			return "/usr/local/bin/civmctl", nil
+		case "/opt/civm/hooks/job-completed":
+			return "/opt/civm/hooks/job-completed.sh", nil
+		default:
+			return "", errors.New("unexpected readlink path: " + path)
+		}
+	}
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if path != "/home/emdev/actions-runner/.env" {
+			return nil, errors.New("unexpected env path: " + path)
+		}
+		return []byte(strings.Join([]string{
+			"ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started.sh",
+			"ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed",
+			"",
+		}, "\n")), nil
+	}
+
+	report, err := Collect(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Collect err = %v", err)
+	}
+	if report.Exit != 2 {
+		t.Fatalf("Exit = %d, want critical 2; hook_checks=%+v", report.Exit, report.HookChecks)
+	}
+	assertHookCheck(t, report, "HOOK_JOB_COMPLETED", SeverityCritical, "job-completed.sh")
+	assertHookCheck(t, report, "HOOK_RUNNER_ENVS", SeverityCritical, ".sh")
+	assertHookCheck(t, report, "RUNNER_SERVICES", SeverityCritical, "1/2")
+}
+
+func TestCollectInfersReposFromSystemdWhenReposUnset(t *testing.T) {
+	t.Parallel()
+	opts := DefaultOptions()
+	opts.Repos = nil
+	opts.HealthFn = func(context.Context) health.Report {
+		return health.Report{Checks: []health.Check{
+			{Name: "DISK", Detail: "50 GB free", Status: health.StatusOK},
+		}}
+	}
+	opts.SystemRunnersFn = func(context.Context) ([]runner.Status, error) {
+		return []runner.Status{
+			{UnitName: "actions.runner.acme-api.civm-api.service", Repo: "acme/api", Name: "civm-api", ActiveState: "active", SubState: "running"},
+			{UnitName: "actions.runner.acme-web.civm-web.service", Repo: "acme/web", Name: "civm-web", ActiveState: "active", SubState: "running"},
+			{UnitName: "actions.runner.acme-api.civm-api-2.service", Repo: "acme/api", Name: "civm-api-2", ActiveState: "active", SubState: "running"},
+		}, nil
+	}
+	stubHookContractOK(&opts)
+	var queried []string
+	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]GitHubRunner, error) {
+		queried = append(queried, repo)
+		return []GitHubRunner{{Repo: repo, Name: "civm-auto", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
+	}
+	report, err := Collect(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Collect err = %v", err)
+	}
+	if report.Exit != 0 {
+		t.Fatalf("Exit = %d, want ok 0; report=%+v", report.Exit, report)
+	}
+	if strings.Join(queried, ",") != "acme/api,acme/web" {
+		t.Fatalf("queried repos = %v", queried)
 	}
 }
 
@@ -210,5 +302,42 @@ func TestCollectRejectsBadRepo(t *testing.T) {
 	opts.Repos = []string{"bad/repo;rm"}
 	if _, err := Collect(context.Background(), opts); err == nil {
 		t.Fatalf("expected bad repo validation error")
+	}
+}
+
+func assertHookCheck(t *testing.T, report Report, name string, severity Severity, detailContains string) {
+	t.Helper()
+	for _, check := range report.HookChecks {
+		if check.Name == name {
+			if check.Severity != severity || !strings.Contains(check.Detail, detailContains) {
+				t.Fatalf("%s = %+v, want severity=%s detail containing %q", name, check, severity, detailContains)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing hook check %s in %+v", name, report.HookChecks)
+}
+
+func stubHookContractOK(opts *Options) {
+	opts.GlobFn = func(string) ([]string, error) {
+		return []string{"/home/emdev/actions-runner"}, nil
+	}
+	opts.ReadlinkFn = func(path string) (string, error) {
+		switch path {
+		case "/opt/civm/hooks/job-started", "/opt/civm/hooks/job-completed":
+			return "/usr/local/bin/civmctl", nil
+		default:
+			return "", errors.New("unexpected readlink path: " + path)
+		}
+	}
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if path != "/home/emdev/actions-runner/.env" {
+			return nil, errors.New("unexpected env path: " + path)
+		}
+		return []byte(strings.Join([]string{
+			"ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started",
+			"ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed",
+			"",
+		}, "\n")), nil
 	}
 }

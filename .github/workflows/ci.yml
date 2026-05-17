@@ -12,11 +12,31 @@ concurrency:
 
 permissions:
   contents: read
+  checks: read
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
+    outputs:
+      full: ${{ steps.filter.outputs.full }}
+      docs: ${{ steps.filter.outputs.docs }}
+      pr_full: ${{ steps.filter.outputs.pr_full }}
+      pr_docs: ${{ steps.filter.outputs.pr_docs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect current and PR changes
+        id: filter
+        run: node tools/ci/detect-changes.mjs full docs
+
   validate-templates:
     name: Validate templates and runbooks
-    runs-on: [self-hosted, civm]
+    needs: changes
+    if: needs.changes.outputs.docs == 'true' || needs.changes.outputs.full == 'true'
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -82,7 +102,9 @@ jobs:
 
   build-civmctl:
     name: Build + test civmctl
-    runs-on: [self-hosted, civm]
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -160,9 +182,9 @@ jobs:
 
   self-hosted-smoke:
     name: Self-hosted runner smoke (civm)
-    runs-on: [self-hosted, civm]
-    # Sem needs: roda em paralelo aos gates principais e prova o host
-    # operacionalmente enquanto o build/test valida o binario.
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -196,7 +218,7 @@ jobs:
           civmctl drift --timeout=15 || true
           # billing-status: zero-PAT, usa GITHUB_TOKEN auto
           # exit 0=ok, 1=blocked, 2=unknown — aceitar todos no smoke
-          civmctl billing-status --repo=advoq/civm --workflow=ci.yml --timeout=15 || true
+          civmctl billing-status --repo="${GITHUB_REPOSITORY}" --workflow=ci.yml --timeout=15 || true
 
       - name: civmctl health on self
         run: |
@@ -213,12 +235,6 @@ jobs:
       - name: Build civmctl from source on self-hosted (parity test)
         run: |
           go build -o /tmp/civmctl-fresh ./cmd/civmctl
-          # Smoke: fresh build responde --help sem erro e expõe version-pins.
-          # Diff contra /usr/local/bin/civmctl --help foi removido em
-          # 2026-05-11: qualquer PR que adicione/remova subcomando
-          # divergia antes de o binário instalado ser republicado
-          # pós-merge, quebrando o gate. O regression check de
-          # comandos/flags fica coberto por go test em build-civmctl.
           /tmp/civmctl-fresh --help > /dev/null
           /tmp/civmctl-fresh version-pins | head -5
           rm -f /tmp/civmctl-fresh
@@ -230,3 +246,78 @@ jobs:
           # fazem a higiene operacional fora do caminho quente do job.
           echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
           ls -la "$GITHUB_WORKSPACE" | head -5
+
+  ci:
+    name: CI
+    needs: [changes, validate-templates, build-civmctl, self-hosted-smoke]
+    if: always()
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
+    steps:
+      - name: Aggregate
+        env:
+          CURRENT_FULL: ${{ needs.changes.outputs.full }}
+          CURRENT_DOCS: ${{ needs.changes.outputs.docs }}
+          PR_FULL: ${{ needs.changes.outputs.pr_full }}
+          PR_DOCS: ${{ needs.changes.outputs.pr_docs }}
+          VALIDATE_TEMPLATES_RESULT: ${{ needs.validate-templates.result }}
+          BUILD_RESULT: ${{ needs.build-civmctl.result }}
+          SMOKE_RESULT: ${{ needs.self-hosted-smoke.result }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PREVIOUS_SHA: ${{ github.event.before }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          require_success() {
+            if [ "$2" != "success" ]; then
+              echo "::error::$1 concluded $2"
+              exit 1
+            fi
+          }
+
+          wait_for_previous_gate() {
+            ok=false
+            for _ in $(seq 1 90); do
+              status_line="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${PREVIOUS_SHA}/check-runs?per_page=100" \
+                --jq '.check_runs | map(select(.name == "CI" or .name == "Build + test civmctl")) | sort_by(.started_at // .completed_at // .created_at) | last // {} | [.status // "", .conclusion // "", .html_url // ""] | @tsv' 2>/dev/null || true)"
+              status="$(printf '%s' "$status_line" | awk -F '\t' '{print $1}')"
+              conclusion="$(printf '%s' "$status_line" | awk -F '\t' '{print $2}')"
+              url="$(printf '%s' "$status_line" | awk -F '\t' '{print $3}')"
+              if [ "$status" = "completed" ] && [ "$conclusion" = "success" ]; then
+                echo "::notice::Previous full CI gate succeeded: $url"
+                ok=true
+                break
+              fi
+              if [ "$status" = "completed" ] && [ -n "$conclusion" ] && [ "$conclusion" != "success" ]; then
+                echo "::error::Previous full CI gate did not succeed: conclusion=$conclusion $url"
+                exit 1
+              fi
+              sleep 10
+            done
+            if [ "$ok" != "true" ]; then
+              echo "::error::Previous full CI gate did not finish successfully before timeout"
+              exit 1
+            fi
+          }
+
+          if [ "$CURRENT_DOCS" = "true" ] || [ "$CURRENT_FULL" = "true" ]; then
+            require_success validate-templates "$VALIDATE_TEMPLATES_RESULT"
+          fi
+
+          if [ "$CURRENT_FULL" != "true" ]; then
+            if [ "$PR_FULL" = "true" ] && [ "$EVENT_NAME" = "pull_request" ] && [ "$EVENT_ACTION" = "synchronize" ] && [ -n "$PREVIOUS_SHA" ]; then
+              wait_for_previous_gate
+              exit 0
+            fi
+            if [ "$PR_FULL" = "true" ]; then
+              echo "::error::PR has civmctl changes, but current build did not run and no previous check can be verified."
+              exit 1
+            fi
+            echo "::notice::Docs-only/no-op CI passed."
+            exit 0
+          fi
+
+          require_success build-civmctl "$BUILD_RESULT"
+          require_success self-hosted-smoke "$SMOKE_RESULT"
+          echo "::notice::CI passed."
