@@ -45,6 +45,17 @@ possível e ter testes focados. Evitar `pull_request_target`; se ele for
 inevitavel, o job nao pode fazer checkout nem executar codigo vindo da branch
 do PR e nao pode expor secrets a fork.
 
+## Documentação civm em peer repos
+
+- Peer repo que usa a VM deve ter `docs/CIVM.md` baseado em
+  `templates/CIVM-USAGE.md`.
+- Docs antigas como `docs/CI-VM.md`, `docs/LOCAL-VM-CI.md` ou
+  `docs/CI-LOCAL-RUNNER.md` devem virar ponte curta para `docs/CIVM.md`
+  ou ficar marcadas como historicas.
+- Documentacao operacional ativa nao deve usar `vitae-ci`, `ci-result`,
+  `make ci-vm`, `CI_VM_*`, `advoq-ci-vm-autoclean.timer` ou wrappers
+  `.sh` de hook como estado atual.
+
 ## Issues
 
 - Criar issue antes ou junto do PR quando o trabalho merece tracking (feature, bug, refactor não-trivial).

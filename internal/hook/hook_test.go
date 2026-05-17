@@ -65,10 +65,10 @@ func TestJobCompletedCleansWorkspaceButPreservesHotCaches(t *testing.T) {
 
 type fakeEntry string
 
-func (f fakeEntry) Name() string               { return string(f) }
-func (fakeEntry) IsDir() bool                  { return true }
-func (fakeEntry) Type() os.FileMode            { return os.ModeDir }
-func (fakeEntry) Info() (os.FileInfo, error)   { return nil, nil }
+func (f fakeEntry) Name() string             { return string(f) }
+func (fakeEntry) IsDir() bool                { return true }
+func (fakeEntry) Type() os.FileMode          { return os.ModeDir }
+func (fakeEntry) Info() (os.FileInfo, error) { return nil, nil }
 
 func fakeDirEntry(name string) os.DirEntry { return fakeEntry(name) }
 

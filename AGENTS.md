@@ -10,8 +10,9 @@ projetos do mesmo dono (compexhub, vitae, advoq, futuros). Hospeda:
 1. **`civmctl`** — Go CLI zero-effort para provisionar e manter a VM
    self-hosted que serve como GitHub Actions runner com label `civm`.
 2. **Templates de workflow** copiáveis pelos peer repos.
-3. **Runbooks operacionais** da VM (provisionamento, cleanup, troubleshooting).
-4. **Disciplinas e regras** portáveis (Kahneman, SSDV3, invariantes).
+3. **Template `docs/CIVM.md`** para peer repos documentarem como usam a VM.
+4. **Runbooks operacionais** da VM (provisionamento, cleanup, troubleshooting).
+5. **Disciplinas e regras** portáveis (Kahneman, SSDV3, invariantes).
 
 A VM roda **paridade com `ubuntu-latest` do GitHub Actions** (Ubuntu 24.04 LTS,
 mesmas versões de Go/Node/Python/Docker/gh) com mais hardware (4+ cores,
@@ -73,6 +74,10 @@ civmctl version-pins
 
 # Detector heuristico de billing-block (zero-PAT)
 civmctl billing-status --repo=owner/repo
+
+# Status read-only de adoção/saúde dos peers
+civmctl peer-status --repo=owner/repo --json
+civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml
 
 # Releases (automatizado via release-please)
 gh pr list --repo advoq/civm --label "autorelease: pending"
@@ -145,6 +150,10 @@ civm **detecta**, nunca corrige automaticamente. **Nunca**:
 - Persistir secrets em qualquer arquivo do repo
 - Executar comando vindo de input externo sem validação
 
+`civmctl peer-status --repos=...` segue a mesma regra: consolida billing,
+runners online e último run dos peers para decisão humana; não faz fix,
+commit, push, rollback ou alteração automática em peer repo.
+
 ## Quando NÃO usar civmctl
 
 - Não usar `civmctl bootstrap` em máquina de desenvolvimento (instala
@@ -170,6 +179,7 @@ civm **detecta**, nunca corrige automaticamente. **Nunca**:
 - `runbooks/MULTI-PROJECT-RUNNER.md` — provisionamento da VM
 - `runbooks/VM-CREDENTIALS.md` — segurança de credenciais
 - `runbooks/PEER-ADOPTION-CHECKLIST.md` — adoção manual em peer repo
+- `templates/CIVM-USAGE.md` — fonte para `docs/CIVM.md` nos peer repos
 - `disciplines/KAHNEMAN-DISCIPLINES.md` — 12 disciplinas Sistema 1 vs 2
 - `disciplines/INVARIANTS.md` — catálogo de invariantes portáveis
 

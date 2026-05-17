@@ -33,7 +33,7 @@ func runCILocalReport(args []string) int {
 	repo := fs.String("repo", "", "owner/repo (ex: emersonbusson/compexhub)")
 	sha := fs.String("sha", "", "commit SHA (full 40-char)")
 	state := fs.String("state", "", "success | failure | pending | error")
-	checkContext := fs.String("context", "Local VM CI", "check context (ex: 'Local VM CI')")
+	checkContext := fs.String("context", "civm fallback", "check context (ex: 'civm fallback')")
 	description := fs.String("description", "", "descricao curta (<=140 chars)")
 	targetURL := fs.String("target-url", "", "URL para detalhes (opcional)")
 	timeoutSec := fs.Int("timeout", 15, "timeout em segundos")
