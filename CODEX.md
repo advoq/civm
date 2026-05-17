@@ -71,6 +71,18 @@ qualquer extração, instalação ou execução de script. Se o upstream publica
 nova versão sem checksum pinado, o comando deve falhar pedindo atualização do
 pin, não prosseguir por confiança em HTTPS.
 
+## Peer observability
+
+`civmctl peer-status --repo=owner/repo --json` preserva o contrato JSON de um
+peer único. `civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml`
+é a visão fleet para checar adoção/saúde dos peers antes de publicar ou
+investigar CI.
+
+O modo fleet é read-only: consolida billing, runners online e último run por
+peer, com resumo `ok/warn/critical` e exit `0=ok`, `1=warn`, `2=critical`.
+Ele nunca corrige workflow, runner, branch protection, workspace ou config de
+peer automaticamente.
+
 ## Release automation
 
 `release-please` (`.github/workflows/release.yml` +

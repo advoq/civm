@@ -149,6 +149,20 @@ Settings → Branches → main → Require status checks:
 - [ ] Adicionar `Gates (typecheck, test, build, invariants)` como required
 - [ ] Remover jobs individuais antigos (lint, test, etc)
 
+## Passo 11 — Verificar adoção/saúde da fleet
+
+Antes de publicar PR de adoção ou investigar CI quebrado, consolidar os
+sinais operacionais dos peers:
+
+```bash
+civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml
+civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml --json
+```
+
+Exit codes: `0=ok`, `1=warn`, `2=critical`. O comando é read-only:
+mostra billing, runners online e último run por peer, mas não corrige
+workflow, runner, branch protection ou workspace automaticamente.
+
 ## Verificação
 
 ```bash
@@ -157,6 +171,7 @@ for f in CLAUDE.md AGENTS.md CODEX.md; do
 done
 [ -f .github/workflows/ci.yml ] && python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))" && echo "ci.yml OK"
 rg -n "vitae-ci|ci-result|make ci-vm|CI_VM_|advoq-ci-vm|ci-vm" README.md AGENTS.md CLAUDE.md CODEX.md docs .github/workflows
+civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml
 ```
 
 ## Histórico

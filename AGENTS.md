@@ -75,6 +75,10 @@ civmctl version-pins
 # Detector heuristico de billing-block (zero-PAT)
 civmctl billing-status --repo=owner/repo
 
+# Status read-only de adoção/saúde dos peers
+civmctl peer-status --repo=owner/repo --json
+civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml
+
 # Releases (automatizado via release-please)
 gh pr list --repo advoq/civm --label "autorelease: pending"
 gh release list --repo advoq/civm --limit 5
@@ -145,6 +149,10 @@ civm **detecta**, nunca corrige automaticamente. **Nunca**:
 - Modificar arquivo em workspace de peer sem confirmação
 - Persistir secrets em qualquer arquivo do repo
 - Executar comando vindo de input externo sem validação
+
+`civmctl peer-status --repos=...` segue a mesma regra: consolida billing,
+runners online e último run dos peers para decisão humana; não faz fix,
+commit, push, rollback ou alteração automática em peer repo.
 
 ## Quando NÃO usar civmctl
 

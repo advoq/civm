@@ -61,6 +61,7 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl runner remove` | desregistra runner; aborta antes de `config.sh remove`/`rm -rf` se stop/uninstall falhar |
 | `civmctl drift` | compara pins locais vs upstream actions/runner-images (HTTP fetch) |
 | `civmctl billing-status` | detector heuristico de billing-block (zero-PAT, GITHUB_TOKEN suficiente) |
+| `civmctl peer-status` | status read-only de adoção/saúde por peer ou fleet: billing, runners online e último run; `--repos=owner/a,owner/b` retorna exit `0=ok`, `1=warn`, `2=critical` |
 | `civmctl runner list` | lista runners systemd na VM (parsed; suporta `--json`) |
 | `civmctl runner restart` | systemctl restart por --short ou --unit; verifica is-active após delay |
 | `civmctl runner upgrade` | upgrade in-place de versão (preserva .runner/.credentials/_work) |
@@ -173,10 +174,15 @@ cp ~/codespace/civm/templates/ci-optimistic.yml.template \
 # 4. Configurar branch protection no GitHub
 # Settings > Branches > main > require status check:
 #   "Gates (typecheck, test, build, invariants)"
+
+# 5. Verificar adoção/saúde dos peers antes de publicar ou investigar CI
+civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml
 ```
 
 Audit/discipline-checks ficam no projeto do peer (cada um com sua
 própria ferramenta — ex.: compexhub tem `compexhubctl`).
+`peer-status` é observabilidade read-only: consolida sinais para decisão
+humana, mas não corrige workspace ou configuração de peer automaticamente.
 
 ## Versionamento
 
