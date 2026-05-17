@@ -34,8 +34,10 @@ The trusted set is:
 - `civmctl` binary at `/usr/local/bin/civmctl` (only operators can
   install or replace; see `civmctl self-upgrade`)
 - systemd unit files in `/etc/systemd/system/civmctl-*.{service,timer}`
-- Hook symlinks at `/opt/civm/hooks/job-{started,completed}` pointing
-  at the trusted binary
+- Target-state hook symlinks at `/opt/civm/hooks/job-{started,completed}`
+  pointing at the trusted binary. Some legacy VMs can still have `.sh`
+  wrappers until `civmctl hook install --execute` is run with a fresh
+  binary; see `runbooks/MULTI-PROJECT-RUNNER.md`.
 
 Implicit assumptions:
 
@@ -150,6 +152,13 @@ If a deployed civmctl version is found to have a security issue:
    cd /opt/civm && git pull --ff-only
    sudo civmctl self-upgrade --execute
    ```
+   If the host predates `self-upgrade` or `/opt/civm` is not a Git
+   checkout, first verify the runner is idle (`civmctl idle-check`),
+   build the release binary from a trusted checkout, copy it to the VM,
+   and install it atomically with `sudo install -m 0755 <binary>
+   /usr/local/bin/civmctl`. Then run `sudo civmctl hook install
+   --execute` to replace legacy `.sh` hook wrappers with symlinks to the
+   trusted binary.
 4. **Re-enable hooks.** Reverse step 1 on each runner.
 
 ## Known operational notes
