@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.4.0](https://github.com/advoq/civm/compare/v1.3.0...v1.4.0) (2026-05-17)
+
+
+### Features
+
+* **civm:** consolidar status operacional dos peers ([#38](https://github.com/advoq/civm/issues/38)) ([f4b8ba3](https://github.com/advoq/civm/commit/f4b8ba32542e77249642d51e931ef5c7819da396))
+* **civmctl:** add self-upgrade subcommand ([#33](https://github.com/advoq/civm/issues/33)) ([33fcbff](https://github.com/advoq/civm/commit/33fcbffb260c376a516c5bfbdda0dae8509fb5a1))
+
+
+### Documentation
+
+* **runner:** formalize self-upgrade deploy workflow ([#34](https://github.com/advoq/civm/issues/34)) ([c4083e8](https://github.com/advoq/civm/commit/c4083e8890615445a2dae6452c1b1dff000a6d0d))
+* **security:** add SECURITY.md with threat model ([#36](https://github.com/advoq/civm/issues/36)) ([bc1d537](https://github.com/advoq/civm/commit/bc1d53756e1fe6e8943f30dc2c0a1400b7024661))
+
 ## [1.3.0](https://github.com/advoq/civm/compare/v1.2.0...v1.3.0) (2026-05-16)
 
 
