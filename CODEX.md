@@ -20,14 +20,16 @@ civm permite execução autônoma para:
   `.release-please-manifest.json` (release automation e CI gates)
 - ✅ Build e test local (`go build`, `go test`)
 - ✅ Commit local (sem push)
+- ✅ Modificar peer repos quando houver autorização explícita do humano para
+  trabalho cross-repo, preservando WIP e committando só arquivos tocados
 
 civm **NÃO** permite autonomamente:
 
 - ❌ `git push` para `origin/main` (sempre humano)
 - ❌ Alterar `.git/config` ou hooks
 - ❌ Criar/deletar repos no GitHub via `gh repo create`/`gh repo delete`
-- ❌ Modificar repos peer (compexhub, vitae, advoq) — escopo cross-repo
-  exige autorização explícita do humano
+- ❌ Modificar repos peer (compexhub, vitae, advoq) sem autorização
+  explícita do humano para o escopo cross-repo
 - ❌ Executar `civmctl bootstrap` ou `civmctl cleanup --execute` na máquina
   do dev (destinado à VM dedicada; agente sandboxed não tem SSH)
 - ❌ Persistir secret em qualquer arquivo (mesmo `.env.example`)
@@ -191,6 +193,7 @@ em produção, reavaliar (talvez voltar para runbook puro + Ansible playbook).
 - `AGENTS.md` — resumo geral
 - `MEMORY.md` — log temporal append-only
 - `runbooks/MULTI-PROJECT-RUNNER.md` — fluxo de provisionamento
+- `templates/CIVM-USAGE.md` — fonte de `docs/CIVM.md` nos peer repos
 - `cmd/civmctl/` — código do CLI
 
 <!-- COMMUNICATION-STYLE:BEGIN -->

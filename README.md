@@ -112,6 +112,7 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 |---|---|
 | `templates/ci-optimistic.yml.template` | `cp ... .github/workflows/ci.yml` no peer; substituir placeholders |
 | `templates/ci-router.yml.template` | idem, versão Tier 1 com router |
+| `templates/CIVM-USAGE.md` | copiar para `docs/CIVM.md` no peer; ajustar gate local do projeto |
 | `templates/COMMUNICATION-STYLE.md` | copiar bloco entre marcadores BEGIN/END pra CLAUDE/AGENTS/CODEX do peer |
 | `runbooks/CI-BILLING-FALLBACK.md` | leia para entender as 3 camadas de fallback (referência, não copy) |
 | `runbooks/CI-GITHUB-APP-SETUP.md` | rota de upgrade futuro (referência) |
@@ -154,17 +155,22 @@ Não tem 1-comando-mágico — adoção é manual, peer repo decide o que
 faz sentido:
 
 ```bash
-# 1. Copiar template de workflow (escolher tier)
+# 1. Copiar a doc operacional curta do peer
+mkdir -p <peer>/docs
+cp ~/codespace/civm/templates/CIVM-USAGE.md <peer>/docs/CIVM.md
+# Editar o bloco "Gate local do projeto" com o comando real do peer
+
+# 2. Copiar template de workflow (escolher tier)
 cp ~/codespace/civm/templates/ci-optimistic.yml.template \
    <peer>/.github/workflows/ci.yml
 # Editar para substituir placeholders pelos gates reais do peer
 
-# 2. Copiar snippet COMMUNICATION-STYLE
+# 3. Copiar snippet COMMUNICATION-STYLE
 # (copiar bloco entre marcadores BEGIN/END em
 #  ~/codespace/civm/templates/COMMUNICATION-STYLE.md
 #  pra CLAUDE.md, AGENTS.md, CODEX.md do peer)
 
-# 3. Configurar branch protection no GitHub
+# 4. Configurar branch protection no GitHub
 # Settings > Branches > main > require status check:
 #   "Gates (typecheck, test, build, invariants)"
 ```

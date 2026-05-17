@@ -10,8 +10,9 @@ projetos do mesmo dono (compexhub, vitae, advoq, futuros). Hospeda:
 1. **`civmctl`** — Go CLI zero-effort para provisionar e manter a VM
    self-hosted que serve como GitHub Actions runner com label `civm`.
 2. **Templates de workflow** copiáveis pelos peer repos.
-3. **Runbooks operacionais** da VM (provisionamento, cleanup, troubleshooting).
-4. **Disciplinas e regras** portáveis (Kahneman, SSDV3, invariantes).
+3. **Template `docs/CIVM.md`** para peer repos documentarem como usam a VM.
+4. **Runbooks operacionais** da VM (provisionamento, cleanup, troubleshooting).
+5. **Disciplinas e regras** portáveis (Kahneman, SSDV3, invariantes).
 
 A VM roda **paridade com `ubuntu-latest` do GitHub Actions** (Ubuntu 24.04 LTS,
 mesmas versões de Go/Node/Python/Docker/gh) com mais hardware (4+ cores,
@@ -170,6 +171,7 @@ civm **detecta**, nunca corrige automaticamente. **Nunca**:
 - `runbooks/MULTI-PROJECT-RUNNER.md` — provisionamento da VM
 - `runbooks/VM-CREDENTIALS.md` — segurança de credenciais
 - `runbooks/PEER-ADOPTION-CHECKLIST.md` — adoção manual em peer repo
+- `templates/CIVM-USAGE.md` — fonte para `docs/CIVM.md` nos peer repos
 - `disciplines/KAHNEMAN-DISCIPLINES.md` — 12 disciplinas Sistema 1 vs 2
 - `disciplines/INVARIANTS.md` — catálogo de invariantes portáveis
 
