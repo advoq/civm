@@ -184,6 +184,42 @@ civmctl health
 civmctl doctor --json
 ```
 
+### Atualizar civmctl em runner existente
+
+Depois do bootstrap inicial, novas versões do binário entram via
+`civmctl self-upgrade` (a partir de v1.4.0). Roteiro padrão de
+deploy quando um PR de interesse merge em `main`:
+
+```bash
+# Na VM do runner, como qualquer usuario com sudo:
+cd /opt/civm && git pull --ff-only
+sudo civmctl self-upgrade --execute
+```
+
+O subcomando builda em `/usr/local/bin/.civmctl.new`, valida via
+`--help`, e faz `os.Rename` atomico para `/usr/local/bin/civmctl`.
+Em qualquer falha (build, verify, rename) o binario existente fica
+intacto e o temp e' removido — seguro pra rodar mesmo sem manutencao.
+
+Dry-run primeiro (default) imprime tamanho do binario atual e
+confirma `source_dir`:
+
+```bash
+sudo civmctl self-upgrade
+```
+
+Para auditoria em pipelines:
+
+```bash
+sudo civmctl self-upgrade --execute --json
+# {"executed":true,"target":"/usr/local/bin/civmctl",
+#  "verified":true,"swapped":true,"old_size":7160073,"new_size":7158912}
+```
+
+Re-instalacao de hooks **nao** e' necessaria: os symlinks
+`/opt/civm/hooks/job-{started,completed}` continuam apontando para
+`/usr/local/bin/civmctl` (que acaba de ser substituido in-place).
+
 `health`/`doctor` podem retornar warning `LAST cleanup timer nunca rodou`
 até o primeiro disparo real do `civmctl-cleanup.timer` (04:00 UTC). Isso
 é aceitável apenas até passar a próxima janela diária esperada; depois
