@@ -1,4 +1,4 @@
-# Runbook — CI billing fallback (router automatico + Local VM CI manual)
+# Runbook — CI billing fallback (router automatico + fallback manual)
 
 > **Ver tambem:**
 > - [`MULTI-PROJECT-RUNNER.md`](./MULTI-PROJECT-RUNNER.md) — runner
@@ -35,11 +35,11 @@
 > `secrets.GITHUB_TOKEN` auto-injetado pelo Actions.
 >
 > **Camada 2 — manual:** quando a Camada 1 nao bastar (ex.: civm
-> offline OU peer novo sem workflow refatorado), o admin posta check
-> `Local VM CI` na PR via gh api manualmente. Cada peer mantem seu
-> "manual reporter" (compexhub: `compexhubctl ci local --report-pr <N>`;
-> advoq: `devctl ...`; vitae: script proprio). Camada 2 NAO e'
-> uniforme entre peers — cada um decide.
+> offline OU peer novo sem workflow refatorado), o admin roda o gate
+> local do peer e posta check manual informativo na PR via gh api.
+> Cada peer mantem seu "manual reporter" (compexhub:
+> `compexhubctl ci local --report-pr <N>`; advoq: `devctl ...`;
+> vitae: script proprio). Camada 2 NAO e' uniforme entre peers.
 >
 > **Camada 3 — CI pago com aprovacao:** quando o plano GitHub permitir
 > `required_reviewers` em Environments de repo privado, o peer pode usar
@@ -81,14 +81,13 @@ Kahneman (`disciplines/KAHNEMAN-DISCIPLINES.md`):
 Trade-off aceito: se o repo e' completamente novo (sem historico de
 runs), heuristica retorna `BillingUnknown` e roteamento e' default-remote
 (ubuntu-latest). Em payment failure no primeiro PR, o ci-router roda em
-civm, ubuntu-latest tenta e falha em <10s, ci-result aggregator
-detecta e gate falha. Operador entao roda `compexhubctl ci local
---report-pr <N>` (Camada 2). Aceitavel — caso edge, primeira sessao.
+civm, ubuntu-latest tenta e falha em <10s, e o aggregator canonico
+`Gates (typecheck, test, build, invariants)` falha. Operador entao roda
+`compexhubctl ci local --report-pr <N>` (Camada 2). Aceitavel — caso
+edge, primeira sessao.
 
 Se o trade-off virar problema (>1 falso negativo por mes), reavaliar
 para GitHub App (nao PAT classico) — ver secao Rollback trigger.
-
-## Sintomas do bloqueio de billing
 
 ## Sintomas do bloqueio de billing
 
@@ -136,8 +135,8 @@ Comportamento:
 
 1. Captura stdout/stderr completo do RunLocal num buffer.
 2. Roda os 5 gates fail-fast (lint, test, invariants, build, contracts).
-3. Em sucesso, posta check run `Local VM CI` no head commit da PR
-   #42 com `conclusion=success` e o output capturado como `text`.
+3. Em sucesso, posta check run manual no head commit da PR #42 com
+   `conclusion=success` e o output capturado como `text`.
 4. Em falha, posta check run com `conclusion=failure` e o erro como
    `summary`.
 
@@ -148,8 +147,8 @@ Pré-requisitos:
 - Repo atual reconhecido por `gh repo view` (estar dentro do worktree
   do repo certo).
 
-A check run aparece na PR igual a um job de Actions, com nome `Local VM CI`,
-título `Local VM CI success in 1m48s`, e summary `All 5 gates passed.`.
+A check run aparece na PR igual a um job de Actions, com nome definido
+pelo reporter do peer, conclusion `success` e summary dos gates.
 
 ## Fallback automático: detect + run + report
 
@@ -294,16 +293,17 @@ imediatamente, confirmar que `paid-github-hosted-ci` tem
 `required_reviewers` + `prevent_self_review=true`, e so religar apos
 um run de teste em PR descartavel.
 
-## Fallback de emergencia (Camada 2): postar Local VM CI manualmente
+## Fallback de emergencia (Camada 2): postar check manualmente
 
 Se o ci-router nao conseguir rodar (ex.: civm offline) ou se o
 workflow refatorado ainda nao esta presente, usar a Camada 2 manual:
 
-1. Configurar branch protection para aceitar `Local VM CI` como check
-   alternativo (independente do `Gates` aggregator).
+1. Manter branch protection exigindo `Gates (typecheck, test, build,
+   invariants)` quando o workflow existir.
 2. Operador roda `compexhubctl ci local --report-pr <N>`.
-3. Check `Local VM CI` aparece na PR com conclusion=success/failure.
-4. Merge desbloqueia se `Local VM CI` verde.
+3. Check manual aparece na PR com conclusion=success/failure.
+4. Se o workflow `Gates` estiver indisponivel, humano decide a excecao
+   de merge com base no check manual e registra o motivo no PR.
 
 Esta camada existe como rede de seguranca para casos onde a Camada 1
 nao funciona. Se o civm voltar online, Camada 1 retoma o controle
@@ -336,8 +336,8 @@ Se o reporter postar check com `success` mas RunLocal teve falha
 silenciosa (output capturado vazio), reverter a integração de
 `outputCapture` e voltar ao reporter standalone manual.
 
-Se branch protection aceitar `Local VM CI` mas merge passar com check
-em estado `pending`/`neutral` (não `success`), revisar
+Se branch protection aceitar um check manual alternativo mas merge passar
+com check em estado `pending`/`neutral` (não `success`), revisar
 `buildCheckRunBody` para garantir `status=completed` + `conclusion=success`
 em todos os caminhos.
 
@@ -346,8 +346,7 @@ mais de 3 runs consecutivos (deve ser <5s), inspecionar gh CLI no
 civm (rede, auth, rate limit). Se civm ficar offline >1h, abrir
 incidente — o gate `Gates` nao consegue rodar e merge fica travado.
 Mitigacao temporaria: usar Camada 2 (`compexhubctl ci local --report-pr`)
-ate civm voltar OU configurar `Local VM CI` como alternative
-required check.
+ate civm voltar, com excecao humana registrada no PR.
 
 **Falso negativo da heuristica:** se a heuristica reportar `BillingOK`
 quando billing esta de fato bloqueado em mais de 1 PR por mes, considerar

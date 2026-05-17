@@ -17,6 +17,38 @@
       uncommitted (não vai perder nada)
 - [ ] git branch atual é segura (não main de produção)
 
+## Padrão documental obrigatório
+
+Cada peer repo deve ter uma doc curta e atual em `docs/CIVM.md`. Ela
+explica como o repo consome a VM, mas não duplica o runbook de
+administração da VM.
+
+Fonte canônica para copiar:
+
+```bash
+mkdir -p docs
+cp ~/codespace/civm/templates/CIVM-USAGE.md docs/CIVM.md
+```
+
+Depois de copiar, substituir apenas o bloco "Gate local do projeto" pelo
+comando real do peer. Se o repo já tiver `docs/CI-VM.md`,
+`docs/LOCAL-VM-CI.md` ou `docs/CI-LOCAL-RUNNER.md`, manter esse arquivo
+como ponte curta para `docs/CIVM.md` ou remover em PR dedicado. Não
+deixar conteúdo operacional duplicado.
+
+Termos que não podem sobreviver em docs ativas, exceto em arquivo
+histórico/migração explicitamente marcado:
+
+- `ci-vm`
+- `vitae-ci`
+- `ci-result`
+- `make ci-vm`
+- `CI_VM_HOST`, `CI_VM_USER`, `CI_VM_PASSWORD`
+- `~/.config/advoq/ci-vm.env`
+- `advoq-ci-vm-autoclean.timer`
+- hooks legados `/opt/civm/hooks/job-started.sh` e
+  `/opt/civm/hooks/job-completed.sh`
+
 ## Passo 0 — Backup do estado atual
 
 ```bash
@@ -45,12 +77,24 @@ git checkout -b chore/adopt-civm
 # Se não tem nenhum, criar MEMORY.md (Passo 5).
 ```
 
-## Passo 3 — Criar CODEX.md se não existir
+## Passo 3 — Criar/atualizar docs/CIVM.md
+
+```bash
+mkdir -p docs
+cp ~/codespace/civm/templates/CIVM-USAGE.md docs/CIVM.md
+```
+
+Editar `docs/CIVM.md` para trocar o gate de exemplo pelo comando real
+do projeto. Adicionar um link curto para `docs/CIVM.md` em `README.md`
+e nos arquivos de instrução (`AGENTS.md`, `CLAUDE.md`, `CODEX.md`) que
+existirem.
+
+## Passo 4 — Criar CODEX.md se não existir
 
 Conteúdo minimal (header + cross-refs + snippet COMMUNICATION-STYLE
-do Passo 4 + histórico).
+do passo seguinte + histórico).
 
-## Passo 4 — Inserir snippet COMMUNICATION-STYLE em CLAUDE/AGENTS/CODEX
+## Passo 5 — Inserir snippet COMMUNICATION-STYLE em CLAUDE/AGENTS/CODEX
 
 Copiar bloco entre marcadores `<!-- COMMUNICATION-STYLE:BEGIN -->`
 e `<!-- COMMUNICATION-STYLE:END -->` de
@@ -59,14 +103,14 @@ de cada arquivo `CLAUDE.md`, `AGENTS.md`, `CODEX.md`.
 
 Adicionar logo abaixo: `> Source canônico: ~/codespace/civm/templates/COMMUNICATION-STYLE.md`
 
-## Passo 5 — Criar MEMORY.md se não existir
+## Passo 6 — Criar MEMORY.md se não existir
 
 Header com formato append-only canônico (campos branch/scope/goal/
 actions/validations/commits/open-items/next-step).
 
 Primeira entrada documenta esta adoção.
 
-## Passo 6 — Adotar workflow CI (escolher tier)
+## Passo 7 — Adotar workflow CI (escolher tier)
 
 ```bash
 mkdir -p .github/workflows
@@ -84,26 +128,40 @@ EDITAR: substituir steps "echo PLACEHOLDER" pelos gates reais do peer.
 Conferir que todo job local usa `runs-on: [self-hosted, civm]` ou o
 conditional equivalente `fromJSON('["self-hosted","civm"]')`.
 
-## Passo 7 — Commit
+## Passo 8 — Commit
 
 ```bash
-git add CLAUDE.md AGENTS.md CODEX.md MEMORY.md .github/workflows/ci.yml
-git commit -m "chore: adopt civm pattern (style + CODEX/MEMORY + ci workflow)"
+git add README.md CLAUDE.md AGENTS.md CODEX.md MEMORY.md docs/CIVM.md .github/workflows/ci.yml
+git commit -m "chore: adopt civm pattern (docs + style + ci workflow)"
 ```
 
-## Passo 8 — Restaurar WIP (se houve stash)
+## Passo 9 — Restaurar WIP (se houve stash)
 
 ```bash
 git checkout <branch-original>
 git stash pop
 ```
 
-## Passo 9 — Branch protection no GitHub (admin)
+## Passo 10 — Branch protection no GitHub (admin)
 
 Settings → Branches → main → Require status checks:
 
 - [ ] Adicionar `Gates (typecheck, test, build, invariants)` como required
 - [ ] Remover jobs individuais antigos (lint, test, etc)
+
+## Passo 11 — Verificar adoção/saúde da fleet
+
+Antes de publicar PR de adoção ou investigar CI quebrado, consolidar os
+sinais operacionais dos peers:
+
+```bash
+civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml
+civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml --json
+```
+
+Exit codes: `0=ok`, `1=warn`, `2=critical`. O comando é read-only:
+mostra billing, runners online e último run por peer, mas não corrige
+workflow, runner, branch protection ou workspace automaticamente.
 
 ## Verificação
 
@@ -112,6 +170,8 @@ for f in CLAUDE.md AGENTS.md CODEX.md; do
   grep -qF "<!-- COMMUNICATION-STYLE:BEGIN -->" "$f" && echo "OK: $f" || echo "FAIL: $f"
 done
 [ -f .github/workflows/ci.yml ] && python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))" && echo "ci.yml OK"
+rg -n "vitae-ci|ci-result|make ci-vm|CI_VM_|advoq-ci-vm|ci-vm" README.md AGENTS.md CLAUDE.md CODEX.md docs .github/workflows
+civmctl peer-status --repos=advoq/civm,emersonbusson/compexhub --workflow=ci.yml
 ```
 
 ## Histórico

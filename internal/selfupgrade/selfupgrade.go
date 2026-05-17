@@ -36,15 +36,15 @@ type Options struct {
 
 // Result captura o que aconteceu para render/auditoria.
 type Result struct {
-	Executed   bool   `json:"executed"`
-	SourceDir  string `json:"source_dir"`
-	Target     string `json:"target"`
-	BuiltAt    string `json:"built_at,omitempty"`
-	Verified   bool   `json:"verified"`
-	Swapped    bool   `json:"swapped"`
-	OldSize    int64  `json:"old_size,omitempty"`
-	NewSize    int64  `json:"new_size,omitempty"`
-	Error      string `json:"error,omitempty"`
+	Executed  bool   `json:"executed"`
+	SourceDir string `json:"source_dir"`
+	Target    string `json:"target"`
+	BuiltAt   string `json:"built_at,omitempty"`
+	Verified  bool   `json:"verified"`
+	Swapped   bool   `json:"swapped"`
+	OldSize   int64  `json:"old_size,omitempty"`
+	NewSize   int64  `json:"new_size,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // DefaultOptions retorna padrões de produção (build via `go build`,
