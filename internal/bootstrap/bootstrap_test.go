@@ -370,6 +370,7 @@ func TestRun_WatchdogTimer_OnlyCleanup(t *testing.T) {
 	opts := okOpts(t)
 	opts.WatchdogTimer = false
 	opts.ReverseWatchdog = false
+	opts.RunnerWatchdog = false
 	opts.Execute = false
 	calls := []string{}
 	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -396,6 +397,9 @@ func TestRun_WatchdogTimer_OnlyCleanup(t *testing.T) {
 		if strings.Contains(c, "civmctl-disk-watchdog.timer") {
 			t.Errorf("WatchdogTimer=false NAO deveria chamar disk-watchdog.timer; got: %q", c)
 		}
+		if strings.Contains(c, "civmctl-runner-watchdog.timer") {
+			t.Errorf("RunnerWatchdog=false NAO deveria chamar runner-watchdog.timer; got: %q", c)
+		}
 	}
 }
 
@@ -404,6 +408,7 @@ func TestRun_WatchdogTimer_BothRequired(t *testing.T) {
 	// WatchdogTimer=true: ambos timers checados
 	opts := okOpts(t)
 	opts.WatchdogTimer = true
+	opts.RunnerWatchdog = true
 	opts.Execute = false
 	calls := []string{}
 	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -428,6 +433,20 @@ func TestRun_WatchdogTimer_BothRequired(t *testing.T) {
 				t.Errorf("watchdog ausente em dry-run: WouldDo esperado true")
 			}
 		}
+	}
+}
+
+func TestTimerListIncludesRunnerWatchdogByDefault(t *testing.T) {
+	t.Parallel()
+	timers := strings.Join(timerList(DefaultOptions()), ",")
+	if !strings.Contains(timers, "civmctl-runner-watchdog.timer") {
+		t.Fatalf("timerList default = %s, want runner-watchdog", timers)
+	}
+	opts := DefaultOptions()
+	opts.RunnerWatchdog = false
+	timers = strings.Join(timerList(opts), ",")
+	if strings.Contains(timers, "civmctl-runner-watchdog.timer") {
+		t.Fatalf("RunnerWatchdog=false still included runner-watchdog: %s", timers)
 	}
 }
 

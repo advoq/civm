@@ -179,8 +179,9 @@ o label.
 
 Setup minimo (single-runner, single-repo):
 
-1. **VM Linux (Ubuntu 22.04+ recomendado).** Pode ser laptop, NUC,
-   servidor on-prem ou VM cloud — qualquer host com saida de internet.
+1. **VM Linux (Ubuntu 24.04 LTS recomendado para paridade).** Pode ser
+   laptop, NUC, servidor on-prem ou VM cloud — qualquer host com saida de
+   internet.
 2. **Software requerido na VM:**
    - `git` (>= 2.30)
    - `go` (1.26 — actions/setup-go pode instalar tambem se preferir)

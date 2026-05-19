@@ -133,6 +133,8 @@ EXEMPLOS
   civmctl runner list --json | jq '.runners[] | select(.repo == "owner/repo")'
   civmctl runner restart --short=civm-1 --execute
   civmctl runner upgrade --short=cmpx --new-version=2.335.0 --execute
+  civmctl runner watchdog --execute --repos=auto
+  civmctl runner watchdog --execute --rerun-network-failures --max-run-age=6h --repos=owner/repo
   civmctl reverse-watchdog --max-age-hours=2
   sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute
   civmctl peer-status --repo=owner/repo

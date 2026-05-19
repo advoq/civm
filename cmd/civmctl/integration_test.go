@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,10 @@ import (
 // package by TestMain. Integration tests use this binary plus symlinks
 // to exercise argv[0]-based hook dispatch end to end.
 var civmctlBin string
+
+type integrationEvent struct {
+	Event string `json:"event"`
+}
 
 func TestMain(m *testing.M) {
 	tmp, err := os.MkdirTemp("", "civmctl-int-*")
@@ -166,4 +171,227 @@ func TestIntegration_UnrelatedBasenameDoesNotDispatch(t *testing.T) {
 	if !strings.Contains(string(out), "civmctl — provisionamento") {
 		t.Errorf("expected help message, got:\n%s", out)
 	}
+}
+
+func TestIntegration_RunnerWatchdogExecuteFakeRestartsAndReruns(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil { //nolint:gosec // G301: temp PATH dir needs executable bit.
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "commands.log")
+	runnerDir := filepath.Join(dir, "actions-runner-self")
+	if err := os.MkdirAll(runnerDir, 0755); err != nil { //nolint:gosec // G301: fake runner dir needs traversal bit.
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runnerDir, ".runner"), []byte(`{"gitHubUrl":"https://github.com/advoq/civm"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runnerDir, ".env"), []byte("EXISTING=1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFakeCommand(t, binDir, "git", `#!/usr/bin/env bash
+printf 'git %s\n' "$*" >> "$CIVM_FAKE_LOG"
+exit 0
+`)
+	writeFakeCommand(t, binDir, "ps", `#!/usr/bin/env bash
+printf 'ps %s\n' "$*" >> "$CIVM_FAKE_LOG"
+printf '1 0 init /sbin/init\n'
+`)
+	writeFakeCommand(t, binDir, "systemctl", `#!/usr/bin/env bash
+printf 'systemctl %s\n' "$*" >> "$CIVM_FAKE_LOG"
+if [ "$1" = "list-units" ]; then
+  printf 'actions.runner.advoq-civm.civm-self.service loaded failed failed GitHub Actions Runner\n'
+  exit 0
+fi
+if [ "$1" = "show" ]; then
+  printf '%s\n' "$CIVM_FAKE_RUNNER_DIR"
+  exit 0
+fi
+if [ "$1" = "is-active" ]; then
+  printf 'active\n'
+  exit 0
+fi
+exit 0
+`)
+	writeFakeCommand(t, binDir, "sudo", `#!/usr/bin/env bash
+printf 'sudo %s\n' "$*" >> "$CIVM_FAKE_LOG"
+exit 0
+`)
+	writeFakeCommand(t, binDir, "gh", `#!/usr/bin/env bash
+printf 'gh %s\n' "$*" >> "$CIVM_FAKE_LOG"
+if [ "$1" = "api" ] && [ "$2" = "/repos/advoq/civm/actions/runners" ]; then
+  cat <<'JSON'
+{"runners":[{"id":1,"name":"civm-self","status":"online","busy":false,"labels":[{"name":"self-hosted"},{"name":"civm"}]}]}
+JSON
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "/repos/advoq/civm/actions/runs?per_page=20&status=completed" ]; then
+  created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  cat <<JSON
+{"workflow_runs":[{"id":99,"head_sha":"abc123","status":"completed","conclusion":"failure","created_at":"$created_at","html_url":"https://github.com/advoq/civm/actions/runs/99","pull_requests":[{"number":7}]}]}
+JSON
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "/repos/advoq/civm/pulls/7" ]; then
+  printf '{"number":7,"state":"open","mergeable_state":"clean"}\n'
+  exit 0
+fi
+if [ "$1" = "run" ] && [ "$2" = "view" ] && [ "$3" = "99" ]; then
+  printf 'Run actions/checkout@v5\nRPC failed; curl 56 GnuTLS recv error\nfatal: early EOF\n'
+  exit 0
+fi
+if [ "$1" = "run" ] && [ "$2" = "rerun" ] && [ "$3" = "99" ]; then
+  exit 0
+fi
+printf 'unexpected gh args: %s\n' "$*" >&2
+exit 1
+`)
+
+	markerPath := filepath.Join(dir, "markers", "reruns.json")
+	cmd := exec.Command(civmctlBin,
+		"runner", "watchdog",
+		"--execute",
+		"--repos=auto",
+		"--rerun-network-failures",
+		"--max-run-age=6h",
+		"--restart-delay=0s",
+		"--marker-path="+markerPath,
+		"--hooks-dir="+filepath.Join(dir, "hooks"),
+		"--runner-glob="+filepath.Join(dir, "actions-runner-*"),
+		"--civmctl-path="+civmctlBin,
+		"--json",
+	)
+	cmd.Env = append(os.Environ(),
+		"HOME="+dir,
+		"PATH="+binDir+":/usr/bin:/bin",
+		"CIVM_FAKE_LOG="+logPath,
+		"CIVM_FAKE_RUNNER_DIR="+runnerDir,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("runner watchdog fake failed: %v\n%s", err, out)
+	}
+	var report struct {
+		Metrics struct {
+			RunsConsidered  int `json:"runs_considered"`
+			RerunsTriggered int `json:"reruns_triggered"`
+			RerunsSkipped   int `json:"reruns_skipped"`
+		} `json:"metrics"`
+		Events []integrationEvent `json:"events"`
+	}
+	if err := json.Unmarshal(out, &report); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if !hasIntegrationEvent(report.Events, "runner-restarted") || !hasIntegrationEvent(report.Events, "rerun-triggered") {
+		t.Fatalf("events = %+v, want runner-restarted and rerun-triggered\n%s", report.Events, out)
+	}
+	if report.Metrics.RunsConsidered != 1 || report.Metrics.RerunsTriggered != 1 || report.Metrics.RerunsSkipped != 0 {
+		t.Fatalf("metrics = %+v, want considered=1 triggered=1 skipped=0", report.Metrics)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(logData)
+	if !strings.Contains(log, "sudo systemctl restart actions.runner.advoq-civm.civm-self.service") {
+		t.Fatalf("missing restart command in log:\n%s", log)
+	}
+	if !strings.Contains(log, "gh run rerun 99 --repo advoq/civm --failed") {
+		t.Fatalf("missing rerun command in log:\n%s", log)
+	}
+	marker, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(marker), `"99/abc123"`) {
+		t.Fatalf("marker missing run/head:\n%s", marker)
+	}
+}
+
+func TestIntegration_RunnerWatchdogNetworkDownDoesNotMutate(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil { //nolint:gosec // G301: temp PATH dir needs executable bit.
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "commands.log")
+	writeFakeCommand(t, binDir, "git", `#!/usr/bin/env bash
+printf 'git %s\n' "$*" >> "$CIVM_FAKE_LOG"
+exit 42
+`)
+	for _, name := range []string{"gh", "systemctl", "sudo", "ps"} {
+		writeFakeCommand(t, binDir, name, `#!/usr/bin/env bash
+printf '`+name+` %s\n' "$*" >> "$CIVM_FAKE_LOG"
+exit 0
+`)
+	}
+
+	cmd := exec.Command(civmctlBin,
+		"runner", "watchdog",
+		"--execute",
+		"--repos=auto",
+		"--rerun-network-failures",
+		"--marker-path="+filepath.Join(dir, "reruns.json"),
+		"--hooks-dir="+filepath.Join(dir, "hooks"),
+		"--runner-glob="+filepath.Join(dir, "actions-runner-*"),
+		"--json",
+	)
+	cmd.Env = append(os.Environ(),
+		"HOME="+dir,
+		"PATH="+binDir+":/usr/bin:/bin",
+		"CIVM_FAKE_LOG="+logPath,
+	)
+	out, err := cmd.CombinedOutput()
+	if got := integrationExitCode(err); got != 1 {
+		t.Fatalf("exit = %d, want 1 err=%v\n%s", got, err, out)
+	}
+	var report struct {
+		Events []integrationEvent `json:"events"`
+	}
+	if err := json.Unmarshal(out, &report); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if !hasIntegrationEvent(report.Events, "network-down") {
+		t.Fatalf("events = %+v, want network-down", report.Events)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(logData)
+	for _, forbidden := range []string{"sudo ", "gh ", "systemctl ", "ps "} {
+		if strings.Contains(log, forbidden) {
+			t.Fatalf("network-down mutated or probed after failure (%q) log:\n%s", forbidden, log)
+		}
+	}
+}
+
+func writeFakeCommand(t *testing.T, dir, name, body string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(body), 0755); err != nil { //nolint:gosec // G306: fake command must be executable.
+		t.Fatal(err)
+	}
+}
+
+func integrationExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
+}
+
+func hasIntegrationEvent(events []integrationEvent, want string) bool {
+	for _, event := range events {
+		if event.Event == want {
+			return true
+		}
+	}
+	return false
 }

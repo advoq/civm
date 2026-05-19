@@ -38,6 +38,8 @@ func TestCheck_TriggersAboveThreshold(t *testing.T) {
 	o.StatfsFn = func(string) (uint64, uint64, error) {
 		return 100 * (1 << 30), 5 * (1 << 30), nil // 95% used
 	}
+	o.TmpDir = t.TempDir()
+	o.WorkDir = t.TempDir()
 	o.ThresholdPct = 80
 	o.Execute = false // dry-run cleanup
 	o.RunFn = func(context.Context, string, ...string) ([]byte, error) {
@@ -132,6 +134,8 @@ func TestRender_Triggered(t *testing.T) {
 	o.StatfsFn = func(string) (uint64, uint64, error) {
 		return 100 * (1 << 30), 5 * (1 << 30), nil
 	}
+	o.TmpDir = t.TempDir()
+	o.WorkDir = t.TempDir()
 	o.RunFn = func(context.Context, string, ...string) ([]byte, error) {
 		return nil, nil
 	}

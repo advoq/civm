@@ -39,7 +39,7 @@ go build -o /usr/local/bin/civmctl ./cmd/civmctl
 sudo civmctl bootstrap --execute
 sudo cp deploy/systemd/civmctl-*.service deploy/systemd/civmctl-*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-reverse-watchdog.timer
+sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer
 civmctl parity
 civmctl health
 ```
@@ -66,6 +66,7 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl runner list` | lista runners systemd na VM (parsed; suporta `--json`) |
 | `civmctl runner restart` | systemctl restart por --short ou --unit; verifica is-active após delay |
 | `civmctl runner upgrade` | upgrade in-place de versão (preserva .runner/.credentials/_work) |
+| `civmctl runner watchdog [--execute] [--repos=auto\|owner/repo,...] [--rerun-network-failures] [--max-run-age=6h]` | repara hooks, reinicia runners offline/failed em VM idle; `auto` lê `.runner` quando possível; rerun automático é opt-in e só considera runs recentes |
 | `civmctl reverse-watchdog` | alerta se disk-watchdog timer parou de disparar (>2h default) |
 | `civmctl bootstrap-everything` | wrapper: cp systemd units + daemon-reload + bootstrap |
 | `civmctl disk-watchdog` | dispara cleanup agressivo se disk >threshold (default 80%); fail-closed se a VM não estiver ociosa |
@@ -105,7 +106,7 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 
 | Arquivo | Função |
 |---|---|
-| `runbooks/MULTI-PROJECT-RUNNER.md` | provisionar VM + N runners + tools (parity ubuntu-latest) + cron de cleanup (128GB SSD) |
+| `runbooks/MULTI-PROJECT-RUNNER.md` | provisionar VM + N runners + tools (parity ubuntu-latest) + timers systemd de cleanup/watchdog (128GB SSD) |
 | `runbooks/LOCAL-CI-DISCIPLINE.md` | filosofia "local CI é gate de verdade, remoto é mirror" |
 
 ### Para **peer repos** — **copiar**
@@ -131,10 +132,11 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 ## Como o civm runner funciona
 
 1. **Setup uma vez** seguindo `runbooks/MULTI-PROJECT-RUNNER.md`:
-   - Provisionar VM Linux (Ubuntu 22.04+, 4+ cores, 128GB SSD)
+   - Provisionar VM Linux (Ubuntu 24.04 LTS, 4+ cores, 128GB SSD)
    - Instalar toolchains (Go, Node, Docker, gh CLI, etc) — parity ubuntu-latest
    - Registrar N runners GitHub com label `civm`
-   - Configurar cron de cleanup diário (disk hygiene)
+   - Configurar timers systemd de cleanup, disk-watchdog, runner-watchdog
+     e reverse-watchdog
 
 2. **Cada peer repo** referencia `runs-on: [self-hosted, civm]` em
    seu próprio `.github/workflows/ci.yml`.
@@ -241,6 +243,15 @@ aceitável até o primeiro disparo real do `civmctl-cleanup.timer`
 (janela diária 04:00 UTC). Se persistir após a próxima janela diária
 esperada, vira ação operacional: verificar timer, journal e execução do
 cleanup na VM.
+
+`civmctl-runner-watchdog.timer` roda a cada ~2min após o boot. A unit
+usa `civmctl runner watchdog --execute --repos=auto --json`: se GitHub
+estiver acessível e a VM estiver idle, ela repara hooks e reinicia service
+offline/failed. Rerun automático não roda no timer padrão; é opt-in via
+execução manual ou drop-in com `--rerun-network-failures --max-run-age=6h`.
+O guard anti-loop fica em `/var/lib/civm/runner-watchdog-reruns.json` e o
+relatório inclui `metrics.runs_considered`, `metrics.reruns_triggered` e
+`metrics.reruns_skipped`.
 
 ## Histórico
 

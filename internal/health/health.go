@@ -116,6 +116,7 @@ func (c *Collector) Collect(ctx context.Context) Report {
 	r.Checks = append(r.Checks, c.checkRunners(ctx))
 	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_CLEANUP", "civmctl-cleanup.timer", StatusCritical))
 	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_DISK", "civmctl-disk-watchdog.timer", StatusCritical))
+	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_RUNNER", "civmctl-runner-watchdog.timer", StatusWarn))
 	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_REVERSE", "civmctl-reverse-watchdog.timer", StatusWarn))
 	r.Checks = append(r.Checks, c.checkLastCleanup(ctx))
 	return r

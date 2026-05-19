@@ -8,7 +8,8 @@
 
 - `gh auth status` autenticado com escopo `repo` na conta dona do advoq
 - SSH funcional pra VM `gha-ubuntu-2404` (Tailscale ou rede local)
-- `civmctl` >= versão com `runner add --auto` (sessão 2026-05-10+)
+- `civmctl` >= versão com `runner add` e checksum pinado do
+  actions/runner (sessão 2026-05-10+)
 
 ## Passo 1 — Registrar runner na VM (1 comando)
 

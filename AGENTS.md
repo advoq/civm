@@ -59,7 +59,7 @@ go test -race -count=1 ./...
 # Provisionar VM (admin)
 sudo civmctl bootstrap --target=ubuntu-latest
 
-# Cleanup manual (cron faz automatico diariamente)
+# Cleanup manual (systemd timer faz automaticamente diariamente)
 civmctl cleanup --dry-run
 civmctl cleanup --execute
 
@@ -81,6 +81,8 @@ civmctl billing-status --repo=owner/repo
 # Status read-only de adoção/saúde dos peers
 civmctl peer-status --repo=owner/repo --json
 civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml
+civmctl runner watchdog --execute --repos=auto
+civmctl runner watchdog --execute --repos=owner/repo --rerun-network-failures --max-run-age=6h
 
 # Releases (automatizado via release-please)
 gh pr list --repo advoq/civm --label "autorelease: pending"
@@ -171,6 +173,13 @@ commit, push, rollback ou alteração automática em peer repo.
   encontrar `Runner.Worker`, `_work` ou build Docker ativo. `runner remove`
   também aborta antes de `config.sh remove` e `rm -rf` se `svc.sh stop` ou
   `svc.sh uninstall` falhar.
+- `civmctl runner watchdog --execute` segue o mesmo fail-closed antes de
+  mutar. O timer padrão repara hooks/runner sem rerun automático. Com
+  `--rerun-network-failures --max-run-age=6h`, execução manual ou override
+  opt-in só reroda uma vez runs recentes de PR aberto classificados como
+  falha transiente de rede/checkout. Em `--repos=auto`, o watchdog tenta ler
+  `.runner` antes do fallback pelo unit name; marcador local:
+  `/var/lib/civm/runner-watchdog-reruns.json`.
 - Não usar `civmctl runner add` sem token GitHub válido (peer repo precisa
   registrar seu próprio runner).
 

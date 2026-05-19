@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/advoq/civm/internal/runner"
 	"github.com/advoq/civm/internal/specs"
 )
 
@@ -58,7 +59,7 @@ func TestBootstrapEverythingHelpers(t *testing.T) {
 	if got := joinArgs([]string{"cp", "a", "b"}); got != "cp a b" {
 		t.Fatalf("joinArgs = %q", got)
 	}
-	steps := buildBootstrapEverythingSteps("/opt/civm/deploy/systemd", true, true, false)
+	steps := buildBootstrapEverythingSteps("/opt/civm/deploy/systemd", true, true, true, false)
 	if len(steps) == 0 || !bytes.Contains([]byte(steps[0].WouldDo), []byte("/usr/local/bin/civmctl")) {
 		t.Fatalf("bootstrap-everything deve validar /usr/local/bin/civmctl, step=%+v", steps)
 	}
@@ -94,6 +95,37 @@ func TestConfigureDoctorReposModes(t *testing.T) {
 			t.Fatalf("configureDoctorRepos(%q) = infer=%v repos=%v, want infer=%v repos=%v",
 				c.raw, opts.InferRepos, opts.Repos, c.wantInfer, c.wantRepos)
 		}
+	}
+}
+
+func TestConfigureRunnerWatchdogReposModes(t *testing.T) {
+	t.Parallel()
+	opts := runner.DefaultWatchdogOptions()
+	if err := configureRunnerWatchdogRepos("auto", &opts); err != nil {
+		t.Fatalf("auto err = %v", err)
+	}
+	if !opts.InferRepos || len(opts.Repos) != 0 {
+		t.Fatalf("auto = infer=%v repos=%v, want infer true nil", opts.InferRepos, opts.Repos)
+	}
+
+	opts = runner.DefaultWatchdogOptions()
+	if err := configureRunnerWatchdogRepos("advoq/civm, emersonbusson/vitae", &opts); err != nil {
+		t.Fatalf("list err = %v", err)
+	}
+	if opts.InferRepos || strings.Join(opts.Repos, ",") != "advoq/civm,emersonbusson/vitae" {
+		t.Fatalf("list = infer=%v repos=%v", opts.InferRepos, opts.Repos)
+	}
+
+	opts = runner.DefaultWatchdogOptions()
+	if err := configureRunnerWatchdogRepos("", &opts); err == nil {
+		t.Fatalf("empty --repos should error")
+	}
+}
+
+func TestRunRunnerWatchdogRejectsNonPositiveMaxRunAge(t *testing.T) {
+	t.Parallel()
+	if code := runRunnerWatchdog([]string{"--max-run-age=0s"}); code != exitUsage {
+		t.Fatalf("code = %d, want %d", code, exitUsage)
 	}
 }
 

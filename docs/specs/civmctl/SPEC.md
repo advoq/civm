@@ -16,9 +16,19 @@ Este SPEC nasceu no bootstrap do `civmctl`; o hardening posterior adiciona:
 - `internal/runner` passa a usar o detector antes de
   `restart/remove/upgrade --execute`.
 - `internal/health` valida `civmctl-cleanup.timer`,
-  `civmctl-disk-watchdog.timer` e `civmctl-reverse-watchdog.timer`.
-- `bootstrap`/`bootstrap-everything` expõem `--reverse-watchdog=true` e
-  habilitam o timer quando os unit files estão instalados.
+  `civmctl-disk-watchdog.timer`, `civmctl-runner-watchdog.timer` e
+  `civmctl-reverse-watchdog.timer`.
+- `bootstrap`/`bootstrap-everything` expõem `--runner-watchdog=true` e
+  `--reverse-watchdog=true`, habilitando os timers quando os unit files
+  estão instalados.
+- `civmctl runner watchdog` repara hooks, reinicia runner offline/failed em
+  VM idle e, com `--rerun-network-failures --max-run-age=6h`, reroda uma
+  vez falhas transientes de rede/checkout em PR aberto recente. O timer
+  systemd padrão não passa `--rerun-network-failures`. Guard anti-loop:
+  `/var/lib/civm/runner-watchdog-reruns.json`.
+- `runner watchdog --repos=auto` resolve repo pelo `.runner` do diretório
+  real do service quando possível, preservando owners/repos com hífen, e usa
+  o parser legado do unit name como fallback best-effort.
 - Runners legacy offline são apenas reportados; remoção é manual via
   `gh api -X DELETE`.
 
@@ -34,7 +44,7 @@ Este SPEC nasceu no bootstrap do `civmctl`; o hardening posterior adiciona:
 | `/home/emdev/codespace/civm/cmd/civmctl/health.go` | ≤80 | comando `health` |
 | `/home/emdev/codespace/civm/cmd/civmctl/cleanup.go` | ≤100 | comando `cleanup` |
 | `/home/emdev/codespace/civm/cmd/civmctl/bootstrap.go` | ≤120 | comando `bootstrap` |
-| `/home/emdev/codespace/civm/cmd/civmctl/runner.go` | ≤80 | comando `runner` |
+| `/home/emdev/codespace/civm/cmd/civmctl/runner.go` | ~350 | comando `runner` (`add/list/remove/restart/upgrade/watchdog`) |
 | `/home/emdev/codespace/civm/internal/specs/specs.go` | ≤120 | versões alvo |
 | `/home/emdev/codespace/civm/internal/specs/specs_test.go` | ≤60 | testes |
 | `/home/emdev/codespace/civm/internal/health/health.go` | ≤180 | lógica health |
@@ -43,6 +53,7 @@ Este SPEC nasceu no bootstrap do `civmctl`; o hardening posterior adiciona:
 | `/home/emdev/codespace/civm/internal/cleanup/cleanup_test.go` | ≤180 | testes |
 | `/home/emdev/codespace/civm/internal/bootstrap/bootstrap.go` | ≤220 | lógica bootstrap |
 | `/home/emdev/codespace/civm/internal/bootstrap/bootstrap_test.go` | ≤180 | testes |
+| `/home/emdev/codespace/civm/internal/runner/watchdog.go` | ~1000 | runner watchdog, rerun opt-in, inferência `.runner` e render JSON/texto |
 
 ### systemd
 
@@ -50,6 +61,12 @@ Este SPEC nasceu no bootstrap do `civmctl`; o hardening posterior adiciona:
 |---|---|
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-cleanup.service` | unit que roda `civmctl cleanup --execute` |
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-cleanup.timer` | timer diário 04:00 UTC |
+| `/home/emdev/codespace/civm/deploy/systemd/civmctl-disk-watchdog.service` | unit que roda `civmctl disk-watchdog --execute` |
+| `/home/emdev/codespace/civm/deploy/systemd/civmctl-disk-watchdog.timer` | timer hourly com cleanup agressivo se disk >80% |
+| `/home/emdev/codespace/civm/deploy/systemd/civmctl-runner-watchdog.service` | unit que roda `civmctl runner watchdog --execute --repos=auto --json` |
+| `/home/emdev/codespace/civm/deploy/systemd/civmctl-runner-watchdog.timer` | timer OnBootSec=2min, OnUnitActiveSec=2min |
+| `/home/emdev/codespace/civm/deploy/systemd/civmctl-reverse-watchdog.service` | unit que alerta se disk-watchdog ficou stale |
+| `/home/emdev/codespace/civm/deploy/systemd/civmctl-reverse-watchdog.timer` | timer 4h alarm-of-alarm |
 | `/home/emdev/codespace/civm/deploy/systemd/README.md` | instalação manual: `cp` + `systemctl enable --now` |
 
 ### Documentação
@@ -118,6 +135,7 @@ type Report struct {
     Disk    DiskInfo
     Memory  MemInfo
     Runners []RunnerStatus
+    Timers  []TimerStatus  // cleanup, disk, runner, reverse
     LastCleanup *time.Time
     Exit    int  // 0/1/2
 }
@@ -126,7 +144,8 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
     // 1. df -BG / (ou path passado)
     // 2. /proc/meminfo MemAvailable
     // 3. systemctl list-units --type=service "actions.runner.*"
-    // 4. journalctl -u civmctl-cleanup --since "24h ago" --reverse -n1
+    // 4. systemctl is-enabled/is-active civmctl-* timers
+    // 5. journalctl -u civmctl-cleanup --since "24h ago" --reverse -n1
 }
 
 func (r Report) Render(w io.Writer) { ... }  // tabela ASCII
@@ -207,12 +226,13 @@ Steps:
 
 1. Verify OS (`/etc/os-release` com `ID=ubuntu` e `VERSION_ID=24.04`)
 2. Install base packages (apt: build-essential curl wget jq yq git)
-3. Install Go (download tarball para /usr/local/go-X.Y.Z; symlinks)
-4. Install Node (NodeSource ou nvm-style; preferred 20.20.2 system)
+3. Install Go (download tarball para /usr/local/go-X.Y.Z; symlinks; preferred 1.26.3)
+4. Install Node (NodeSource ou nvm-style; preferred 24.15.0 system)
 5. Install Python (apt python3.12 + pyenv shims para outras; opcional)
 6. Install Docker CE (apt repo oficial Docker)
 7. Install gh CLI (apt repo oficial cli.github.com)
-8. Install systemd timer (cp deploy/systemd/* /etc/systemd/system/)
+8. Install systemd timers (cleanup, disk-watchdog, runner-watchdog,
+   reverse-watchdog)
 
 ### systemd files
 
@@ -290,7 +310,7 @@ no log:
 - ✅ Onde rodar tests sem ambiente Ubuntu 24.04? **Mock filesystem +
   mock exec.Command. Tests não dependem de OS específico.**
 - ✅ Como instalar Go multi-version? **Bootstrap instala 1 versão preferred
-  (1.25.9) via tarball; jobs que precisam outra usam `actions/setup-go@v5`
+  (1.26.3) via tarball; jobs que precisam outra usam `actions/setup-go@v5`
   no momento (cache em `/opt/hostedtoolcache/go`).**
 - ✅ Como manter sync com upstream actions/runner-images? **Manual via
   `civmctl version-pins` mostra versões compiladas no binário; humano

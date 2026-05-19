@@ -2,7 +2,9 @@
 
 **PRD:** `docs/specs/civmctl/PRD.md`
 **SPEC:** `docs/specs/civmctl/SPEC.md`
-**Status:** implementado, testado localmente, NÃO testado end-to-end em VM real.
+**Status:** implementado; baseline 2026-05-10, com hardening incremental
+documentado neste arquivo. Rollout em VM real deve ser registrado em
+`MEMORY.md` quando ocorrer.
 
 ## O que foi feito (commits a seguir)
 
@@ -11,7 +13,7 @@
 | `chore(civm)` | AGENTS/CODEX/MEMORY (gap) | `AGENTS.md`, `CODEX.md`, `MEMORY.md` |
 | `docs(civm)` | SSDV3 PRD + SPEC + IMPL | `docs/specs/civmctl/{PRD,SPEC,IMPL}.md` |
 | `feat(civm)` | civmctl Go binary | `go.mod`, `cmd/civmctl/*.go`, `internal/{specs,health,cleanup,bootstrap}/*.go` (+ tests) |
-| `feat(civm)` | systemd timer | `deploy/systemd/civmctl-cleanup.{service,timer,README.md}` |
+| `feat(civm)` | systemd timers/watchdogs | `deploy/systemd/civmctl-*.{service,timer}`, `deploy/systemd/README.md` |
 | `docs(civm)` | zero-effort docs | `README.md`, `runbooks/MULTI-PROJECT-RUNNER.md` |
 | `ci(civm)` | build + test civmctl | `.github/workflows/ci.yml` |
 
@@ -31,6 +33,18 @@
 | `civmctl bootstrap --dry-run` testado | ⏭ | requer Linux real (verify_uid falha em sandbox) |
 | Cobertura `internal/**` ≥80% | ✅ | specs 100%, health 88.4%, cleanup 84.5%, bootstrap 84.8% |
 | Binário <10 MB stripped | ✅ | 2.29 MB |
+
+## Emenda 2026-05-19 — runner watchdog hardening
+
+| Item | Estado corrente |
+|---|---|
+| `runner watchdog` | repara hooks, reinicia runners offline/failed e só reroda falhas de rede/checkout com opt-in |
+| Timer padrão | `civmctl-runner-watchdog.timer` roda sem `--rerun-network-failures` |
+| Rerun remoto | limitado por `--max-run-age=6h`, PR aberto, runner online, assinatura de rede/checkout e marcador local |
+| Guard anti-loop | `/var/lib/civm/runner-watchdog-reruns.json` por `run_id/head_sha` |
+| Observabilidade | relatório JSON/texto com `runs_considered`, `reruns_triggered`, `reruns_skipped` |
+| Inferência `--repos=auto` | lê `.runner` do WorkingDirectory real quando possível; fallback pelo unit name |
+| Health/bootstrap | `TIMER_RUNNER` entra como warning e `bootstrap`/`bootstrap-everything` habilitam `--runner-watchdog=true` por padrão |
 
 ## Cobertura por package
 
@@ -53,7 +67,7 @@
   anti-jobs por mtime <2h como segunda camada; autodiscover de
   `/home/*/actions-runner-*/_work` quando o default legado é usado
 - ✅ **RF-4** `health`: DISK, MEM, RUNNERS, TIMER_CLEANUP, TIMER_DISK,
-  TIMER_REVERSE, LAST; exit 0/1/2
+  TIMER_RUNNER, TIMER_REVERSE, LAST; exit 0/1/2
 - ✅ **RF-5** `runner add`: wrapper `./config.sh` do actions/runner;
   `runner list` via systemctl
 - ✅ **RF-6** `doctor`: host + timers + systemd runners + GitHub runners,
@@ -61,7 +75,11 @@
 - ✅ **RF-7** `idle-check`: read-only; exit 0 idle, 1 busy, 2 unknown
 - ✅ **RF-8** `runner restart/remove/upgrade --execute`: bloqueia
   fail-closed antes de mutar se host estiver busy/unknown
-- ✅ **RF-9** Help auto-gerado para todos subcomandos
+- ✅ **RF-9** `runner watchdog`: repara hooks, reinicia runner offline/failed
+  e, quando opt-in, reroda 1x falha transiente de rede/checkout em PR aberto
+  criado nas últimas 6h, com marcador local por `run_id/head_sha` e métricas
+  `runs_considered`/`reruns_triggered`/`reruns_skipped`
+- ✅ **RF-10** Help auto-gerado para todos subcomandos
 
 ## RNFs cumpridos
 
@@ -72,8 +90,8 @@
 - ✅ **RNF-5** Mutações destrutivas dry-run por default
 - ✅ **RNF-6** Logs PT-BR para usuário; identifiers/comments inglês
 - ✅ **RNF-7** Exit codes: 0 OK, 1 warning, 2 critical, 64 erro de uso
-- ✅ **RNF-8** Cleanup/disk-watchdog/runner mutations não mutam com
-  Runner.Worker/_work/build ativo
+- ✅ **RNF-8** Cleanup/disk-watchdog/runner mutations e rerun remoto do
+  watchdog não mutam com Runner.Worker/_work/build ativo
 
 ## Disciplinas Kahneman aplicadas
 

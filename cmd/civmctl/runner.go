@@ -7,15 +7,17 @@ import (
 	"io"
 	"os"
 	"os/user"
+	"strings"
 	"time"
 
 	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/hook"
 	"github.com/advoq/civm/internal/runner"
 )
 
 func runRunner(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "uso: civmctl runner <add|list|remove|restart|upgrade> [flags]")
+		fmt.Fprintln(os.Stderr, "uso: civmctl runner <add|list|remove|restart|upgrade|watchdog> [flags]")
 		return exitUsage
 	}
 	sub := args[0]
@@ -31,10 +33,63 @@ func runRunner(args []string) int {
 		return runRunnerRestart(rest)
 	case "upgrade":
 		return runRunnerUpgrade(rest)
+	case "watchdog":
+		return runRunnerWatchdog(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "subcomando desconhecido: %s\n", sub)
 		return exitUsage
 	}
+}
+
+func runRunnerWatchdog(args []string) int {
+	fs := flag.NewFlagSet("runner watchdog", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	execute := fs.Bool("execute", false, "aplicar reparos e reruns seguros (default: dry-run)")
+	reposRaw := fs.String("repos", "auto", "repos permitidos: auto ou owner/repo separados por virgula")
+	rerunNetworkFailures := fs.Bool("rerun-network-failures", false, "rerodar uma vez falhas transientes de rede/checkout")
+	maxRunAge := fs.Duration("max-run-age", runner.DefaultWatchdogMaxRunAge, "idade maxima de run elegivel para rerun")
+	networkTimeout := fs.Duration("network-timeout", 10*time.Second, "timeout do probe de conectividade GitHub")
+	restartDelay := fs.Duration("restart-delay", 10*time.Second, "delay entre restart systemd e is-active")
+	markerPath := fs.String("marker-path", runner.DefaultWatchdogMarkerPath, "arquivo local de marker anti-loop")
+	hooksDir := fs.String("hooks-dir", hook.DefaultHooksDir, "diretorio dos hooks gerenciados")
+	runnerGlob := fs.String("runner-glob", hook.DefaultRunnerGlob, "glob dos diretorios actions-runner*")
+	civmctlPath := fs.String("civmctl-path", hook.DefaultCivmctlBin, "binario usado pelos scripts de hook")
+	jsonOut := fs.Bool("json", false, "saida JSON estruturada")
+	timeout := fs.Duration("timeout", 90*time.Second, "timeout total do watchdog")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, "erro nos args de runner watchdog:", err)
+		return exitUsage
+	}
+	if *maxRunAge <= 0 {
+		fmt.Fprintln(os.Stderr, "erro nos args de runner watchdog: --max-run-age deve ser >0")
+		return exitUsage
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	opts := runner.DefaultWatchdogOptions()
+	opts.Execute = *execute
+	opts.RerunNetworkFailures = *rerunNetworkFailures
+	opts.MaxRunAge = *maxRunAge
+	opts.NetworkTimeout = *networkTimeout
+	opts.RestartDelay = *restartDelay
+	opts.MarkerPath = *markerPath
+	opts.HooksDir = *hooksDir
+	opts.RunnerGlob = *runnerGlob
+	opts.CivmctlPath = *civmctlPath
+	if err := configureRunnerWatchdogRepos(*reposRaw, &opts); err != nil {
+		fmt.Fprintln(os.Stderr, "erro nos args de runner watchdog:", err)
+		return exitUsage
+	}
+	report := runner.Watchdog(ctx, opts)
+	if *jsonOut {
+		if err := report.RenderJSON(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "erro ao gerar JSON:", err)
+			return 2
+		}
+	} else {
+		report.Render(os.Stdout)
+	}
+	return report.Exit
 }
 
 func runRunnerUpgrade(args []string) int {
@@ -246,6 +301,24 @@ func runRunnerRemove(args []string) int {
 		}
 	}
 	return 0
+}
+
+func configureRunnerWatchdogRepos(raw string, opts *runner.WatchdogOptions) error {
+	mode := strings.TrimSpace(raw)
+	switch mode {
+	case "auto":
+		opts.InferRepos = true
+		opts.Repos = nil
+	case "":
+		return fmt.Errorf("--repos deve ser auto ou owner/repo")
+	default:
+		opts.InferRepos = false
+		opts.Repos = splitCSV(raw)
+		if len(opts.Repos) == 0 {
+			return fmt.Errorf("--repos deve informar pelo menos um repo")
+		}
+	}
+	return nil
 }
 
 func userHomeOrDefault() string {

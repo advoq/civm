@@ -10,7 +10,7 @@ nao adjetivo), #5 (lib nova exige entrada).
 Construir `civmctl`, Go CLI de **zero-effort** que provisiona e mantém a VM
 self-hosted que serve como GitHub Actions runner com label `civm`.
 Operações idempotentes, paridade com `ubuntu-latest` (Ubuntu 24.04 LTS),
-cleanup automatizado via systemd timer.
+cleanup e watchdogs automatizados via systemd timers.
 
 ## 2. Contexto técnico
 
@@ -18,8 +18,8 @@ cleanup automatizado via systemd timer.
 |---|---|---|
 | OS alvo VM | Ubuntu 24.04.4 LTS | **Confirmado em docs**: actions/runner-images Ubuntu2404-Readme.md |
 | Kernel alvo | 6.17.0-1010-azure (best-effort; kernel sai do provedor) | **Confirmado em docs** |
-| Go versions | 1.22.12, 1.23.12, 1.24.13, 1.25.9 | **Confirmado em docs** |
-| Node versions | 20.20.2, 22.22.2, 24.14.1 | **Confirmado em docs** |
+| Go versions | 1.26.3, 1.25.9, 1.24.13, 1.23.12, 1.22.12 | **Confirmado em codebase** (`internal/specs`) |
+| Node versions | 24.15.0, 24.14.1, 22.22.2, 20.20.2 | **Confirmado em codebase** (`internal/specs`) |
 | Python versions | 3.10.20, 3.11.15, 3.12.13, 3.13.13, 3.14.4 | **Confirmado em docs** |
 | Docker | 28.0.4 (Compose v2 = 2.38.2) | **Confirmado em docs** |
 | GitHub CLI | 2.89.0 | **Confirmado em docs** |
@@ -44,7 +44,7 @@ cleanup automatizado via systemd timer.
 provisionamento, manutenção e diagnóstico (`version-pins`, `bootstrap`,
 `cleanup`, `health`, `doctor`, `idle-check`, `runner`, watchdogs e CI
 helpers). Idempotente. Dry-run por padrão em mutações destrutivas. Timers
-systemd para cleanup, disk-watchdog e reverse-watchdog.
+systemd para cleanup, disk-watchdog, runner-watchdog e reverse-watchdog.
 
 Alternativas consideradas e descartadas:
 
@@ -64,9 +64,9 @@ Alternativas consideradas e descartadas:
   apt cache. Default `--dry-run`. Reporta bytes recuperados. Em `--execute`,
   aborta se detectar job/build ativo ou se não conseguir provar host ocioso.
 - **RF-4** `civmctl health`: exibe disk free, memória, runners ativos,
-  timers cleanup/disk/reverse e última execução de cleanup. Exit 0 OK, 1
+  timers cleanup/disk/runner/reverse e última execução de cleanup. Exit 0 OK, 1
   warning, 2 critical. Cleanup/disk-watchdog ausente é crítico;
-  reverse-watchdog ausente é warning.
+  runner-watchdog/reverse-watchdog ausentes são warning.
 - **RF-5** `civmctl runner add --token=X --url=Y --labels=civm`:
   registra novo runner GitHub. Idempotente (skip se já existe).
 - **RF-6** `civmctl doctor [--repos=a/b,c/d] [--workflow=ci.yml] [--json]`:
@@ -78,7 +78,13 @@ Alternativas consideradas e descartadas:
 - **RF-8** `runner restart/remove/upgrade --execute`: bloqueia fail-closed
   se o host estiver ocupado ou desconhecido antes de mutar systemd, arquivos
   ou registro GitHub.
-- **RF-9** Help auto-gerado para todos subcomandos (`civmctl --help`,
+- **RF-9** `runner watchdog [--execute] [--repos=auto|owner/repo,...]
+  [--rerun-network-failures] [--max-run-age=6h]`: testa GitHub, repara
+  hooks e reinicia runner offline/failed em VM idle. Rerun remoto é opt-in,
+  considera só runs recentes de PR aberto e mantém guard anti-loop local por
+  `run_id/head_sha`. `--repos=auto` usa `.runner` quando possível e fallback
+  pelo unit name quando não conseguir resolver o diretório real.
+- **RF-10** Help auto-gerado para todos subcomandos (`civmctl --help`,
   `civmctl <sub> --help`).
 
 ## 5. Requisitos não-funcionais (RNF)
@@ -94,6 +100,8 @@ Alternativas consideradas e descartadas:
 - **RNF-8** Cleanup, disk-watchdog e mutações de runner são fail-closed:
   não deletam, prunam, param runner nem fazem upgrade quando há
   `Runner.Worker`, processo dentro de `_work` ou build Docker ativo.
+  `runner watchdog --execute --rerun-network-failures --max-run-age=6h`
+  também não dispara rerun remoto se o host estiver ocupado ou desconhecido.
 - **RNF-6** Logs em PT-BR para usuário; identifiers/comments em inglês.
 - **RNF-7** Exit codes consistentes: 0 OK, 1 warning, 2 critical, 64+ erro
   de uso (sysexits.h).
@@ -106,14 +114,14 @@ Alternativas consideradas e descartadas:
 admin@vm $ sudo civmctl bootstrap --execute
 [civmctl] Verificando OS... Ubuntu 24.04.4 LTS [OK]
 [civmctl] Instalando packages base via apt-get... [OK]
-[civmctl] Instalando Go 1.25.9... [OK]
+[civmctl] Instalando Go 1.26.3... [OK]
 [civmctl] Instalando Docker 28.0.4 + Compose v2 2.38.2... [OK]
 [civmctl] Instalando GitHub CLI 2.89.0... [OK]
-[civmctl] Configurando systemd-timer civmctl-cleanup.timer... [OK]
+[civmctl] Configurando systemd timers cleanup/disk/runner/reverse... [OK]
 [civmctl] Pronto. Proximo passo: 'civmctl runner add --token=...'
 ```
 
-### Fluxo cleanup (cron diario 04:00 UTC via systemd timer)
+### Fluxo cleanup (systemd timer diário 04:00 UTC)
 
 ```
 [systemd] Trigger civmctl-cleanup.service
@@ -132,6 +140,10 @@ $ civmctl health
 DISK    /    89 GB free / 128 GB                     [OK]
 MEM     8.2 GB free / 32 GB                          [OK]
 RUNNERS civm-1 (online), civm-2 (online)    [OK]
+TIMER_CLEANUP civmctl-cleanup.timer         [OK]
+TIMER_DISK    civmctl-disk-watchdog.timer   [OK]
+TIMER_RUNNER  civmctl-runner-watchdog.timer [OK]
+TIMER_REVERSE civmctl-reverse-watchdog.timer [OK]
 LAST    cleanup 6h ago, recovered 14.8 GB            [OK]
 EXIT    0
 ```
@@ -152,7 +164,7 @@ instalado pelo bootstrap) ou `curl` direto, não via SDK.
 |---|---|---|---|
 | Go stdlib | 1.26 | linguagem | downgrade Go (improvável) |
 | `apt-get` | sistema | provisioning Ubuntu | sem rollback (Ubuntu base) |
-| `systemd` | sistema | timer de cleanup | rollback para cron classico |
+| `systemd` | sistema | timers de cleanup/watchdogs | rollback para desabilitar timers e operar manualmente |
 | `gh` CLI | 2.89.0 | runner registration via GitHub API | rollback para PAT manual |
 
 **Riscos:**
@@ -175,7 +187,7 @@ Fases sequenciais, cada uma comitavel:
 4. `internal/cleanup/` + `cmd/civmctl/cleanup.go`
 5. `internal/bootstrap/` + `cmd/civmctl/bootstrap.go`
 6. `cmd/civmctl/runner.go` (gh CLI wrapper)
-7. `deploy/systemd/civmctl-{cleanup,disk-watchdog,reverse-watchdog}.{service,timer}`
+7. `deploy/systemd/civmctl-{cleanup,disk-watchdog,runner-watchdog,reverse-watchdog}.{service,timer}`
 8. Update `runbooks/MULTI-PROJECT-RUNNER.md` e `README.md`
 9. Update `.github/workflows/ci.yml` para build + test
 10. Update `MEMORY.md` com hashes finais

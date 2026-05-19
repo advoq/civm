@@ -7,7 +7,7 @@
 
 ## O que vai NESTE repo (público, versionado)
 
-- **Host pattern operacional:** ex.: "VM rodando Ubuntu 22.04, IP
+- **Host pattern operacional:** ex.: "VM rodando Ubuntu 24.04 LTS, IP
   privado na rede do dono, acessível via VPN/Tailscale do operador"
 - **User convention:** runner roda como usuário operacional dedicado
   (ex.: `emdev` ou `runner`) sob o próprio `$HOME`.

@@ -26,7 +26,7 @@
 
 ```
 +------------------------------------------------------+
-| VM "civm" (Ubuntu 22.04+, 4+ cores, 16GB+ RAM)  |
+| VM "civm" (Ubuntu 24.04 LTS, 4+ cores, 32GB+ RAM) |
 |                                                      |
 |  systemd services:                                   |
 |   - actions.runner.<owner>-<repo-a>.civm-a.service   |
@@ -103,6 +103,8 @@ per-job e do cleanup operacional, não de runner efêmero/JIT:
 - `actions/checkout@v4` faz fresh git clone (sem state preservado)
 - `civmctl-cleanup.timer` (04:00 UTC) limpa Docker/tmp/_work diariamente,
   mas aborta se detectar job/build ativo
+- `civmctl-runner-watchdog.timer` repara hooks e runner offline/failed sem
+  mutar se houver job/build ativo; o timer padrão não faz rerun automático
 - Multiplos runners da mesma VM tem `--work _work` separado por runner
 
 Resultado: cada job comeca do zero, sem crosstalk.
@@ -170,7 +172,7 @@ sudo civmctl bootstrap --execute
 sudo cp /opt/civm/deploy/systemd/civmctl-*.service /etc/systemd/system/
 sudo cp /opt/civm/deploy/systemd/civmctl-*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-reverse-watchdog.timer
+sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer
 
 # 6. Health check (deve retornar exit 0)
 civmctl parity
@@ -232,9 +234,9 @@ Steps idempotentes do bootstrap (todos check-then-apply):
 | `install_docker` | apt repo Docker CE + plugin compose | `docker --version` reporta 28.0.4 |
 | `install_gh` | apt repo cli.github.com + apt install gh | `gh --version` reporta 2.89.0 |
 | `install_yq` | baixa `yq_linux_amd64` com SHA256 e instala em `/usr/local/bin/yq` | `yq --version` reporta versao alvo |
-| `install_systemd_timers` | enable --now cleanup, disk-watchdog e reverse-watchdog | systemctl is-enabled retorna enabled |
+| `install_systemd_timers` | enable --now cleanup, disk-watchdog, runner-watchdog e reverse-watchdog | systemctl is-enabled retorna enabled |
 
-Cleanup automatico (cron diario 04:00 UTC via systemd timer):
+Cleanup automatico (systemd timer diário 04:00 UTC):
 
 | Action | O que limpa | Threshold |
 |---|---|---|
@@ -257,7 +259,64 @@ Garantias anti-crosstalk:
   toolchains/actions em todo job
 - `flock /run/civmctl-cleanup.lock` impede cleanup diário e disk-watchdog
   de rodarem ao mesmo tempo
+- `flock /run/civmctl-runner-watchdog.lock` impede watchdogs de runner
+  simultâneos
 - mtime <2h continua como segunda camada para arquivos recentes
+
+Runner watchdog automático:
+
+```bash
+systemctl list-timers civmctl-runner-watchdog.timer
+journalctl -u civmctl-runner-watchdog.service --since "2 hours ago"
+civmctl runner watchdog --repos=auto --json
+sudo civmctl runner watchdog --execute --repos=owner/repo --rerun-network-failures --max-run-age=6h
+```
+
+O serviço systemd roda a cada ~2min depois do boot. Ele primeiro testa
+conectividade com GitHub. Se a rede ainda estiver fora, sai `1` com evento
+`network-down` e não muta nada. Quando a rede volta, ele exige host idle,
+reconcilia hooks e reinicia units `actions.runner.*` offline/failed. O timer
+padrão usa `civmctl runner watchdog --execute --repos=auto --json`; não passa
+`--rerun-network-failures`. Em `--repos=auto`, o watchdog tenta ler o
+`.runner` do diretório real do service para preservar owners/repos com hífen;
+se isso falhar, usa o parser legado do unit name.
+
+Rerun automático é opt-in. Quando alguém roda manualmente ou instala um
+drop-in com `--rerun-network-failures --max-run-age=6h`, o watchdog confirma
+runner GitHub `online` e usa `gh run rerun <run_id> --failed`. O rerun fica
+limitado a: repo permitido por `--repos`, run criado nas últimas 6h, PR
+aberto, conclusão `failure`/`cancelled`/`timed_out`, assinatura de
+rede/checkout no log (`RPC failed`, `early EOF`, `invalid index-pack`,
+`curl 56`, `curl 92`, `GnuTLS recv error` ou `Connection timed out`) e
+nenhum marcador local para o mesmo `run_id/head_sha`. O marcador fica em
+`/var/lib/civm/runner-watchdog-reruns.json`. O relatório JSON/texto expõe
+`runs_considered`, `reruns_triggered` e `reruns_skipped`.
+
+Primeiro rollout do runner-watchdog:
+
+1. Publicar o binário novo na VM.
+2. Rodar `civmctl runner watchdog --repos=auto --json` e revisar eventos.
+3. Habilitar `civmctl-runner-watchdog.timer` sem rerun automático.
+4. Revisar `journalctl -u civmctl-runner-watchdog.service` por pelo menos
+   uma execução.
+5. Só então testar manualmente:
+   `sudo civmctl runner watchdog --execute --repos=owner/repo --rerun-network-failures --max-run-age=6h`.
+
+Override opt-in para timer com rerun depois da validação:
+
+```ini
+# /etc/systemd/system/civmctl-runner-watchdog.service.d/rerun.conf
+[Service]
+ExecStart=
+ExecStart=/usr/bin/flock -n /run/civmctl-runner-watchdog.lock /usr/local/bin/civmctl runner watchdog --execute --repos=auto --rerun-network-failures --max-run-age=6h --json
+```
+
+Depois do drop-in:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart civmctl-runner-watchdog.timer
+```
 
 ### Quando usar setup manual em vez de civmctl
 
@@ -465,7 +524,7 @@ familia operacional equivalente para ferramentas providas pelo Ubuntu base
 
 Sem automacao, disco enche em ~30 dias com 3 repos ativos. Setup:
 
-### Cron de limpeza diaria
+### Limpeza diaria legada via cron
 
 Preferir systemd + `civmctl cleanup --execute`. O script manual abaixo fica
 como referência legada para VM sem civmctl e **não deve ser usado em VM
@@ -474,8 +533,8 @@ ativa com runners online**, porque não tem o guard completo de
 
 ```bash
 #!/usr/bin/env bash
-# /opt/civm/cleanup.sh — cron diario para evitar disco encher
-# em civm compartilhado (128GB SSD).
+# /opt/civm/cleanup.sh — legado, substituido por civmctl-cleanup.timer.
+# Mantido aqui apenas para port manual sem civmctl.
 #
 # Crontab: 0 3 * * * /opt/civm/cleanup.sh >> /var/log/civm-cleanup.log 2>&1
 
@@ -521,7 +580,7 @@ df -h / | tail -1
 echo
 ```
 
-Tornar executavel + agendar:
+Se estiver portando uma VM sem `civmctl`, tornar executavel + agendar:
 
 ```bash
 sudo mkdir -p /opt/civm
@@ -532,9 +591,9 @@ sudo chmod +x /opt/civm/cleanup.sh
 sudo crontab -l 2>/dev/null | { cat; echo "0 3 * * * /opt/civm/cleanup.sh >> /var/log/civm-cleanup.log 2>&1"; } | sudo crontab -
 ```
 
-### Watchdog de espaco em disco
+### Watchdog legado de espaco em disco
 
-Cron extra que dispara cleanup agressivo se disco passar de 80%:
+Cron legado que dispara cleanup agressivo se disco passar de 80%:
 
 ```bash
 #!/usr/bin/env bash
@@ -558,7 +617,7 @@ if [ "$USAGE" -gt "$THRESHOLD" ]; then
 fi
 ```
 
-### Monitoramento
+### Monitoramento do cron legado
 
 Logs em `/var/log/civm-cleanup.log`. Verificar semanalmente:
 
@@ -590,7 +649,7 @@ Se em 30 dias o disco passar de 90% mais de 3 vezes, escalar:
 find /home/*/actions-runner-*/_work/_temp -mtime +7 -delete
 ```
 
-(Adicionar a cron diário se quiser.)
+(Legado. Em VM civm atual, usar `civmctl-cleanup.timer` em vez de cron.)
 
 ## Como vitae e advoq adotam o padrão router <!-- invariant-waive:#11 -- secao operacional descreve adocao por repos peer -->
 

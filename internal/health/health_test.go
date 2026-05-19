@@ -36,8 +36,8 @@ func TestCollect_AllOK(t *testing.T) {
 	if r.Exit() != 0 {
 		t.Errorf("Exit = %d, want 0", r.Exit())
 	}
-	if len(r.Checks) != 7 {
-		t.Errorf("len(Checks) = %d, want 7", len(r.Checks))
+	if len(r.Checks) != 8 {
+		t.Errorf("len(Checks) = %d, want 8", len(r.Checks))
 	}
 }
 
@@ -162,6 +162,13 @@ func TestCollect_TimersMissingAndStale(t *testing.T) {
 			wantExit:  int(StatusWarn),
 			wantCheck: "TIMER_REVERSE",
 		},
+		{
+			name:      "runner watchdog missing is warning",
+			timer:     "civmctl-runner-watchdog.timer",
+			err:       errors.New("not found"),
+			wantExit:  int(StatusWarn),
+			wantCheck: "TIMER_RUNNER",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -219,8 +226,8 @@ func TestRenderJSON_StructValid(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
 		t.Fatalf("output nao e JSON valido: %v", err)
 	}
-	if len(parsed.Checks) != 7 {
-		t.Errorf("Checks len = %d, want 7", len(parsed.Checks))
+	if len(parsed.Checks) != 8 {
+		t.Errorf("Checks len = %d, want 8", len(parsed.Checks))
 	}
 	if parsed.Exit != 0 {
 		t.Errorf("Exit = %d, want 0", parsed.Exit)
