@@ -9,6 +9,7 @@ ConditionPathExists=/usr/local/bin/civmctl
 Type=oneshot
 ExecStart=/usr/bin/flock -n /run/civmctl-runner-watchdog.lock /usr/local/bin/civmctl runner watchdog --execute --repos=auto --json
 User=root
+EnvironmentFile=-/etc/civm/runner-watchdog.env
 Nice=10
 IOSchedulingClass=idle
 StandardOutput=journal

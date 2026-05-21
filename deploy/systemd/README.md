@@ -28,6 +28,20 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer civmctl-metrics.timer
 ```
 
+`civmctl-runner-watchdog.service` roda como root porque pode reparar hooks
+e reiniciar services. Para chamadas `gh api`, ele carrega opcionalmente
+`/etc/civm/runner-watchdog.env`. Na VM canônica, apontar para a auth do
+operador sem copiar token:
+
+```bash
+sudo install -d -m 0755 /etc/civm
+printf 'GH_CONFIG_DIR=/home/emdev/.config/gh\n' | sudo tee /etc/civm/runner-watchdog.env >/dev/null
+sudo chmod 0600 /etc/civm/runner-watchdog.env
+```
+
+Se usar `GH_TOKEN` nesse arquivo em vez de `GH_CONFIG_DIR`, tratar como
+secret operacional: root-only, fora do repo e rotacionado após incidente.
+
 O disk-watchdog checa disk %; se >70%, roda
 `civmctl disk-watchdog --execute`, que delega para
 `civmctl cleanup --execute` com thresholds agressivos

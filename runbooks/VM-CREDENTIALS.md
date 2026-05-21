@@ -37,6 +37,7 @@
 | Runner registration token (GitHub) | gerado on-demand via `gh api` no momento de registrar | uma vez, descartável |
 | GitHub PAT (se usar) | password manager OU GitHub Secret no peer repo | per-repo, scoped |
 | GitHub App private key | password manager OU `/opt/secure/` na VM (root-only chmod 600) | runner via env |
+| Runner watchdog env | `/etc/civm/runner-watchdog.env` na VM (root-only chmod 600) | `civmctl-runner-watchdog.service` |
 | DATABASE_URL | GitHub Secret per-repo | workflow runtime |
 
 ## Setup de SSH para acesso à VM
