@@ -68,24 +68,35 @@ Types validos: `feat`, `fix`, `refactor`, `perf`, `docs`, `ci`, `test`,
 
 ## Token
 
-Por padrao usa `secrets.GITHUB_TOKEN`. Limitacao: PRs e tags criados pelo
-`GITHUB_TOKEN` NAO disparam outros workflows (e.g. `ci.yml`). Logo o PR
-de release nasce sem CI rodando.
+O caminho primario usa GitHub App dedicado e token efemero gerado por
+`actions/create-github-app-token@v3`.
 
-Mitigacoes (em ordem de preferencia):
+Setup do App:
 
-1. **PAT em secret `RELEASE_PLEASE_TOKEN`** (atual upgrade path)
-   - Criar PAT classico em <https://github.com/settings/tokens> com escopos
-     `repo` + `workflow`.
-   - Adicionar em <https://github.com/advoq/civm/settings/secrets/actions>
-     como `RELEASE_PLEASE_TOKEN`.
-   - Workflow ja faz fallback `secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN`.
-2. **GitHub App** (ideal long-term, mais setup):
-   - Instalar app com permissoes `contents: write` + `pull-requests: write`.
-   - Trocar token no workflow pela action `actions/create-github-app-token@v1`.
-3. **Re-run manual** (sem upgrade):
-   - Quando release-please abrir o PR, `gh pr ready <num>` + close/reopen
-     forca CI a rodar.
+1. Criar GitHub App dedicado para release automation.
+2. Instalar apenas em `advoq/civm`.
+3. Conceder permissoes minimas:
+   - `contents: write`
+   - `pull-requests: write`
+   - `issues: write`
+   - `metadata: read`
+4. Adicionar em <https://github.com/advoq/civm/settings/secrets/actions>:
+   - `RELEASE_APP_ID` = App ID numerico.
+   - `RELEASE_APP_PRIVATE_KEY` = private key PEM do App.
+
+Nao colar a private key em runbook, commit, log ou issue. Validar apenas
+nomes de secrets com `gh secret list --repo advoq/civm`.
+
+Fallbacks, em ordem:
+
+1. `RELEASE_PLEASE_TOKEN` (PAT legado): funciona, mas exige token pessoal
+   com escopos `repo` + `workflow` e rotacao manual.
+2. `GITHUB_TOKEN`: contingencia final. Ele depende da permissao do repo
+   "Allow GitHub Actions to create and approve pull requests" para abrir
+   PR e, mesmo quando abre, PRs criados por `GITHUB_TOKEN` nao disparam
+   outros workflows como `ci.yml`.
+3. Re-run manual: quando release-please abrir o PR sem CI, `gh pr ready
+   <num>` + close/reopen forca novo evento de PR.
 
 ## Operacao diaria
 

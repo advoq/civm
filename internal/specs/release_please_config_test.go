@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -61,6 +62,39 @@ func TestReleasePleaseTitlePatternsParseMergedGroupedPR(t *testing.T) {
 		if version != "1.1.2" {
 			t.Fatalf("%s parsed version %q, want 1.1.2", name, version)
 		}
+	}
+}
+
+func TestReleaseWorkflowUsesGitHubAppTokenFirst(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join("..", "..", ".github", "workflows", "release.yml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	workflow := string(data)
+
+	for _, want := range []string{
+		"actions/create-github-app-token@v3",
+		"id: release-app-token",
+		"app-id: ${{ secrets.RELEASE_APP_ID }}",
+		"private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}",
+		"permission-contents: write",
+		"permission-pull-requests: write",
+		"permission-issues: write",
+		"permission-metadata: read",
+		"steps.release-app-token.outputs.token || secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release workflow missing %q", want)
+		}
+	}
+
+	appStep := strings.Index(workflow, "actions/create-github-app-token@v3")
+	releasePleaseStep := strings.Index(workflow, "googleapis/release-please-action@v4")
+	if appStep < 0 || releasePleaseStep < 0 || appStep > releasePleaseStep {
+		t.Fatalf("GitHub App token step must run before release-please")
 	}
 }
 

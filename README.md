@@ -207,8 +207,12 @@ Workflow `.github/workflows/release.yml` mantém um PR de release aberto
 com título `chore: release civm v<X.Y.Z>`,
 `.release-please-manifest.json` bumpado e `CHANGELOG.md` regerado.
 Mergear esse PR cria a tag e publica o release. Detalhes operacionais em
-`runbooks/RELEASE-AUTOMATION.md` (config, token PAT vs GITHUB_TOKEN,
-override `release-as`, rollback).
+`runbooks/RELEASE-AUTOMATION.md` (config, GitHub App de release,
+fallbacks, override `release-as`, rollback).
+O token primario e um GitHub App dedicado com permissoes minimas
+`contents: write`, `pull-requests: write`, `issues: write` e
+`metadata: read`, configurado pelos secrets `RELEASE_APP_ID` e
+`RELEASE_APP_PRIVATE_KEY`.
 Internamente `civm` no título é texto cosmético, não `package-name` do
 release-please. Em PR agrupado a branch é `release-please--branches--main`
 sem componente; configurar `package-name: civm` faz o release-please esperar

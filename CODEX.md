@@ -124,7 +124,9 @@ Conventional Commits. O PR agrupado usa o título
 `chore: release civm v<X.Y.Z>`; `civm` e apenas texto cosmetico no
 titulo, nao `package-name`. O agente NAO faz tag manual nem
 `gh release create` fora desse fluxo — qualquer release passa pelo PR de
-release, que e mergeado por humano. Detalhes em
+release, que e mergeado por humano. O token primario do workflow vem de
+GitHub App dedicado via `RELEASE_APP_ID` + `RELEASE_APP_PRIVATE_KEY`;
+PAT/GITHUB_TOKEN sao contingencias, nao o caminho principal. Detalhes em
 `runbooks/RELEASE-AUTOMATION.md`.
 
 Quando os artefatos `release-please-*.json` ou `release.yml` mudarem,

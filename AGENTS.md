@@ -107,6 +107,9 @@ patch, `feat!:`/`BREAKING CHANGE:` → major. `docs`/`chore`/`test`/`build`/
 PRs de release usam o título `chore: release civm v<X.Y.Z>`.
 `civm` nesse título é texto cosmético, não `package-name`; em PR agrupado
 a branch `release-please--branches--main` não carrega componente.
+O workflow de release usa GitHub App dedicado como token primário
+(`RELEASE_APP_ID` + `RELEASE_APP_PRIVATE_KEY`), com PAT/GITHUB_TOKEN só
+como contingência documentada.
 Detalhes em `runbooks/RELEASE-AUTOMATION.md`.
 
 ## Pull Requests
