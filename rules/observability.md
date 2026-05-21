@@ -12,8 +12,8 @@ paths:
 
 `civmctl doctor --repos=auto --json` e `civmctl capacity --json` são a rota
 read-only canônica para estado da VM/runner. `capacity` usa 90% de disco como
-hard-fail para `accepting_jobs=false`; pressão antes do job começa em 70% via
-`disk-watchdog` e hook `job-started`.
+hard-fail para `accepting_jobs=false`; pressão antes do job começa em 60% via
+`disk-watchdog` e hook `job-started` (`civm.DefaultPreCleanupPct`).
 
 `civmctl disk-audit --json` reporta ownership seguro de disco: `_work`,
 `_work/_tool`, `_work/_actions`, `$HOME/.cache`, `$HOME/go/pkg`,

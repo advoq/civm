@@ -107,7 +107,7 @@ COMANDOS
   runner          Gerencia runners GitHub Actions self-hosted
   drift           Detecta versoes pinadas vs upstream actions/runner-images
   billing-status  Detecta billing-block heuristico (3 runs failure <10s)
-  disk-watchdog   Trigger cleanup agressivo se disk >threshold (default 70%%)
+  disk-watchdog   Trigger cleanup agressivo se disk >threshold (default 60%%)
   disk-audit      Relatorio read-only dos maiores donos seguros de disco
   idle-check      Read-only: 0=idle, 1=busy, 2=unknown
   ci              Subcomandos CI cross-peer (local-report)
@@ -146,7 +146,7 @@ EXEMPLOS
   civmctl reverse-watchdog --max-age-hours=4
   civmctl idle-check --json
   sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute
-  civmctl disk-watchdog --threshold-pct=70 --execute
+  civmctl disk-watchdog --execute
   civmctl disk-audit --json
   civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="civm fallback"
   civmctl capacity --json

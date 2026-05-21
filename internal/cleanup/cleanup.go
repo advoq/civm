@@ -71,14 +71,16 @@ type Options struct {
 	ActivityFn func(ctx context.Context) ([]Activity, error)
 }
 
-// DefaultOptions returns sane defaults: dry-run, 7d /tmp, 14d _work.
+// DefaultOptions returns sane defaults: dry-run, 1d /tmp, 3d _work.
+// Hook job-completed already wipes _work per job; these are a safety net for
+// orphaned dirs from crashes or runner restarts, kept short to free SSD space.
 func DefaultOptions() Options {
 	return Options{
 		Execute:        false,
 		WorkDir:        civm.DefaultWorkDir,
 		TmpDir:         civm.DefaultTmpDir,
-		TmpThreshold:   7 * 24 * time.Hour,
-		WorkThreshold:  14 * 24 * time.Hour,
+		TmpThreshold:   24 * time.Hour,
+		WorkThreshold:  3 * 24 * time.Hour,
 		DockerPrune:    true,
 		AptClean:       true,
 		IdleProbeDelay: 2 * time.Second,

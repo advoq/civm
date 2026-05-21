@@ -4,8 +4,8 @@
 - `civmctl-cleanup.timer` — diário 04:00 UTC, full cleanup (Docker, /tmp,
   _work, apt). Idempotente e fail-closed quando há job/build ativo.
 - `civmctl-disk-watchdog.timer` — hourly, dispara cleanup agressivo se
-  disk >70%. Reativo a picos de uso entre execuções diárias e usa o mesmo
-  guard de ociosidade do cleanup.
+  disk > DefaultPreCleanupPct (60% no momento). Reativo a picos de uso
+  entre execuções diárias e usa o mesmo guard de ociosidade do cleanup.
 - `civmctl-runner-watchdog.timer` — a cada ~2min depois do boot, repara
   hooks e reinicia runners offline/failed se a VM estiver idle. Não faz
   rerun automático por padrão.
@@ -42,10 +42,10 @@ sudo chmod 0600 /etc/civm/runner-watchdog.env
 Se usar `GH_TOKEN` nesse arquivo em vez de `GH_CONFIG_DIR`, tratar como
 secret operacional: root-only, fora do repo e rotacionado após incidente.
 
-O disk-watchdog checa disk %; se >70%, roda
-`civmctl disk-watchdog --execute`, que delega para
-`civmctl cleanup --execute` com thresholds agressivos
-(TmpThreshold=24h, WorkThreshold=7d em vez de 7d/14d default).
+O disk-watchdog checa disk %; se acima do threshold (default 60% via
+`civm.DefaultPreCleanupPct`), roda `civmctl disk-watchdog --execute`,
+que delega para `civmctl cleanup --execute` com thresholds agressivos
+(TmpThreshold=1h, WorkThreshold=24h em vez de 1d/3d default).
 
 (`civmctl bootstrap --execute --runner-watchdog=true
 --reverse-watchdog=true --metrics-timer=true` faz isso automaticamente quando os arquivos estão

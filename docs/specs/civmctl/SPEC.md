@@ -63,7 +63,7 @@ Este SPEC nasceu no bootstrap do `civmctl`; o hardening posterior adiciona:
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-cleanup.service` | unit que roda `civmctl cleanup --execute` |
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-cleanup.timer` | timer diário 04:00 UTC |
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-disk-watchdog.service` | unit que roda `civmctl disk-watchdog --execute` |
-| `/home/emdev/codespace/civm/deploy/systemd/civmctl-disk-watchdog.timer` | timer hourly com cleanup agressivo se disk >70% |
+| `/home/emdev/codespace/civm/deploy/systemd/civmctl-disk-watchdog.timer` | timer hourly com cleanup agressivo se disk > DefaultPreCleanupPct (60%) |
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-runner-watchdog.service` | unit que roda `civmctl runner watchdog --execute --repos=auto --json` |
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-runner-watchdog.timer` | timer OnBootSec=2min, OnUnitActiveSec=2min |
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-reverse-watchdog.service` | unit que alerta se disk-watchdog ficou stale |

@@ -595,14 +595,15 @@ sudo crontab -l 2>/dev/null | { cat; echo "0 3 * * * /opt/civm/cleanup.sh >> /va
 
 ### Watchdog legado de espaco em disco
 
-Cron legado que dispara cleanup agressivo se disco passar de 70%:
+Cron legado que dispara cleanup agressivo quando o disco passa do
+threshold (default 60% via `civm.DefaultPreCleanupPct`):
 
 ```bash
 #!/usr/bin/env bash
 # /opt/civm/disk-watchdog.sh — roda a cada hora
 # Crontab: 0 * * * * /opt/civm/disk-watchdog.sh
 
-THRESHOLD=70
+THRESHOLD=60
 USAGE=$(df / --output=pcent | tail -1 | tr -dc '0-9')
 
 if [ "$USAGE" -gt "$THRESHOLD" ]; then
@@ -811,13 +812,17 @@ recusa roots de sistema/temporários como `/etc`, `/usr`, `/proc`, `/sys`,
 Contrato dos hooks:
 
 - `job-started` checa pressão de disco antes do job. Se o uso estiver acima
-  do limite de pré-cleanup (70%), limpa paths seguros de workspace/cache
-  primeiro. Se o disco continuar acima do limite hard-fail (90%), rejeita o
-  job antes de a VM entrar em estado ruim. Races de cache como
-  `directory not empty` viram warning quando o disco já ficou abaixo do
-  hard-fail.
+  do limite de pré-cleanup (`civm.DefaultPreCleanupPct`, 60% no momento),
+  limpa paths seguros de workspace/cache primeiro. Se o disco continuar
+  acima do limite hard-fail (90%), rejeita o job antes de a VM entrar em
+  estado ruim. Races de cache como `directory not empty` viram warning
+  quando o disco já ficou abaixo do hard-fail.
 - `job-completed` remove workspace e temporários por job, poda estado Docker
-  recuperável, limpa apt/journal e roda `fstrim`.
+  recuperável (`buildx prune --filter until=24h`, `image prune --filter
+  until=168h`, container/volume prune), faz trim por tampa em cada cache
+  ($HOME/.cache/go-build máx 5 GB, npm 3 GB, yarn 3 GB, pnpm-store 5 GB),
+  limpa apt/journal e roda `fstrim`. Falhas de ferramentas auxiliares
+  (buildx ausente, sudo sem NOPASSWD) viram Warning e não derrubam o hook.
 - Ambos preservam `_work/_tool` e `_work/_actions`; estes são caches quentes
   de toolchains/actions e não devem ser removidos na higiene normal.
 - Eventos de hook acrescentam JSON lines estruturadas em

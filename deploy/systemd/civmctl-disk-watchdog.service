@@ -1,12 +1,12 @@
 [Unit]
-Description=civmctl disk-watchdog (cleanup agressivo se disk >70%%)
+Description=civmctl disk-watchdog (cleanup agressivo se disk >DefaultPreCleanupPct)
 Documentation=https://github.com/advoq/civm/blob/main/internal/diskwatchdog/
 After=network-online.target
 ConditionPathExists=/usr/local/bin/civmctl
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/flock -n /run/civmctl-cleanup.lock /usr/local/bin/civmctl disk-watchdog --threshold-pct=70 --execute
+ExecStart=/usr/bin/flock -n /run/civmctl-cleanup.lock /usr/local/bin/civmctl disk-watchdog --execute
 User=root
 Nice=15
 IOSchedulingClass=idle

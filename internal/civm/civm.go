@@ -34,13 +34,31 @@ const (
 	DefaultRestartTimeoutSeconds      = 30
 	DefaultHealthTimeoutSeconds       = 5
 	DefaultBillingTimeoutSeconds      = 15
-	DefaultPreCleanupPct              = 70
+	DefaultPreCleanupPct              = 60
 	DefaultHardFailPct                = 90
 	DefaultWatchdogThresholdPct       = DefaultPreCleanupPct
 	DefaultCapacityMaxDiskPct         = DefaultHardFailPct
 	DefaultReverseMaxAgeHours         = 2
 	DefaultRestartVerifySeconds       = 3
 	DefaultUpgradeVerifySeconds       = 5
+
+	// Per-cache size budgets enforced by hook routine cleanup (job-completed).
+	// Excedente é removido por mtime ascendente; arquivos com mtime mais novo
+	// que DefaultCacheTrimMinProtectHours são preservados.
+	DefaultCacheTrimMinProtectHours = 24
+	DefaultCacheGoBuildMaxGB        = 5
+	DefaultCacheNPMMaxGB            = 3
+	DefaultCacheYarnMaxGB           = 3
+	DefaultCachePNPMMaxGB           = 5
+
+	// Filtros do docker prune em modo rotineiro. Mantêm layers quentes < 24h
+	// e imagens unused < 7 dias, em vez do agressivo system prune --volumes.
+	DefaultDockerBuildxPruneFilter = "until=24h"
+	DefaultDockerImagePruneFilter  = "until=168h"
+
+	// Timeout por comando dentro do hook cleanup. Evita que um docker travado
+	// segure o runner durante todo o TimeoutStartSec do systemd (30 min).
+	DefaultRoutineCleanupCmdTimeoutSecs = 120
 )
 
 var (

@@ -6,8 +6,10 @@ package hook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -37,11 +39,13 @@ const (
 )
 
 type Action struct {
-	Name     string `json:"name"`
-	Path     string `json:"path,omitempty"`
-	Executed bool   `json:"executed"`
-	Error    string `json:"error,omitempty"`
-	Warning  string `json:"warning,omitempty"`
+	Name       string `json:"name"`
+	Path       string `json:"path,omitempty"`
+	Executed   bool   `json:"executed"`
+	BytesFound int64  `json:"bytes_found,omitempty"`
+	BytesFreed int64  `json:"bytes_freed,omitempty"`
+	Error      string `json:"error,omitempty"`
+	Warning    string `json:"warning,omitempty"`
 }
 
 type Result struct {
@@ -74,6 +78,7 @@ type Options struct {
 	StatfsFn        func(path string) (totalBytes, freeBytes uint64, err error)
 	DiscoverRootsFn func() ([]string, error)
 	ReadDirFn       func(path string) ([]os.DirEntry, error)
+	WalkDirFn       func(root string, fn fs.WalkDirFunc) error
 }
 
 func DefaultOptionsFromEnv(event Event) Options {
@@ -94,6 +99,7 @@ func DefaultOptionsFromEnv(event Event) Options {
 		StatfsFn:        defaultStatfs,
 		DiscoverRootsFn: discoverRunnerWorkRoots,
 		ReadDirFn:       os.ReadDir,
+		WalkDirFn:       filepath.WalkDir,
 	}
 }
 
@@ -150,12 +156,15 @@ func Run(ctx context.Context, opts Options) Result {
 }
 
 // cleanup orchestra a limpeza. purgeCaches=true em disk pressure mode
-// remove os caches em $HOME (go-build, npm, yarn, pnpm); false em modo
-// rotineiro (job-completed) os preserva.
+// remove os caches em $HOME (go-build, npm, yarn, pnpm) por inteiro e roda
+// docker system prune agressivo. purgeCaches=false em modo rotineiro
+// (job-completed) faz trim por tamanho/idade (preserva quentes <24h) e usa
+// buildx prune mais brando — evita invalidar cache de jobs concorrentes.
 func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	roots := workRoots(opts)
+	caps := cacheCaps()
 	hotCaches := cachePaths()
-	estCap := len(roots) + 4
+	estCap := len(roots) + len(caps) + 8
 	if purgeCaches {
 		estCap += len(hotCaches)
 	}
@@ -163,15 +172,32 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	for _, root := range roots {
 		actions = append(actions, cleanWorkRoot(opts, root))
 	}
+	// Em modo disk-pressure usamos commandAction (erro derruba o hook → sinal
+	// claro de problema). Em modo rotineiro usamos commandActionWarn: erro
+	// de uma ferramenta auxiliar (buildx ausente, fstrim em FS sem suporte,
+	// sudo sem NOPASSWD) vira aviso e o hook continua — cleanup é
+	// best-effort entre jobs.
+	runCmd := commandAction
+	if !purgeCaches {
+		runCmd = commandActionWarn
+	}
 	if purgeCaches {
 		for _, path := range hotCaches {
 			actions = append(actions, removePath(opts, path, "cache"))
 		}
+		actions = append(actions, runCmd(opts, ctx, "docker_prune", "docker", "system", "prune", "-af", "--volumes"))
+	} else {
+		for _, c := range caps {
+			actions = append(actions, trimCacheByAge(opts, c.path, c.maxBytes, c.minProtect))
+		}
+		actions = append(actions, runCmd(opts, ctx, "docker_buildx_prune", "docker", "buildx", "prune", "--force", "--filter", civm.DefaultDockerBuildxPruneFilter))
+		actions = append(actions, runCmd(opts, ctx, "docker_image_prune", "docker", "image", "prune", "-af", "--filter", civm.DefaultDockerImagePruneFilter))
+		actions = append(actions, runCmd(opts, ctx, "docker_container_prune", "docker", "container", "prune", "-f"))
+		actions = append(actions, runCmd(opts, ctx, "docker_volume_prune", "docker", "volume", "prune", "-f"))
 	}
-	actions = append(actions, commandAction(opts, ctx, "docker_prune", "docker", "system", "prune", "-af", "--volumes"))
-	actions = append(actions, commandAction(opts, ctx, "apt_clean", "sudo", "apt-get", "clean"))
-	actions = append(actions, commandAction(opts, ctx, "journal_vacuum", "sudo", "journalctl", "--vacuum-time=1d"))
-	actions = append(actions, commandAction(opts, ctx, "fstrim", "sudo", "fstrim", "-av"))
+	actions = append(actions, runCmd(opts, ctx, "apt_clean", "sudo", "apt-get", "clean"))
+	actions = append(actions, runCmd(opts, ctx, "journal_vacuum", "sudo", "journalctl", "--vacuum-time=1d"))
+	actions = append(actions, runCmd(opts, ctx, "fstrim", "sudo", "fstrim", "-av"))
 	return actions
 }
 
@@ -219,13 +245,139 @@ func removePath(opts Options, path, name string) Action {
 	return a
 }
 
+// cacheCap describes a per-cache size budget for routine trim.
+type cacheCap struct {
+	path     string
+	maxBytes int64
+	// minProtect protege arquivos com mtime > Now-minProtect contra remoção,
+	// para não invalidar cache quente de um job que acabou de gravar.
+	minProtect time.Duration
+}
+
+// cacheCaps lista os caches sob $HOME com seus limites de tamanho.
+// Em cleanup rotineiro (job-completed) usamos trim por idade/tamanho em vez de
+// wipe total: preserva Go build cache até X GB, depois descarta os mais velhos.
+// Constantes vivem em internal/civm/civm.go para uma fonte única de verdade.
+func cacheCaps() []cacheCap {
+	home := os.Getenv("HOME")
+	if home == "" {
+		return nil
+	}
+	const giB = int64(1) << 30
+	protect := time.Duration(civm.DefaultCacheTrimMinProtectHours) * time.Hour
+	return []cacheCap{
+		{filepath.Join(home, ".cache", "go-build"), int64(civm.DefaultCacheGoBuildMaxGB) * giB, protect},
+		{filepath.Join(home, ".npm", "_cacache"), int64(civm.DefaultCacheNPMMaxGB) * giB, protect},
+		{filepath.Join(home, ".yarn", "cache"), int64(civm.DefaultCacheYarnMaxGB) * giB, protect},
+		{filepath.Join(home, ".pnpm-store"), int64(civm.DefaultCachePNPMMaxGB) * giB, protect},
+	}
+}
+
+// trimCacheByAge walks root, sorts arquivos por mtime asc, e remove os mais
+// velhos até total <= maxBytes. Arquivos com mtime > Now-minProtect são
+// preservados — protege cache quente do job atual contra invalidação.
+// No-op se cache não existe ou já está abaixo da tampa.
+func trimCacheByAge(opts Options, root string, maxBytes int64, minProtect time.Duration) Action {
+	a := Action{Name: "cache_trim", Path: root, Executed: opts.Execute}
+	if strings.TrimSpace(root) == "" || root == "/" || root == os.Getenv("HOME") {
+		a.Error = "unsafe cache path"
+		return a
+	}
+	type entry struct {
+		path  string
+		size  int64
+		mtime time.Time
+	}
+	var entries []entry
+	var total int64
+	walkErr := opts.WalkDirFn(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		entries = append(entries, entry{path: p, size: info.Size(), mtime: info.ModTime()})
+		total += info.Size()
+		return nil
+	})
+	if walkErr != nil {
+		if errors.Is(walkErr, fs.ErrNotExist) {
+			return a
+		}
+		a.Error = walkErr.Error()
+		return a
+	}
+	a.BytesFound = total
+	if total <= maxBytes {
+		return a
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].mtime.Before(entries[j].mtime) })
+	protectCutoff := opts.Now.Add(-minProtect)
+	target := total - maxBytes
+	var freed int64
+	for _, e := range entries {
+		if freed >= target {
+			break
+		}
+		if minProtect > 0 && e.mtime.After(protectCutoff) {
+			continue
+		}
+		if opts.Execute {
+			if err := opts.RemoveAllFn(e.path); err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
+				a.Error = err.Error()
+				return a
+			}
+		}
+		freed += e.size
+	}
+	a.BytesFreed = freed
+	return a
+}
+
+// commandAction roda um comando externo capturando erro em Action.Error —
+// um erro aqui aborta o hook via firstActionError. Apropriado para modo
+// disk-pressure onde queremos sinal claro de falha.
 func commandAction(opts Options, ctx context.Context, actionName, name string, args ...string) Action {
+	return runWithTimeout(opts, ctx, actionName, false /*errorAsWarning*/, name, args...)
+}
+
+// commandActionWarn é a variante tolerante: falha de comando vira Warning,
+// não Error. Usada no modo rotineiro (job-completed) para que ferramentas
+// ausentes (docker buildx em hosts antigos, fstrim em FS sem suporte) não
+// derrubem o hook. O cleanup é best-effort entre jobs; o que importa é o
+// hook retornar exit 0 para o runner continuar normalmente.
+func commandActionWarn(opts Options, ctx context.Context, actionName, name string, args ...string) Action {
+	return runWithTimeout(opts, ctx, actionName, true /*errorAsWarning*/, name, args...)
+}
+
+// runWithTimeout aplica DefaultRoutineCleanupCmdTimeoutSecs por comando.
+// Evita que um docker travado segure o hook durante todo o TimeoutStartSec
+// do systemd (30 min). Cada comando tem orçamento próprio.
+func runWithTimeout(opts Options, ctx context.Context, actionName string, errorAsWarning bool, name string, args ...string) Action {
 	a := Action{Name: actionName, Executed: opts.Execute}
 	if !opts.Execute {
 		return a
 	}
-	if _, err := opts.RunFn(ctx, name, args...); err != nil {
-		a.Error = err.Error()
+	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(civm.DefaultRoutineCleanupCmdTimeoutSecs)*time.Second)
+	defer cancel()
+	if _, err := opts.RunFn(cmdCtx, name, args...); err != nil {
+		msg := err.Error()
+		if errorAsWarning {
+			a.Warning = msg
+		} else {
+			a.Error = msg
+		}
 	}
 	return a
 }
@@ -271,17 +423,18 @@ func safeWorkRoot(root string) bool {
 		strings.HasSuffix(clean, "/_work")
 }
 
+// cachePaths deriva a lista de paths de cacheCaps() — fonte única de verdade.
+// Usada pelo modo disk-pressure (wipe total) e por testes que validam o set.
 func cachePaths() []string {
-	home := os.Getenv("HOME")
-	if home == "" {
+	caps := cacheCaps()
+	if len(caps) == 0 {
 		return nil
 	}
-	return []string{
-		filepath.Join(home, ".cache", "go-build"),
-		filepath.Join(home, ".npm", "_cacache"),
-		filepath.Join(home, ".yarn", "cache"),
-		filepath.Join(home, ".pnpm-store"),
+	paths := make([]string, len(caps))
+	for i, c := range caps {
+		paths[i] = c.path
 	}
+	return paths
 }
 
 func diskUsedPct(opts Options) (int, error) {
@@ -436,6 +589,12 @@ func applyDefaults(opts *Options) {
 	}
 	if opts.ReadDirFn == nil {
 		opts.ReadDirFn = os.ReadDir
+	}
+	if opts.WalkDirFn == nil {
+		opts.WalkDirFn = filepath.WalkDir
+	}
+	if opts.Now.IsZero() {
+		opts.Now = time.Now()
 	}
 }
 
