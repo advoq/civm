@@ -408,3 +408,26 @@ func TestDefaultLastCleanupReadsCleanupServiceUnit(t *testing.T) {
 		t.Fatalf("detail = %q, want journal suffix", detail)
 	}
 }
+
+func TestDefaultLastCleanupReadsJournalShortISOWithColonOffset(t *testing.T) {
+	orig := commandOutput
+	defer func() { commandOutput = orig }()
+
+	commandOutput = func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte("2026-05-21T04:03:59+00:00 gha systemd[1]: Finished civmctl-cleanup.service\n"), nil
+	}
+
+	when, detail, err := defaultLastCleanup(context.Background())
+	if err != nil {
+		t.Fatalf("defaultLastCleanup err = %v", err)
+	}
+	if when == nil {
+		t.Fatal("when nil; expected cleanup journal line with colon offset to parse")
+	}
+	if got := when.UTC().Format(time.RFC3339); got != "2026-05-21T04:03:59Z" {
+		t.Fatalf("when = %s", got)
+	}
+	if !strings.Contains(detail, "Finished civmctl-cleanup.service") {
+		t.Fatalf("detail = %q, want journal suffix", detail)
+	}
+}

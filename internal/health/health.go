@@ -328,8 +328,8 @@ func defaultLastCleanup(ctx context.Context) (*time.Time, string, error) {
 	if len(parts) == 0 {
 		return nil, "", nil
 	}
-	t, err := time.Parse("2006-01-02T15:04:05-0700", parts[0])
-	if err != nil {
+	t, ok := parseJournalShortISO(parts[0])
+	if !ok {
 		return nil, "", nil
 	}
 	rest := ""
@@ -337,6 +337,19 @@ func defaultLastCleanup(ctx context.Context) (*time.Time, string, error) {
 		rest = parts[1]
 	}
 	return &t, rest, nil
+}
+
+func parseJournalShortISO(value string) (time.Time, bool) {
+	for _, layout := range []string{
+		time.RFC3339,               // 2026-05-21T04:03:59+00:00
+		"2006-01-02T15:04:05-0700", // 2026-05-21T04:03:59+0000
+	} {
+		t, err := time.Parse(layout, value)
+		if err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func defaultTimerState(ctx context.Context, timer string) (TimerState, error) {
