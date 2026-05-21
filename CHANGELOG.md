@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/advoq/civm/compare/v1.5.0...v1.5.1) (2026-05-21)
+
+
+### Bug Fixes
+
+* parse cleanup journal RFC3339 offsets ([70a8e96](https://github.com/advoq/civm/commit/70a8e96bd7be81124ebecc62ae949d506e07007d))
+
 ## [1.5.0](https://github.com/advoq/civm/compare/v1.4.0...v1.5.0) (2026-05-21)
 
 
