@@ -36,8 +36,8 @@ func TestCollect_AllOK(t *testing.T) {
 	if r.Exit() != 0 {
 		t.Errorf("Exit = %d, want 0", r.Exit())
 	}
-	if len(r.Checks) != 7 {
-		t.Errorf("len(Checks) = %d, want 7", len(r.Checks))
+	if len(r.Checks) != 9 {
+		t.Errorf("len(Checks) = %d, want 9", len(r.Checks))
 	}
 }
 
@@ -162,6 +162,20 @@ func TestCollect_TimersMissingAndStale(t *testing.T) {
 			wantExit:  int(StatusWarn),
 			wantCheck: "TIMER_REVERSE",
 		},
+		{
+			name:      "runner watchdog missing is warning",
+			timer:     "civmctl-runner-watchdog.timer",
+			err:       errors.New("not found"),
+			wantExit:  int(StatusWarn),
+			wantCheck: "TIMER_RUNNER",
+		},
+		{
+			name:      "metrics missing is warning",
+			timer:     "civmctl-metrics.timer",
+			err:       errors.New("not found"),
+			wantExit:  int(StatusWarn),
+			wantCheck: "TIMER_METRICS",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -219,8 +233,8 @@ func TestRenderJSON_StructValid(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
 		t.Fatalf("output nao e JSON valido: %v", err)
 	}
-	if len(parsed.Checks) != 7 {
-		t.Errorf("Checks len = %d, want 7", len(parsed.Checks))
+	if len(parsed.Checks) != 9 {
+		t.Errorf("Checks len = %d, want 9", len(parsed.Checks))
 	}
 	if parsed.Exit != 0 {
 		t.Errorf("Exit = %d, want 0", parsed.Exit)
@@ -366,4 +380,31 @@ func TestDefaultLastCleanup_NoData(t *testing.T) {
 		t.Errorf("erro inesperado: %v", err)
 	}
 	_ = when
+}
+
+func TestDefaultLastCleanupReadsCleanupServiceUnit(t *testing.T) {
+	orig := commandOutput
+	defer func() { commandOutput = orig }()
+
+	var gotName string
+	var gotArgs []string
+	commandOutput = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		return []byte("2026-05-21T04:03:01+0000 gha civmctl[123]: Total freed: 20.0 kB\n"), nil
+	}
+
+	when, detail, err := defaultLastCleanup(context.Background())
+	if err != nil {
+		t.Fatalf("defaultLastCleanup err = %v", err)
+	}
+	if when == nil {
+		t.Fatal("when nil; expected cleanup journal line to parse")
+	}
+	if gotName != "journalctl" || strings.Join(gotArgs, " ") != "-u civmctl-cleanup.service --since 7 days ago --no-pager --reverse -n 1 -o short-iso" {
+		t.Fatalf("journal command = %s %s", gotName, strings.Join(gotArgs, " "))
+	}
+	if !strings.Contains(detail, "Total freed") {
+		t.Fatalf("detail = %q, want journal suffix", detail)
+	}
 }

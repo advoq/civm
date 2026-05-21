@@ -58,6 +58,8 @@ func main() {
 		os.Exit(runBilling(args))
 	case "disk-watchdog":
 		os.Exit(runDiskWatchdog(args))
+	case "disk-audit":
+		os.Exit(runDiskAudit(args))
 	case "idle-check":
 		os.Exit(runIdleCheck(args))
 	case "ci":
@@ -105,7 +107,8 @@ COMANDOS
   runner          Gerencia runners GitHub Actions self-hosted
   drift           Detecta versoes pinadas vs upstream actions/runner-images
   billing-status  Detecta billing-block heuristico (3 runs failure <10s)
-  disk-watchdog   Trigger cleanup agressivo se disk >threshold (default 80%%)
+  disk-watchdog   Trigger cleanup agressivo se disk >threshold (default 70%%)
+  disk-audit      Relatorio read-only dos maiores donos seguros de disco
   idle-check      Read-only: 0=idle, 1=busy, 2=unknown
   ci              Subcomandos CI cross-peer (local-report)
   hook            GitHub Actions job hooks (started/completed)
@@ -133,6 +136,8 @@ EXEMPLOS
   civmctl runner list --json | jq '.runners[] | select(.repo == "owner/repo")'
   civmctl runner restart --short=civm-1 --execute
   civmctl runner upgrade --short=cmpx --new-version=2.335.0 --execute
+  civmctl runner watchdog --execute --repos=auto
+  civmctl runner watchdog --execute --rerun-network-failures --max-run-age=6h --repos=owner/repo
   civmctl reverse-watchdog --max-age-hours=2
   sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute
   civmctl peer-status --repo=owner/repo
@@ -141,7 +146,8 @@ EXEMPLOS
   civmctl reverse-watchdog --max-age-hours=4
   civmctl idle-check --json
   sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute
-  civmctl disk-watchdog --threshold-pct=80 --execute
+  civmctl disk-watchdog --threshold-pct=70 --execute
+  civmctl disk-audit --json
   civmctl ci local-report --repo=owner/repo --sha=abc... --state=success --context="civm fallback"
   civmctl capacity --json
   civmctl metrics dump --stdout

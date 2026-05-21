@@ -42,6 +42,8 @@ type Options struct {
 	UID              int
 	WatchdogTimer    bool   // habilita civmctl-disk-watchdog.timer
 	ReverseWatchdog  bool   // habilita civmctl-reverse-watchdog.timer (alarm-of-alarm)
+	RunnerWatchdog   bool   // habilita civmctl-runner-watchdog.timer
+	MetricsTimer     bool   // habilita civmctl-metrics.timer
 	InstallUnitsFrom string // se nao-vazio, copia .service/.timer de PATH para /etc/systemd/system/ antes de enable
 	OSReader         func() (string, error)
 	RunFn            func(ctx context.Context, name string, args ...string) ([]byte, error)
@@ -57,6 +59,8 @@ func DefaultOptions() Options {
 		UID:              defaultUID(),
 		WatchdogTimer:    true, // default: install all timers
 		ReverseWatchdog:  true,
+		RunnerWatchdog:   true,
+		MetricsTimer:     true,
 		InstallUnitsFrom: "", // assume admin ja copiou; pode setar pra automatizar
 		OSReader:         defaultOSReader,
 		RunFn:            defaultRun,
@@ -236,7 +240,7 @@ func buildSteps(opts Options) []Step {
 		},
 		{
 			Name:        "install_systemd_timers",
-			Description: "Instala timers: cleanup (diario), disk-watchdog (hourly), reverse-watchdog (4h)",
+			Description: "Instala timers: cleanup, disk-watchdog, runner-watchdog, reverse-watchdog e metrics",
 			Check: func(ctx context.Context) (bool, error) {
 				timers := timerList(opts)
 				for _, t := range timers {
@@ -275,8 +279,14 @@ func timerList(opts Options) []string {
 	if opts.WatchdogTimer {
 		timers = append(timers, "civmctl-disk-watchdog.timer")
 	}
+	if opts.RunnerWatchdog {
+		timers = append(timers, "civmctl-runner-watchdog.timer")
+	}
 	if opts.ReverseWatchdog {
 		timers = append(timers, "civmctl-reverse-watchdog.timer")
+	}
+	if opts.MetricsTimer {
+		timers = append(timers, "civmctl-metrics.timer")
 	}
 	return timers
 }

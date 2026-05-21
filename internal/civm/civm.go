@@ -34,7 +34,10 @@ const (
 	DefaultRestartTimeoutSeconds      = 30
 	DefaultHealthTimeoutSeconds       = 5
 	DefaultBillingTimeoutSeconds      = 15
-	DefaultWatchdogThresholdPct       = 80
+	DefaultPreCleanupPct              = 70
+	DefaultHardFailPct                = 90
+	DefaultWatchdogThresholdPct       = DefaultPreCleanupPct
+	DefaultCapacityMaxDiskPct         = DefaultHardFailPct
 	DefaultReverseMaxAgeHours         = 2
 	DefaultRestartVerifySeconds       = 3
 	DefaultUpgradeVerifySeconds       = 5

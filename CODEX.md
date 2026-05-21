@@ -59,12 +59,27 @@ O cleanup de `_work` preserva caches de runner em `_work/_tool` e
 actions; só devem ser removidos manualmente depois de medir pressão real de
 disco e confirmar host ocioso.
 
-`civmctl runner restart/remove/upgrade --execute` usa a mesma checagem
-compartilhada (`civmctl idle-check`). Mutação de runner deve abortar antes de
-`systemctl restart/stop`, `config.sh remove`, `rm -rf` ou upgrade de tarball
-quando o host estiver ocupado ou desconhecido. Em `runner remove`, falha real
-em `svc.sh stop` ou `svc.sh uninstall` também deve parar o fluxo antes de
-desregistrar ou remover diretório.
+`civmctl runner restart/remove/upgrade/watchdog --execute` usa a mesma
+checagem compartilhada (`civmctl idle-check`). Mutação de runner deve abortar
+antes de `systemctl restart/stop`, `config.sh remove`, `rm -rf`, upgrade de
+tarball, reparo de hooks ou rerun remoto quando o host estiver ocupado ou
+desconhecido. Em `runner remove`, falha real em `svc.sh stop` ou
+`svc.sh uninstall` também deve parar o fluxo antes de desregistrar ou remover
+diretório.
+
+`civmctl-runner-watchdog.timer` roda sem `--rerun-network-failures` por
+padrão; ele repara hooks e runner offline/failed, mas não reroda CI remoto.
+`civmctl-metrics.timer` roda read-only e grava apenas o textfile Prometheus
+em `/var/lib/node_exporter/textfile_collector/civm.prom`.
+
+`civmctl runner watchdog --execute --rerun-network-failures --max-run-age=6h`
+é permitido só para auto-recuperação de falha transiente de rede/checkout:
+PR precisa estar aberto, runner GitHub precisa estar `online`, run precisa
+ter `created_at` recente, o log precisa conter assinatura de rede/checkout
+e o marcador
+`/var/lib/civm/runner-watchdog-reruns.json` não pode ter o mesmo
+`run_id/head_sha`. Falha de código, segredo, lint, teste, conflito de merge
+ou PR fechado nunca deve gerar rerun automático.
 
 Downloads executados como root devem ter checksum pinado no código antes de
 qualquer extração, instalação ou execução de script. Se o upstream publicar
@@ -73,12 +88,22 @@ pin, não prosseguir por confiança em HTTPS.
 
 ## Peer observability
 
+`civmctl runner watchdog --repos=auto` infere repos pelos diretórios reais dos
+runners (`.runner` com `gitHubUrl` ou `serverUrl`) e usa o nome dos services
+`actions.runner.*` como fallback. Isso preserva owners/repos com hífen.
+
 `civmctl doctor --repos=auto --json` é o diagnóstico genérico da VM: infere
 repos a partir dos services `actions.runner.*`, valida scripts `.sh`
 gerenciados de hooks de job e não depende da fleet `advoq/*` estar hardcoded.
-Use `--repos=owner/a,owner/b`
-quando o nome do service não puder representar o repo sem ambiguidade, e
+Use `--repos=owner/a,owner/b` quando a inferência local não for suficiente, e
 `--repos=none` para pular GitHub em auditoria local/offline.
+
+`civmctl capacity --json` é o endpoint read-only de prontidão: usa hard-fail
+de disco em 90% para `accepting_jobs=false` e expõe services/workers ativos.
+`civmctl disk-audit --json` é o endpoint read-only de ownership de disco:
+reporta `_work`, caches locais, `$HOME/codespace`, Docker reclaimable,
+`/var/log` e `/var/cache`; clones em `$HOME/codespace` nunca são apagados
+automaticamente pelo civm.
 
 `civmctl peer-status --repo=owner/repo --json` preserva o contrato JSON de um
 peer único. `civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml`
@@ -142,7 +167,7 @@ ssh gha-ubuntu-2404 'civmctl idle-check'
 Warning `LAST cleanup timer nunca rodou` é aceitável até o primeiro
 disparo real do timer diário. Se continuar após a próxima janela diária
 esperada, pausar qualquer conclusão de release e tratar como ação
-operacional na VM.
+operacional na VM, começando pelo journal de `civmctl-cleanup.service`.
 
 ## DEFERRED (features pensadas, ainda não implementadas)
 

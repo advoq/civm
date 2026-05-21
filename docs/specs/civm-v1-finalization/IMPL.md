@@ -8,7 +8,7 @@ issues: [3]
 # IMPL — civm v1 Operational Finalization
 
 **Status:** local v1 tag ready
-**Issue:** https://github.com/emersonbusson/civm/issues/3
+**Issue:** https://github.com/advoq/civm/issues/3
 **PRD:** `docs/specs/civm-v1-finalization/PRD.md`
 **SPEC:** `docs/specs/civm-v1-finalization/SPEC.md`
 **Validation timestamp:** 2026-05-11T00:21:41Z
@@ -20,7 +20,7 @@ issues: [3]
 | Base antes da formalizacao | `0fdf5430ff500ba6219412860495ae2609044105` |
 | Commit de formalizacao | commit apontado pela tag `v1.0.0` |
 | Tag local | `v1.0.0`, criada localmente sobre o commit que contem este IMPL |
-| Release remota | `https://github.com/emersonbusson/civm/releases/tag/v1.0.0` |
+| Release remota | `https://github.com/advoq/civm/releases/tag/v1.0.0` |
 
 ## 2. Validacao local
 

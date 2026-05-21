@@ -697,3 +697,37 @@ brutos aqui.
 - Validações locais do estado final: `go build`, `go test -race`,
   coverage interna, `node --test`, YAML, `git diff --check`, secret scan,
   `golangci-lint` e `govulncheck` passaram.
+
+## 2026-05-19 — runner-watchdog-hardening-doc-sync
+
+- **Branch:** main (WIP local ainda nao commitado neste ponto).
+- **Scope:** hardening do `civmctl runner watchdog` e sincronizacao de
+  documentacao ativa para o contexto atual.
+- **Actions:**
+  - `civmctl runner watchdog` documentado como reparo de hooks/runner com
+    rerun remoto opt-in via `--rerun-network-failures --max-run-age=6h`.
+  - Timer padrao `civmctl-runner-watchdog.timer` documentado sem rerun
+    automatico; rerun exige execucao manual ou drop-in explicito.
+  - `README.md`, `AGENTS.md`, `CODEX.md`, `deploy/systemd/README.md`,
+    `runbooks/MULTI-PROJECT-RUNNER.md` e specs `civmctl` alinhados com
+    4 timers: cleanup, disk-watchdog, runner-watchdog e reverse-watchdog.
+  - `SECURITY.md` atualizado para deixar o alvo como scripts `.sh`
+    gerenciados, tratando symlink/custom wrapper apenas como legado.
+  - Runbooks de peer/admin ajustados para Ubuntu 24.04 LTS, Go 1.26.3,
+    Node 24.15.0 e systemd timers em vez de cron como estado operacional.
+  - Busca em todos os `.md` por termos obsoletos deixou apenas historico
+    append-only antigo no proprio `MEMORY.md`.
+- **Validations:**
+  - `go test -count=1 ./...` passou.
+  - `go vet ./...` passou.
+  - `go build ./...` passou.
+  - `go test -race -count=1 ./internal/runner ./internal/doctor ./internal/bootstrap ./internal/health ./cmd/civmctl` passou.
+  - `golangci-lint run ./... --timeout=5m` passou com `0 issues`.
+  - `systemd-analyze verify deploy/systemd/*.service deploy/systemd/*.timer`
+    passou.
+  - `git diff --check` passou.
+- **Open items:**
+  - Ainda falta criar branch limpa, commit(s), publicar PR e decidir
+    rollout local/VM.
+  - Limpeza de branches locais/remotas mergeadas deve ocorrer depois de
+    confirmar refs e PRs no GitHub.

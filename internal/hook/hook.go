@@ -16,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/advoq/civm/internal/civm"
 )
 
 type Event string
@@ -39,6 +41,7 @@ type Action struct {
 	Path     string `json:"path,omitempty"`
 	Executed bool   `json:"executed"`
 	Error    string `json:"error,omitempty"`
+	Warning  string `json:"warning,omitempty"`
 }
 
 type Result struct {
@@ -76,8 +79,8 @@ type Options struct {
 func DefaultOptionsFromEnv(event Event) Options {
 	return Options{
 		Event:           event,
-		PreCleanupPct:   70,
-		HardFailPct:     90,
+		PreCleanupPct:   civm.DefaultPreCleanupPct,
+		HardFailPct:     civm.DefaultHardFailPct,
 		FilesystemPath:  "/",
 		RunnerTemp:      os.Getenv("RUNNER_TEMP"),
 		GitHubWorkspace: os.Getenv("GITHUB_WORKSPACE"),
@@ -110,11 +113,15 @@ func Run(ctx context.Context, opts Options) Result {
 			// Disk pressure mode: purga caches ($HOME/.cache/go-build, npm, etc.)
 			// para liberar espaço suficiente.
 			res.Actions = append(res.Actions, cleanup(opts, ctx, true)...)
-			if err := firstActionError(res.Actions); err != nil {
-				return finish(opts, errorResult(res, err))
-			}
 			if usedAfter, err := diskUsedPct(opts); err == nil {
 				res.DiskUsedPct = usedAfter
+			}
+			if err := firstActionError(res.Actions); err != nil {
+				if onlyIgnorableCacheDeleteRaces(res.Actions) {
+					demoteIgnorableCacheDeleteRaces(res.Actions)
+				} else {
+					return finish(opts, errorResult(res, err))
+				}
 			}
 		}
 		if res.DiskUsedPct >= opts.HardFailPct {
@@ -314,6 +321,36 @@ func firstActionError(actions []Action) error {
 	return nil
 }
 
+func onlyIgnorableCacheDeleteRaces(actions []Action) bool {
+	hasIgnorable := false
+	for _, a := range actions {
+		if a.Error == "" {
+			continue
+		}
+		if !isIgnorableCacheDeleteRace(a) {
+			return false
+		}
+		hasIgnorable = true
+	}
+	return hasIgnorable
+}
+
+func demoteIgnorableCacheDeleteRaces(actions []Action) {
+	for i := range actions {
+		if isIgnorableCacheDeleteRace(actions[i]) {
+			actions[i].Warning = actions[i].Error
+			actions[i].Error = ""
+		}
+	}
+}
+
+func isIgnorableCacheDeleteRace(a Action) bool {
+	if a.Name != "cache" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(a.Error), "directory not empty")
+}
+
 func appendLog(opts Options, res Result) error {
 	if opts.LogPath == "" || !opts.Execute {
 		return nil
@@ -365,6 +402,8 @@ func RenderText(w io.Writer, res Result) {
 		}
 		if a.Error != "" {
 			status = "error: " + a.Error
+		} else if a.Warning != "" {
+			status = "warn: " + a.Warning
 		}
 		fmt.Fprintf(w, "  %-14s %-50s %s\n", a.Name, a.Path, status)
 	}
@@ -372,10 +411,10 @@ func RenderText(w io.Writer, res Result) {
 
 func applyDefaults(opts *Options) {
 	if opts.PreCleanupPct == 0 {
-		opts.PreCleanupPct = 70
+		opts.PreCleanupPct = civm.DefaultPreCleanupPct
 	}
 	if opts.HardFailPct == 0 {
-		opts.HardFailPct = 90
+		opts.HardFailPct = civm.DefaultHardFailPct
 	}
 	if opts.FilesystemPath == "" {
 		opts.FilesystemPath = "/"

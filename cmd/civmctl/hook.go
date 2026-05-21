@@ -29,8 +29,8 @@ func runHookEvent(args []string) int {
 	fs.SetOutput(io.Discard)
 	execute := fs.Bool("execute", false, "aplicar limpeza; wrappers ACTIONS_RUNNER_HOOK_* usam true")
 	jsonOut := fs.Bool("json", false, "saida JSON")
-	preCleanupPct := fs.Int("pre-cleanup-pct", 70, "job-started: limpar se disco usado >= pct")
-	hardFailPct := fs.Int("hard-fail-pct", 90, "job-started: rejeitar job se disco usado >= pct apos limpeza")
+	preCleanupPct := fs.Int("pre-cleanup-pct", civm.DefaultPreCleanupPct, "job-started: limpar se disco usado >= pct")
+	hardFailPct := fs.Int("hard-fail-pct", civm.DefaultHardFailPct, "job-started: rejeitar job se disco usado >= pct apos limpeza")
 	timeoutMin := fs.Int("timeout", civm.DefaultCleanupTimeoutMinutes, "timeout em minutos")
 	if err := fs.Parse(args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de hook:", err)

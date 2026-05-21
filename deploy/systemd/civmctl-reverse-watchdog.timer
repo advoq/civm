@@ -1,6 +1,6 @@
 [Unit]
 Description=Trigger civmctl-reverse-watchdog 4-em-4h
-Documentation=https://github.com/emersonbusson/civm/blob/main/internal/reversewatchdog/
+Documentation=https://github.com/advoq/civm/blob/main/internal/reversewatchdog/
 
 [Timer]
 # 4-em-4h: alerta se disk-watchdog (que roda hourly) parar de disparar

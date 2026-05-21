@@ -17,7 +17,7 @@ func runCapacity(args []string) int {
 	fs.SetOutput(io.Discard)
 	jsonOut := fs.Bool("json", false, "saida JSON para Busson/outros integradores")
 	path := fs.String("path", "/", "filesystem a medir")
-	maxDiskPct := fs.Int("max-disk-pct", 85, "accepting_jobs=false se disco usado >= pct")
+	maxDiskPct := fs.Int("max-disk-pct", civm.DefaultCapacityMaxDiskPct, "accepting_jobs=false se disco usado >= pct")
 	timeoutSec := fs.Int("timeout", civm.DefaultHealthTimeoutSeconds, "timeout em segundos")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de capacity:", err)
