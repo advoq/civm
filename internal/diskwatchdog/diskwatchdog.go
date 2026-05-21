@@ -121,8 +121,8 @@ func Check(ctx context.Context, opts Options) Result {
 	cleanOpts.WorkDir = opts.WorkDir
 	cleanOpts.TmpDir = opts.TmpDir
 	// Aggressive: shorter thresholds when disk pressure
-	cleanOpts.TmpThreshold = 24 * time.Hour
-	cleanOpts.WorkThreshold = 7 * 24 * time.Hour
+	cleanOpts.TmpThreshold = 1 * time.Hour
+	cleanOpts.WorkThreshold = 24 * time.Hour
 	cleanOpts.RunFn = opts.RunFn
 	cleanOpts.ActivityFn = opts.ActivityFn
 	r.CleanupActions = cleanup.Run(ctx, cleanOpts)
@@ -161,7 +161,7 @@ func (r Result) Render(w io.Writer) {
 	}
 	if len(r.CleanupActions) > 0 {
 		_, _ = fmt.Fprintln(w)
-		_, _ = fmt.Fprintln(w, "Aggressive cleanup actions (TmpThreshold=24h, WorkThreshold=7d):")
+		_, _ = fmt.Fprintln(w, "Aggressive cleanup actions (TmpThreshold=1h, WorkThreshold=24h):")
 		for _, a := range r.CleanupActions {
 			status := "(dry-run)"
 			if a.Err != nil {

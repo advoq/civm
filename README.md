@@ -72,7 +72,7 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl capacity [--json]` | readiness read-only: disco, services runner, workers ativos e `accepting_jobs` |
 | `civmctl metrics dump` | grava métricas Prometheus textfile para node_exporter |
 | `civmctl bootstrap-everything` | wrapper: cp systemd units + daemon-reload + bootstrap |
-| `civmctl disk-watchdog` | dispara cleanup agressivo se disk >threshold (default 70%); fail-closed se a VM não estiver ociosa |
+| `civmctl disk-watchdog` | dispara cleanup agressivo se disk >threshold (default 60%); fail-closed se a VM não estiver ociosa |
 | `civmctl disk-audit [--json]` | relatório read-only de donos seguros de disco: `_work`, caches runner/home, `codespace`, Docker, `/var/log`, `/var/cache` |
 | `civmctl ci local-report` | posta commit status via gh api (cross-peer manual reporter) |
 
