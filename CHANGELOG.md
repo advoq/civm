@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/advoq/civm/compare/v1.5.1...v1.6.0) (2026-05-21)
+
+
+### Features
+
+* **hook:** graduated cache cleanup with per-cache caps + warn-tolerant routine ([#45](https://github.com/advoq/civm/issues/45)) ([cb8f3be](https://github.com/advoq/civm/commit/cb8f3be1d593716124dbfded997a0d258704d71d))
+
 ## [1.5.1](https://github.com/advoq/civm/compare/v1.5.0...v1.5.1) (2026-05-21)
 
 
