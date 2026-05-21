@@ -1,6 +1,6 @@
 [Unit]
 Description=Trigger civmctl-cleanup.service diariamente
-Documentation=https://github.com/emersonbusson/civm/blob/main/docs/specs/civmctl/PRD.md
+Documentation=https://github.com/advoq/civm/blob/main/docs/specs/civmctl/PRD.md
 
 [Timer]
 OnCalendar=*-*-* 04:00:00 UTC

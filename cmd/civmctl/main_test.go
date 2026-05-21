@@ -59,7 +59,7 @@ func TestBootstrapEverythingHelpers(t *testing.T) {
 	if got := joinArgs([]string{"cp", "a", "b"}); got != "cp a b" {
 		t.Fatalf("joinArgs = %q", got)
 	}
-	steps := buildBootstrapEverythingSteps("/opt/civm/deploy/systemd", true, true, true, false)
+	steps := buildBootstrapEverythingSteps("/opt/civm/deploy/systemd", true, true, true, true, false)
 	if len(steps) == 0 || !bytes.Contains([]byte(steps[0].WouldDo), []byte("/usr/local/bin/civmctl")) {
 		t.Fatalf("bootstrap-everything deve validar /usr/local/bin/civmctl, step=%+v", steps)
 	}
@@ -126,6 +126,18 @@ func TestRunRunnerWatchdogRejectsNonPositiveMaxRunAge(t *testing.T) {
 	t.Parallel()
 	if code := runRunnerWatchdog([]string{"--max-run-age=0s"}); code != exitUsage {
 		t.Fatalf("code = %d, want %d", code, exitUsage)
+	}
+}
+
+func TestRunDiskAuditRejectsInvalidBounds(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{
+		{"--limit=0"},
+		{"--timeout=0"},
+	} {
+		if code := runDiskAudit(args); code != exitUsage {
+			t.Fatalf("runDiskAudit(%v) code = %d, want %d", args, code, exitUsage)
+		}
 	}
 }
 

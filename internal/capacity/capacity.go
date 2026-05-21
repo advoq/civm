@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/advoq/civm/internal/civm"
 )
 
 type Report struct {
@@ -31,7 +33,7 @@ type Options struct {
 }
 
 func DefaultOptions() Options {
-	return Options{Path: "/", MaxDiskPct: 85, StatfsFn: defaultStatfs, RunFn: defaultRun}
+	return Options{Path: "/", MaxDiskPct: civm.DefaultCapacityMaxDiskPct, StatfsFn: defaultStatfs, RunFn: defaultRun}
 }
 
 func Check(ctx context.Context, opts Options) Report {
@@ -39,7 +41,7 @@ func Check(ctx context.Context, opts Options) Report {
 		opts.Path = "/"
 	}
 	if opts.MaxDiskPct == 0 {
-		opts.MaxDiskPct = 85
+		opts.MaxDiskPct = civm.DefaultCapacityMaxDiskPct
 	}
 	if opts.StatfsFn == nil {
 		opts.StatfsFn = defaultStatfs

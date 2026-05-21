@@ -69,6 +69,8 @@ diretório.
 
 `civmctl-runner-watchdog.timer` roda sem `--rerun-network-failures` por
 padrão; ele repara hooks e runner offline/failed, mas não reroda CI remoto.
+`civmctl-metrics.timer` roda read-only e grava apenas o textfile Prometheus
+em `/var/lib/node_exporter/textfile_collector/civm.prom`.
 
 `civmctl runner watchdog --execute --rerun-network-failures --max-run-age=6h`
 é permitido só para auto-recuperação de falha transiente de rede/checkout:
@@ -95,6 +97,13 @@ repos a partir dos services `actions.runner.*`, valida scripts `.sh`
 gerenciados de hooks de job e não depende da fleet `advoq/*` estar hardcoded.
 Use `--repos=owner/a,owner/b` quando a inferência local não for suficiente, e
 `--repos=none` para pular GitHub em auditoria local/offline.
+
+`civmctl capacity --json` é o endpoint read-only de prontidão: usa hard-fail
+de disco em 90% para `accepting_jobs=false` e expõe services/workers ativos.
+`civmctl disk-audit --json` é o endpoint read-only de ownership de disco:
+reporta `_work`, caches locais, `$HOME/codespace`, Docker reclaimable,
+`/var/log` e `/var/cache`; clones em `$HOME/codespace` nunca são apagados
+automaticamente pelo civm.
 
 `civmctl peer-status --repo=owner/repo --json` preserva o contrato JSON de um
 peer único. `civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml`
@@ -158,7 +167,7 @@ ssh gha-ubuntu-2404 'civmctl idle-check'
 Warning `LAST cleanup timer nunca rodou` é aceitável até o primeiro
 disparo real do timer diário. Se continuar após a próxima janela diária
 esperada, pausar qualquer conclusão de release e tratar como ação
-operacional na VM.
+operacional na VM, começando pelo journal de `civmctl-cleanup.service`.
 
 ## DEFERRED (features pensadas, ainda não implementadas)
 

@@ -118,6 +118,7 @@ func (c *Collector) Collect(ctx context.Context) Report {
 	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_DISK", "civmctl-disk-watchdog.timer", StatusCritical))
 	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_RUNNER", "civmctl-runner-watchdog.timer", StatusWarn))
 	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_REVERSE", "civmctl-reverse-watchdog.timer", StatusWarn))
+	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_METRICS", "civmctl-metrics.timer", StatusWarn))
 	r.Checks = append(r.Checks, c.checkLastCleanup(ctx))
 	return r
 }
@@ -309,9 +310,12 @@ func defaultRunnerUnits(ctx context.Context) ([]string, error) {
 	return units, nil
 }
 
+var commandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).Output()
+}
+
 func defaultLastCleanup(ctx context.Context) (*time.Time, string, error) {
-	cmd := exec.CommandContext(ctx, "journalctl", "-u", "civmctl-cleanup", "--since", "7 days ago", "--no-pager", "--reverse", "-n", "1", "-o", "short-iso")
-	out, err := cmd.Output()
+	out, err := commandOutput(ctx, "journalctl", "-u", "civmctl-cleanup.service", "--since", "7 days ago", "--no-pager", "--reverse", "-n", "1", "-o", "short-iso")
 	if err != nil {
 		return nil, "", nil
 	}

@@ -371,6 +371,7 @@ func TestRun_WatchdogTimer_OnlyCleanup(t *testing.T) {
 	opts.WatchdogTimer = false
 	opts.ReverseWatchdog = false
 	opts.RunnerWatchdog = false
+	opts.MetricsTimer = false
 	opts.Execute = false
 	calls := []string{}
 	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -399,6 +400,9 @@ func TestRun_WatchdogTimer_OnlyCleanup(t *testing.T) {
 		}
 		if strings.Contains(c, "civmctl-runner-watchdog.timer") {
 			t.Errorf("RunnerWatchdog=false NAO deveria chamar runner-watchdog.timer; got: %q", c)
+		}
+		if strings.Contains(c, "civmctl-metrics.timer") {
+			t.Errorf("MetricsTimer=false NAO deveria chamar metrics.timer; got: %q", c)
 		}
 	}
 }
@@ -442,11 +446,18 @@ func TestTimerListIncludesRunnerWatchdogByDefault(t *testing.T) {
 	if !strings.Contains(timers, "civmctl-runner-watchdog.timer") {
 		t.Fatalf("timerList default = %s, want runner-watchdog", timers)
 	}
+	if !strings.Contains(timers, "civmctl-metrics.timer") {
+		t.Fatalf("timerList default = %s, want metrics", timers)
+	}
 	opts := DefaultOptions()
 	opts.RunnerWatchdog = false
+	opts.MetricsTimer = false
 	timers = strings.Join(timerList(opts), ",")
 	if strings.Contains(timers, "civmctl-runner-watchdog.timer") {
 		t.Fatalf("RunnerWatchdog=false still included runner-watchdog: %s", timers)
+	}
+	if strings.Contains(timers, "civmctl-metrics.timer") {
+		t.Fatalf("MetricsTimer=false still included metrics: %s", timers)
 	}
 }
 

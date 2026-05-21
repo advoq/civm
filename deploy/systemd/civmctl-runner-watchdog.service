@@ -1,6 +1,6 @@
 [Unit]
 Description=civmctl runner watchdog (auto-repair do GitHub Actions runner)
-Documentation=https://github.com/emersonbusson/civm/blob/main/docs/specs/civmctl/PRD.md
+Documentation=https://github.com/advoq/civm/blob/main/docs/specs/civmctl/PRD.md
 Wants=network-online.target
 After=network-online.target
 ConditionPathExists=/usr/local/bin/civmctl

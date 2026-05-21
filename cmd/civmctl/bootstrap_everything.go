@@ -31,6 +31,7 @@ func runBootstrapEverything(args []string) int {
 	watchdog := fs.Bool("watchdog", true, "habilitar disk-watchdog timer")
 	runnerWatchdog := fs.Bool("runner-watchdog", true, "habilitar runner-watchdog timer")
 	reverseWatchdog := fs.Bool("reverse-watchdog", true, "habilitar reverse-watchdog timer")
+	metricsTimer := fs.Bool("metrics-timer", true, "habilitar metrics timer")
 	timeoutMin := fs.Int("timeout", civm.DefaultCleanupTimeoutMinutes, "timeout total em minutos")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args:", err)
@@ -46,7 +47,7 @@ func runBootstrapEverything(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutMin)*time.Minute)
 	defer cancel()
 
-	steps := buildBootstrapEverythingSteps(*unitsSource, *watchdog, *runnerWatchdog, *reverseWatchdog, *execute)
+	steps := buildBootstrapEverythingSteps(*unitsSource, *watchdog, *runnerWatchdog, *reverseWatchdog, *metricsTimer, *execute)
 	results := runEverythingSteps(ctx, steps, *execute)
 	renderEverythingTable(results, *execute, os.Stdout)
 
@@ -71,7 +72,7 @@ type everythingResult struct {
 	Err      error
 }
 
-func buildBootstrapEverythingSteps(unitsSource string, watchdog, runnerWatchdog, reverseWatchdog, execute bool) []everythingStep {
+func buildBootstrapEverythingSteps(unitsSource string, watchdog, runnerWatchdog, reverseWatchdog, metricsTimer, execute bool) []everythingStep {
 	systemdDest := civm.DefaultSystemdDir
 	cleanUnitsSource, unitsSourceErr := civm.CleanDir(unitsSource, "--units-source")
 	timerNames := []string{"civmctl-cleanup"}
@@ -83,6 +84,9 @@ func buildBootstrapEverythingSteps(unitsSource string, watchdog, runnerWatchdog,
 	}
 	if reverseWatchdog {
 		timerNames = append(timerNames, "civmctl-reverse-watchdog")
+	}
+	if metricsTimer {
+		timerNames = append(timerNames, "civmctl-metrics")
 	}
 
 	steps := []everythingStep{
@@ -149,13 +153,14 @@ func buildBootstrapEverythingSteps(unitsSource string, watchdog, runnerWatchdog,
 		},
 		everythingStep{
 			Name:    "bootstrap_run",
-			WouldDo: "civmctl bootstrap " + execFlag(execute) + " --watchdog=" + boolStr(watchdog) + " --runner-watchdog=" + boolStr(runnerWatchdog) + " --reverse-watchdog=" + boolStr(reverseWatchdog),
+			WouldDo: "civmctl bootstrap " + execFlag(execute) + " --watchdog=" + boolStr(watchdog) + " --runner-watchdog=" + boolStr(runnerWatchdog) + " --reverse-watchdog=" + boolStr(reverseWatchdog) + " --metrics-timer=" + boolStr(metricsTimer),
 			Apply: func(ctx context.Context) error {
 				opts := bootstrap.DefaultOptions()
 				opts.Execute = true
 				opts.WatchdogTimer = watchdog
 				opts.RunnerWatchdog = runnerWatchdog
 				opts.ReverseWatchdog = reverseWatchdog
+				opts.MetricsTimer = metricsTimer
 				results := bootstrap.Run(ctx, opts)
 				for _, r := range results {
 					if r.Err != nil {

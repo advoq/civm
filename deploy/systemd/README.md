@@ -1,16 +1,18 @@
 # systemd units para civmctl
 
-4 timers systemd disponíveis:
+5 timers systemd disponíveis:
 - `civmctl-cleanup.timer` — diário 04:00 UTC, full cleanup (Docker, /tmp,
   _work, apt). Idempotente e fail-closed quando há job/build ativo.
 - `civmctl-disk-watchdog.timer` — hourly, dispara cleanup agressivo se
-  disk >80%. Reativo a picos de uso entre execuções diárias e usa o mesmo
+  disk >70%. Reativo a picos de uso entre execuções diárias e usa o mesmo
   guard de ociosidade do cleanup.
 - `civmctl-runner-watchdog.timer` — a cada ~2min depois do boot, repara
   hooks e reinicia runners offline/failed se a VM estiver idle. Não faz
   rerun automático por padrão.
 - `civmctl-reverse-watchdog.timer` — 4-em-4h, alerta se o disk-watchdog
   parou de disparar.
+- `civmctl-metrics.timer` — a cada minuto, grava métricas Prometheus no
+  textfile collector do node_exporter.
 
 Instalação manual após `civmctl bootstrap` ter colocado o binário em
 `/usr/local/bin/civmctl`.
@@ -23,16 +25,16 @@ Instalação manual após `civmctl bootstrap` ter colocado o binário em
 sudo cp civmctl-*.service /etc/systemd/system/
 sudo cp civmctl-*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer
+sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer civmctl-metrics.timer
 ```
 
-O disk-watchdog checa disk %; se >80%, roda
+O disk-watchdog checa disk %; se >70%, roda
 `civmctl disk-watchdog --execute`, que delega para
 `civmctl cleanup --execute` com thresholds agressivos
 (TmpThreshold=24h, WorkThreshold=7d em vez de 7d/14d default).
 
 (`civmctl bootstrap --execute --runner-watchdog=true
---reverse-watchdog=true` faz isso automaticamente quando os arquivos estão
+--reverse-watchdog=true --metrics-timer=true` faz isso automaticamente quando os arquivos estão
 em `/etc/systemd/system/`. O step `install_systemd_timers` só roda
 `enable --now` se os unit files já existem.)
 
@@ -43,17 +45,20 @@ systemctl list-timers civmctl-cleanup.timer
 systemctl list-timers civmctl-disk-watchdog.timer
 systemctl list-timers civmctl-runner-watchdog.timer
 systemctl list-timers civmctl-reverse-watchdog.timer
+systemctl list-timers civmctl-metrics.timer
 systemctl status civmctl-cleanup.timer
 journalctl -u civmctl-runner-watchdog.service --since "2 hours ago"
 journalctl -u civmctl-cleanup.service --since "7 days ago"
 civmctl health
 civmctl doctor --repos=auto --json
+civmctl capacity --json
+civmctl disk-audit --json
 ```
 
 ## Desabilitar
 
 ```bash
-sudo systemctl disable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer
+sudo systemctl disable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer civmctl-metrics.timer
 sudo rm /etc/systemd/system/civmctl-*.service /etc/systemd/system/civmctl-*.timer
 sudo systemctl daemon-reload
 ```

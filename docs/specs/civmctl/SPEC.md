@@ -17,10 +17,11 @@ Este SPEC nasceu no bootstrap do `civmctl`; o hardening posterior adiciona:
   `restart/remove/upgrade --execute`.
 - `internal/health` valida `civmctl-cleanup.timer`,
   `civmctl-disk-watchdog.timer`, `civmctl-runner-watchdog.timer` e
-  `civmctl-reverse-watchdog.timer`.
+  `civmctl-reverse-watchdog.timer`; emenda posterior adiciona
+  `civmctl-metrics.timer` como warning.
 - `bootstrap`/`bootstrap-everything` expõem `--runner-watchdog=true` e
-  `--reverse-watchdog=true`, habilitando os timers quando os unit files
-  estão instalados.
+  `--reverse-watchdog=true`/`--metrics-timer=true`, habilitando os timers
+  quando os unit files estão instalados.
 - `civmctl runner watchdog` repara hooks, reinicia runner offline/failed em
   VM idle e, com `--rerun-network-failures --max-run-age=6h`, reroda uma
   vez falhas transientes de rede/checkout em PR aberto recente. O timer
@@ -62,11 +63,13 @@ Este SPEC nasceu no bootstrap do `civmctl`; o hardening posterior adiciona:
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-cleanup.service` | unit que roda `civmctl cleanup --execute` |
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-cleanup.timer` | timer diário 04:00 UTC |
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-disk-watchdog.service` | unit que roda `civmctl disk-watchdog --execute` |
-| `/home/emdev/codespace/civm/deploy/systemd/civmctl-disk-watchdog.timer` | timer hourly com cleanup agressivo se disk >80% |
+| `/home/emdev/codespace/civm/deploy/systemd/civmctl-disk-watchdog.timer` | timer hourly com cleanup agressivo se disk >70% |
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-runner-watchdog.service` | unit que roda `civmctl runner watchdog --execute --repos=auto --json` |
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-runner-watchdog.timer` | timer OnBootSec=2min, OnUnitActiveSec=2min |
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-reverse-watchdog.service` | unit que alerta se disk-watchdog ficou stale |
 | `/home/emdev/codespace/civm/deploy/systemd/civmctl-reverse-watchdog.timer` | timer 4h alarm-of-alarm |
+| `/home/emdev/codespace/civm/deploy/systemd/civmctl-metrics.service` | unit que grava metrics Prometheus textfile |
+| `/home/emdev/codespace/civm/deploy/systemd/civmctl-metrics.timer` | timer minutely para metrics read-only |
 | `/home/emdev/codespace/civm/deploy/systemd/README.md` | instalação manual: `cp` + `systemctl enable --now` |
 
 ### Documentação
@@ -135,7 +138,7 @@ type Report struct {
     Disk    DiskInfo
     Memory  MemInfo
     Runners []RunnerStatus
-    Timers  []TimerStatus  // cleanup, disk, runner, reverse
+    Timers  []TimerStatus  // cleanup, disk, runner, reverse, metrics
     LastCleanup *time.Time
     Exit    int  // 0/1/2
 }
@@ -145,7 +148,7 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
     // 2. /proc/meminfo MemAvailable
     // 3. systemctl list-units --type=service "actions.runner.*"
     // 4. systemctl is-enabled/is-active civmctl-* timers
-    // 5. journalctl -u civmctl-cleanup --since "24h ago" --reverse -n1
+    // 5. journalctl -u civmctl-cleanup.service --since "24h ago" --reverse -n1
 }
 
 func (r Report) Render(w io.Writer) { ... }  // tabela ASCII
@@ -232,7 +235,7 @@ Steps:
 6. Install Docker CE (apt repo oficial Docker)
 7. Install gh CLI (apt repo oficial cli.github.com)
 8. Install systemd timers (cleanup, disk-watchdog, runner-watchdog,
-   reverse-watchdog)
+   reverse-watchdog, metrics)
 
 ### systemd files
 

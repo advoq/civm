@@ -44,7 +44,8 @@ cleanup e watchdogs automatizados via systemd timers.
 provisionamento, manutenção e diagnóstico (`version-pins`, `bootstrap`,
 `cleanup`, `health`, `doctor`, `idle-check`, `runner`, watchdogs e CI
 helpers). Idempotente. Dry-run por padrão em mutações destrutivas. Timers
-systemd para cleanup, disk-watchdog, runner-watchdog e reverse-watchdog.
+systemd para cleanup, disk-watchdog, runner-watchdog, reverse-watchdog e
+metrics.
 
 Alternativas consideradas e descartadas:
 
@@ -64,9 +65,9 @@ Alternativas consideradas e descartadas:
   apt cache. Default `--dry-run`. Reporta bytes recuperados. Em `--execute`,
   aborta se detectar job/build ativo ou se não conseguir provar host ocioso.
 - **RF-4** `civmctl health`: exibe disk free, memória, runners ativos,
-  timers cleanup/disk/runner/reverse e última execução de cleanup. Exit 0 OK, 1
-  warning, 2 critical. Cleanup/disk-watchdog ausente é crítico;
-  runner-watchdog/reverse-watchdog ausentes são warning.
+  timers cleanup/disk/runner/reverse/metrics e última execução de cleanup.
+  Exit 0 OK, 1 warning, 2 critical. Cleanup/disk-watchdog ausente é crítico;
+  runner-watchdog/reverse-watchdog/metrics ausentes são warning.
 - **RF-5** `civmctl runner add --token=X --url=Y --labels=civm`:
   registra novo runner GitHub. Idempotente (skip se já existe).
 - **RF-6** `civmctl doctor [--repos=a/b,c/d] [--workflow=ci.yml] [--json]`:
@@ -144,6 +145,7 @@ TIMER_CLEANUP civmctl-cleanup.timer         [OK]
 TIMER_DISK    civmctl-disk-watchdog.timer   [OK]
 TIMER_RUNNER  civmctl-runner-watchdog.timer [OK]
 TIMER_REVERSE civmctl-reverse-watchdog.timer [OK]
+TIMER_METRICS civmctl-metrics.timer         [OK]
 LAST    cleanup 6h ago, recovered 14.8 GB            [OK]
 EXIT    0
 ```
@@ -187,7 +189,7 @@ Fases sequenciais, cada uma comitavel:
 4. `internal/cleanup/` + `cmd/civmctl/cleanup.go`
 5. `internal/bootstrap/` + `cmd/civmctl/bootstrap.go`
 6. `cmd/civmctl/runner.go` (gh CLI wrapper)
-7. `deploy/systemd/civmctl-{cleanup,disk-watchdog,runner-watchdog,reverse-watchdog}.{service,timer}`
+7. `deploy/systemd/civmctl-{cleanup,disk-watchdog,runner-watchdog,reverse-watchdog,metrics}.{service,timer}`
 8. Update `runbooks/MULTI-PROJECT-RUNNER.md` e `README.md`
 9. Update `.github/workflows/ci.yml` para build + test
 10. Update `MEMORY.md` com hashes finais

@@ -127,7 +127,7 @@ documentado neste arquivo. Rollout em VM real deve ser registrado em
 ## Próximos passos (humano)
 
 1. Esperar o primeiro disparo diário de `civmctl-cleanup.timer` e validar
-   `journalctl -u civmctl-cleanup`.
+   `journalctl -u civmctl-cleanup.service`.
 2. Quando a VM estiver idle, rodar `civmctl cleanup --execute` se o dry-run
    continuar mostrando ganho relevante.
 3. Reportar de volta para atualizar `internal/specs/specs.go` se

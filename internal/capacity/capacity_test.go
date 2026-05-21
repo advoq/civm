@@ -75,6 +75,9 @@ func TestCheckAppliesDefaultsForEmptyOptions(t *testing.T) {
 	if r.DiskPath != "/" {
 		t.Fatalf("Path default = %q", r.DiskPath)
 	}
+	if !r.AcceptingJobs {
+		t.Fatalf("default hard-fail threshold should accept 50%% disk: %+v", r)
+	}
 }
 
 func TestCountRunnerServicesOnRunFail(t *testing.T) {

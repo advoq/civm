@@ -67,6 +67,9 @@ civmctl cleanup --execute
 civmctl parity
 civmctl health
 civmctl doctor --repos=auto --json
+civmctl capacity --json
+civmctl disk-audit --json
+civmctl metrics dump --stdout
 civmctl idle-check
 
 # Hooks de job (scripts .sh gerenciados)

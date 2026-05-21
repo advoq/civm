@@ -8,6 +8,23 @@ paths:
 
 # Observability rules
 
+## civm VM observability
+
+`civmctl doctor --repos=auto --json` e `civmctl capacity --json` são a rota
+read-only canônica para estado da VM/runner. `capacity` usa 90% de disco como
+hard-fail para `accepting_jobs=false`; pressão antes do job começa em 70% via
+`disk-watchdog` e hook `job-started`.
+
+`civmctl disk-audit --json` reporta ownership seguro de disco: `_work`,
+`_work/_tool`, `_work/_actions`, `$HOME/.cache`, `$HOME/go/pkg`,
+`$HOME/codespace`, Docker reclaimable, `/var/log` e `/var/cache`. Clones em
+`$HOME/codespace` são observabilidade-only e não são removidos
+automaticamente.
+
+`civmctl-metrics.timer` deve ficar habilitado junto com cleanup,
+disk-watchdog, runner-watchdog e reverse-watchdog. Metrics missing é warning
+em `civmctl health`; cleanup e disk-watchdog missing continuam críticos.
+
 ## Logs estruturados
 
 ### Backend (Go)

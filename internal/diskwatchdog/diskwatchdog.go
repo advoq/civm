@@ -51,7 +51,7 @@ type Result struct {
 // Options control the watchdog.
 type Options struct {
 	Path         string // diretorio a monitorar (ex: "/")
-	ThresholdPct int    // disparar cleanup se usedPct > ThresholdPct (default 80)
+	ThresholdPct int    // disparar cleanup se usedPct > ThresholdPct (default 70)
 	Execute      bool   // false = dry-run (apenas verifica + reporta)
 	WorkDir      string // passado para cleanup.Options.WorkDir
 	TmpDir       string // passado para cleanup.Options.TmpDir

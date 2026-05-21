@@ -123,8 +123,8 @@ func TestCheck_DefaultsApplied(t *testing.T) {
 	if r.Path != "/" {
 		t.Errorf("Path default = %q, want /", r.Path)
 	}
-	if r.ThresholdPct != 80 {
-		t.Errorf("ThresholdPct default = %d, want 80", r.ThresholdPct)
+	if r.ThresholdPct != 70 {
+		t.Errorf("ThresholdPct default = %d, want 70", r.ThresholdPct)
 	}
 }
 

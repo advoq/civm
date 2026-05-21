@@ -172,12 +172,14 @@ sudo civmctl bootstrap --execute
 sudo cp /opt/civm/deploy/systemd/civmctl-*.service /etc/systemd/system/
 sudo cp /opt/civm/deploy/systemd/civmctl-*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer
+sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer civmctl-metrics.timer
 
 # 6. Health check (deve retornar exit 0)
 civmctl parity
 civmctl health
 civmctl doctor --repos=auto --json
+civmctl capacity --json
+civmctl disk-audit --json
 ```
 
 ### Atualizar civmctl em runner existente
@@ -234,7 +236,7 @@ Steps idempotentes do bootstrap (todos check-then-apply):
 | `install_docker` | apt repo Docker CE + plugin compose | `docker --version` reporta 28.0.4 |
 | `install_gh` | apt repo cli.github.com + apt install gh | `gh --version` reporta 2.89.0 |
 | `install_yq` | baixa `yq_linux_amd64` com SHA256 e instala em `/usr/local/bin/yq` | `yq --version` reporta versao alvo |
-| `install_systemd_timers` | enable --now cleanup, disk-watchdog, runner-watchdog e reverse-watchdog | systemctl is-enabled retorna enabled |
+| `install_systemd_timers` | enable --now cleanup, disk-watchdog, runner-watchdog, reverse-watchdog e metrics | systemctl is-enabled retorna enabled |
 
 Cleanup automatico (systemd timer diário 04:00 UTC):
 
@@ -593,14 +595,14 @@ sudo crontab -l 2>/dev/null | { cat; echo "0 3 * * * /opt/civm/cleanup.sh >> /va
 
 ### Watchdog legado de espaco em disco
 
-Cron legado que dispara cleanup agressivo se disco passar de 80%:
+Cron legado que dispara cleanup agressivo se disco passar de 70%:
 
 ```bash
 #!/usr/bin/env bash
 # /opt/civm/disk-watchdog.sh — roda a cada hora
 # Crontab: 0 * * * * /opt/civm/disk-watchdog.sh
 
-THRESHOLD=80
+THRESHOLD=70
 USAGE=$(df / --output=pcent | tail -1 | tr -dc '0-9')
 
 if [ "$USAGE" -gt "$THRESHOLD" ]; then
@@ -809,9 +811,11 @@ recusa roots de sistema/temporários como `/etc`, `/usr`, `/proc`, `/sys`,
 Contrato dos hooks:
 
 - `job-started` checa pressão de disco antes do job. Se o uso estiver acima
-  do limite de pré-cleanup, limpa paths seguros de workspace/cache primeiro.
-  Se o disco continuar acima do limite hard-fail, rejeita o job antes de a
-  VM entrar em estado ruim.
+  do limite de pré-cleanup (70%), limpa paths seguros de workspace/cache
+  primeiro. Se o disco continuar acima do limite hard-fail (90%), rejeita o
+  job antes de a VM entrar em estado ruim. Races de cache como
+  `directory not empty` viram warning quando o disco já ficou abaixo do
+  hard-fail.
 - `job-completed` remove workspace e temporários por job, poda estado Docker
   recuperável, limpa apt/journal e roda `fstrim`.
 - Ambos preservam `_work/_tool` e `_work/_actions`; estes são caches quentes
@@ -871,9 +875,17 @@ VM pelo layout de arquivos. Use o contrato CLI estável:
 civmctl capacity --json
 civmctl health --json
 civmctl doctor --repos=auto --json
+civmctl disk-audit --json
 ```
 
 `capacity --json` is the lightweight readiness endpoint. It reports disk
 pressure, active runner services, active `Runner.Worker` count, and an
 `accepting_jobs` boolean suitable for dashboards, orchestration, or guarded
 commands in Busson.
+
+`disk-audit --json` is the read-only ownership endpoint. It reports the safe
+roots that explain most disk growth on the VM: runner `_work`,
+`_work/_tool`, `_work/_actions`, `$HOME/.cache`, `$HOME/go/pkg`,
+`$HOME/codespace`, Docker reclaimable, `/var/log` and `/var/cache`.
+Directories under `$HOME/codespace` are reported for human decision only;
+civm does not auto-delete peer/workspace clones.

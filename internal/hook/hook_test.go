@@ -159,6 +159,56 @@ func TestJobStartedPurgesHotCachesUnderDiskPressure(t *testing.T) {
 	}
 }
 
+func TestJobStartedDemotesCacheDeleteRaceWhenDiskDropsBelowHardFail(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("RUNNER_TEMP", "")
+	t.Setenv("GITHUB_WORKSPACE", "")
+	t.Setenv("GITHUB_REPOSITORY", "")
+	t.Setenv("GITHUB_RUN_ID", "")
+
+	statCalls := 0
+	opts := DefaultOptionsFromEnv(EventJobStarted)
+	opts.Execute = true
+	opts.PreCleanupPct = 70
+	opts.HardFailPct = 90
+	opts.StatfsFn = func(string) (uint64, uint64, error) {
+		statCalls++
+		if statCalls == 1 {
+			return 100, 20, nil // 80% used, triggers pressure cleanup.
+		}
+		return 100, 35, nil // 65% used after cleanup, below hard fail.
+	}
+	opts.RemoveAllFn = func(p string) error {
+		if strings.Contains(p, ".cache/go-build") {
+			return fmt.Errorf("remove %s: directory not empty", p)
+		}
+		return nil
+	}
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.LogPath = ""
+	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
+	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+
+	res := Run(context.Background(), opts)
+	if res.Decision != DecisionCleanupApplied || res.ExitCode != 0 {
+		t.Fatalf("res=%+v", res)
+	}
+	foundWarning := false
+	for _, action := range res.Actions {
+		if action.Warning != "" && strings.Contains(action.Warning, "directory not empty") {
+			foundWarning = true
+		}
+		if action.Error != "" {
+			t.Fatalf("cache race should be warning, got action error: %+v", action)
+		}
+	}
+	if !foundWarning {
+		t.Fatalf("missing cache race warning: %+v", res.Actions)
+	}
+}
+
 func TestJobStartedRejectsWhenDiskStillTooHigh(t *testing.T) {
 	opts := DefaultOptionsFromEnv(EventJobStarted)
 	opts.Execute = false

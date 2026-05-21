@@ -1,7 +1,9 @@
 package runner
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -518,6 +520,165 @@ func TestWatchdogInferReposFallsBackToUnitParser(t *testing.T) {
 	repos := inferWatchdogRepos(enrichWatchdogSystemdRepos(context.Background(), opts, systemd))
 	if strings.Join(repos, ",") != "owner/repo-with-hyphen" {
 		t.Fatalf("repos = %v, want fallback owner/repo-with-hyphen", repos)
+	}
+}
+
+func TestApplyWatchdogDefaultsInstallsCommandBackedFunctions(t *testing.T) {
+	t.Parallel()
+	opts := WatchdogOptions{
+		RunFn: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			if name == "git" && strings.Join(args, " ") == "ls-remote https://github.com/actions/checkout.git HEAD" {
+				return []byte("abc\tHEAD\n"), nil
+			}
+			if name == "systemctl" && strings.Join(args, " ") == "list-units --type=service --no-pager --no-legend --all actions.runner.*" {
+				return []byte(fakeSystemctlOutput), nil
+			}
+			if name == "gh" && strings.Join(args, " ") == "api /repos/advoq/civm/actions/runners" {
+				return []byte(`{"runners":[{"id":1,"name":"civm-self","status":"online","busy":false,"labels":[{"name":"self-hosted"},{"name":"civm"}]}]}`), nil
+			}
+			if name == "gh" && strings.Join(args, " ") == "api /repos/advoq/civm/actions/runs?per_page=20&status=completed" {
+				return []byte(`{"workflow_runs":[{"id":8,"head_sha":"abc","status":"completed","conclusion":"failure","created_at":"2026-05-19T12:00:00Z","html_url":"https://github.com/advoq/civm/actions/runs/8","pull_requests":[{"number":7}]}]}`), nil
+			}
+			if name == "gh" && strings.Join(args, " ") == "api /repos/advoq/civm/pulls/7" {
+				return []byte(`{"number":7,"state":"open","mergeable_state":"clean"}`), nil
+			}
+			if name == "gh" && strings.Join(args, " ") == "run view 8 --repo advoq/civm --log-failed" {
+				return []byte("Run actions/checkout@v5\nfatal: early EOF\n"), nil
+			}
+			if name == "gh" && strings.Join(args, " ") == "run rerun 8 --repo advoq/civm --failed" {
+				return []byte(""), nil
+			}
+			return nil, errors.New("unexpected call: " + name + " " + strings.Join(args, " "))
+		},
+	}
+	applyWatchdogDefaults(&opts)
+
+	if err := opts.NetworkFn(context.Background(), time.Second); err != nil {
+		t.Fatalf("NetworkFn error: %v", err)
+	}
+	statuses, err := opts.SystemRunnersFn(context.Background())
+	if err != nil {
+		t.Fatalf("SystemRunnersFn error: %v", err)
+	}
+	if len(statuses) != 3 {
+		t.Fatalf("statuses=%d, want 3", len(statuses))
+	}
+	runners, err := opts.GitHubRunnersFn(context.Background(), "advoq/civm")
+	if err != nil {
+		t.Fatalf("GitHubRunnersFn error: %v", err)
+	}
+	if len(runners) != 1 || runners[0].Name != "civm-self" || !hasWatchdogLabel(runners[0].Labels, "civm") {
+		t.Fatalf("runners=%+v, want civm runner with label", runners)
+	}
+	runs, err := opts.ListRunsFn(context.Background(), "advoq/civm", opts.RunLimit)
+	if err != nil {
+		t.Fatalf("ListRunsFn error: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != 8 || len(runs[0].PullRequests) != 1 {
+		t.Fatalf("runs=%+v, want parsed run with PR", runs)
+	}
+	pr, err := opts.PullRequestFn(context.Background(), "advoq/civm", 7)
+	if err != nil {
+		t.Fatalf("PullRequestFn error: %v", err)
+	}
+	if pr.State != "open" || pr.MergeableState != "clean" {
+		t.Fatalf("pr=%+v, want open clean", pr)
+	}
+	log, err := opts.RunLogFn(context.Background(), "advoq/civm", 8)
+	if err != nil {
+		t.Fatalf("RunLogFn error: %v", err)
+	}
+	if !strings.Contains(log, "early EOF") {
+		t.Fatalf("log=%q, want checkout failure", log)
+	}
+	if err := opts.RerunFn(context.Background(), "advoq/civm", 8); err != nil {
+		t.Fatalf("RerunFn error: %v", err)
+	}
+}
+
+func TestWatchdogCLIParsersRejectInvalidJSON(t *testing.T) {
+	t.Parallel()
+	runFn := func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(`{`), nil
+	}
+
+	if _, err := listWatchdogGitHubRunners(context.Background(), "advoq/civm", runFn); err == nil {
+		t.Fatal("listWatchdogGitHubRunners error=nil, want parse error")
+	}
+	if _, err := listWatchdogRuns(context.Background(), "advoq/civm", 5, runFn); err == nil {
+		t.Fatal("listWatchdogRuns error=nil, want parse error")
+	}
+	if _, err := getWatchdogPullRequest(context.Background(), "advoq/civm", 7, runFn); err == nil {
+		t.Fatal("getWatchdogPullRequest error=nil, want parse error")
+	}
+}
+
+func TestValidateWatchdogOptionsRejectsInvalidValues(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		edit func(*WatchdogOptions)
+	}{
+		{name: "repo", edit: func(o *WatchdogOptions) { o.Repos = []string{"bad"} }},
+		{name: "network-timeout", edit: func(o *WatchdogOptions) { o.NetworkTimeout = 0 }},
+		{name: "restart-delay", edit: func(o *WatchdogOptions) { o.RestartDelay = -time.Second }},
+		{name: "max-run-age", edit: func(o *WatchdogOptions) { o.MaxRunAge = 0 }},
+		{name: "run-limit-low", edit: func(o *WatchdogOptions) { o.RunLimit = 0 }},
+		{name: "run-limit-high", edit: func(o *WatchdogOptions) { o.RunLimit = 101 }},
+		{name: "marker-path", edit: func(o *WatchdogOptions) { o.MarkerPath = "relative.json" }},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			opts := WatchdogOptions{
+				Repos:          []string{"advoq/civm"},
+				NetworkTimeout: time.Second,
+				RestartDelay:   0,
+				MaxRunAge:      time.Hour,
+				RunLimit:       10,
+				MarkerPath:     "/tmp/runner-watchdog.json",
+			}
+			tt.edit(&opts)
+			if err := validateWatchdogOptions(opts); err == nil {
+				t.Fatal("validateWatchdogOptions error=nil, want error")
+			}
+		})
+	}
+}
+
+func TestWatchdogReportRenderers(t *testing.T) {
+	t.Parallel()
+	report := WatchdogReport{
+		Executed:     true,
+		Repos:        []string{"advoq/civm"},
+		RunnerOnline: true,
+		Metrics:      WatchdogMetrics{RunsConsidered: 2, RerunsTriggered: 1, RerunsSkipped: 1},
+		Events: []WatchdogEvent{
+			{Event: "runner-online", Severity: "info", Repo: "advoq/civm", Runner: "civm-self", Online: true},
+			{Event: "rerun-triggered", Severity: "info", Repo: "advoq/civm", RunID: 8, Reason: "network-checkout", Detail: "signature=early eof"},
+		},
+		Exit: 0,
+	}
+
+	var jsonBuf bytes.Buffer
+	if err := report.RenderJSON(&jsonBuf); err != nil {
+		t.Fatalf("RenderJSON error: %v", err)
+	}
+	var parsed WatchdogReport
+	if err := json.Unmarshal(jsonBuf.Bytes(), &parsed); err != nil {
+		t.Fatalf("RenderJSON produced invalid JSON: %v", err)
+	}
+	if parsed.Metrics.RerunsTriggered != 1 {
+		t.Fatalf("parsed metrics=%+v, want trigger count", parsed.Metrics)
+	}
+
+	var textBuf bytes.Buffer
+	report.Render(&textBuf)
+	out := textBuf.String()
+	for _, want := range []string{"EXECUTE", "runner_online=true", "Repos: advoq/civm", "rerun-triggered", "network-checkout: signature=early eof"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("Render output missing %q:\n%s", want, out)
+		}
 	}
 }
 

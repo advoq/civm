@@ -1,6 +1,6 @@
 [Unit]
 Description=Trigger civmctl-disk-watchdog.service hora em hora
-Documentation=https://github.com/emersonbusson/civm/blob/main/internal/diskwatchdog/
+Documentation=https://github.com/advoq/civm/blob/main/internal/diskwatchdog/
 
 [Timer]
 OnCalendar=hourly
