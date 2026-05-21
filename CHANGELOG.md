@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.5.0](https://github.com/advoq/civm/compare/v1.4.0...v1.5.0) (2026-05-21)
+
+
+### Features
+
+* generalize CI hooks and doctor checks ([4d47cf6](https://github.com/advoq/civm/commit/4d47cf6a2e9542524c4b8319de67a316b9070f17))
+* harden runner and disk monitoring ([#41](https://github.com/advoq/civm/issues/41)) ([726d002](https://github.com/advoq/civm/commit/726d002481f9d167fdc561c721fa9b7b5a7755ce))
+
+
+### Bug Fixes
+
+* generate runner hook scripts ([fd87290](https://github.com/advoq/civm/commit/fd8729044336a8a1a6cc87d015b549ee184e3c2d))
+* load runner watchdog gh auth env ([fd644ff](https://github.com/advoq/civm/commit/fd644ff2e8f4b43b8294d9f90f850167d22d2ddb))
+* use app token for release automation ([e8fdcec](https://github.com/advoq/civm/commit/e8fdceca67d1e485fc068bbb84b466051cfdfb65))
+* use valid runner hook script paths ([8857c20](https://github.com/advoq/civm/commit/8857c2004e105bd3ca210f00b9c6a7dcd073a9ce))
+
 ## [1.4.0](https://github.com/advoq/civm/compare/v1.3.0...v1.4.0) (2026-05-17)
 
 
