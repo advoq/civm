@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/advoq/civm/compare/v1.7.0...v1.8.0) (2026-05-23)
+
+
+### Features
+
+* **actions-metrics:** aggregate billable minutes + run counts cross-repo ([#49](https://github.com/advoq/civm/issues/49)) ([e39001f](https://github.com/advoq/civm/commit/e39001f2c6a460e579575cecce6ed7556c78509f))
+
 ## [1.7.0](https://github.com/advoq/civm/compare/v1.6.0...v1.7.0) (2026-05-23)
 
 
