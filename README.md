@@ -65,6 +65,7 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl billing-status` | detector heuristico de billing-block (zero-PAT, GITHUB_TOKEN suficiente) |
 | `civmctl peer-status` | status read-only de adoção/saúde por peer ou fleet: billing, runners online e último run; `--repos=owner/a,owner/b` retorna exit `0=ok`, `1=warn`, `2=critical` |
 | `civmctl active-runs [--repos=auto\|owner/a,owner/b\|none] [--include-eta] [--json]` | lista workflow runs in_progress + queued cross-repo com ETA por workflow (avg das últimas N runs success); concorrente via worker pool. Cobre cockpits dashboard sem precisar invocar `gh run list` por repo |
+| `civmctl actions-metrics --org=ORG [--period=month\|last-month\|week\|day\|YYYY-MM-DD..YYYY-MM-DD] [--repos=auto\|owner/a,...\|none] [--json]` | agrega minutos billable (API `/organizations/{org}/settings/billing/usage`) + run counts cross-repo num período; espelha a tela "Actions Usage Metrics" do GitHub. Self-hosted minutos NÃO entram (API pública não expõe) |
 | `civmctl runner list` | lista runners systemd na VM (parsed; suporta `--json`) |
 | `civmctl runner restart` | systemctl restart por --short ou --unit; verifica is-active após delay |
 | `civmctl runner upgrade` | upgrade in-place de versão (preserva .runner/.credentials/_work) |
@@ -245,6 +246,7 @@ ssh gha-ubuntu-2404 'civmctl parity'
 ssh gha-ubuntu-2404 'civmctl health'
 ssh gha-ubuntu-2404 'civmctl doctor --repos=auto --json'
 ssh gha-ubuntu-2404 'civmctl active-runs --repos=auto --json'
+ssh gha-ubuntu-2404 'civmctl actions-metrics --org=advoq --period=month --json'
 ssh gha-ubuntu-2404 'civmctl idle-check'
 ```
 

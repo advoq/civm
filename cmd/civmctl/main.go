@@ -78,6 +78,8 @@ func main() {
 		os.Exit(runPeerStatus(args))
 	case "active-runs":
 		os.Exit(runActiveRuns(args))
+	case "actions-metrics":
+		os.Exit(runActionsMetrics(args))
 	case "self-upgrade":
 		os.Exit(runSelfUpgrade(args))
 	case "-h", "--help", "help":
@@ -120,6 +122,7 @@ COMANDOS
   bootstrap-everything  Wrapper: cp systemd units + daemon-reload + bootstrap --execute
   peer-status     Consolida billing + runners + last run em 1 view por peer/fleet
   active-runs     Lista workflow runs in_progress + queued + ETA (avg historico)
+  actions-metrics Agrega minutos billable + run counts cross-repo (espelha Actions Usage Metrics)
   self-upgrade    Rebuilda civmctl do /opt/civm e substitui /usr/local/bin/civmctl
   help            Esta mensagem
 
@@ -155,6 +158,9 @@ EXEMPLOS
   civmctl capacity --json
   civmctl active-runs --repos=auto --json
   civmctl active-runs --repos=owner/repo1,owner/repo2 --include-eta=false --json
+  civmctl actions-metrics --org=advoq --period=month --json
+  civmctl actions-metrics --org=advoq --period=last-month --repos=auto --json
+  civmctl actions-metrics --org=advoq --period=2026-05-01..2026-05-15 --json
   civmctl metrics dump --stdout
   civmctl metrics dump --out=/var/lib/node_exporter/textfile_collector/civm.prom
   civmctl hook job-completed --execute --json
