@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/advoq/civm/compare/v1.6.0...v1.7.0) (2026-05-23)
+
+
+### Features
+
+* **active-runs:** aggregate in_progress + queued runs cross-repo with ETA ([#47](https://github.com/advoq/civm/issues/47)) ([86e8dd4](https://github.com/advoq/civm/commit/86e8dd43c782bbdc5b74044d2076b5987db1ba74))
+
 ## [1.6.0](https://github.com/advoq/civm/compare/v1.5.1...v1.6.0) (2026-05-21)
 
 
