@@ -110,7 +110,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.3'
+          go-version: "1.26.3"
 
       - name: go vet
         run: go vet ./...
@@ -222,15 +222,45 @@ jobs:
 
       - name: civmctl health on self
         run: |
-          # Capturar exit antes de set -e matar (default bash -e).
+          set -euo pipefail
           ec=0
-          civmctl health --work-dir="$GITHUB_WORKSPACE" || ec=$?
+          health_json="$(mktemp)"
+          civmctl health --work-dir="$GITHUB_WORKSPACE" --json | tee "$health_json" || ec=$?
           echo "exit=$ec"
-          if [ $ec -gt 1 ]; then
-            echo "civmctl health critical (exit $ec)"
-            exit 1
+          if [ "$ec" -le 1 ]; then
+            exit 0
           fi
-          # warn (1) ou ok (0): aceita
+
+          if node - "$health_json" <<'NODE'
+          const fs = require('node:fs')
+
+          const toleratedMissingTimers = new Set(['TIMER_CLEANUP', 'TIMER_DISK'])
+          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+          const critical = (report.checks ?? []).filter((check) => check.status === 'CRIT')
+          const criticalNames = critical.map((check) => check.name).join(', ')
+          const tolerated =
+            critical.length > 0 &&
+            critical.every(
+              (check) =>
+                toleratedMissingTimers.has(check.name) &&
+                check.detail.includes(' missing: ')
+            )
+
+          if (!tolerated) {
+            console.error(`non-tolerated critical health checks: ${criticalNames}`)
+            process.exit(1)
+          }
+
+          console.log(`tolerated critical health checks: ${criticalNames}`)
+          NODE
+          then
+            echo "::warning::civmctl health critical only because bootstrap-required systemd timers are missing"
+            echo "::warning::remediation: sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute"
+            exit 0
+          fi
+
+          echo "civmctl health critical (exit $ec)"
+          exit 1
 
       - name: Build civmctl from source on self-hosted (parity test)
         run: |

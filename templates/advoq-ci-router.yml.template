@@ -104,10 +104,19 @@ jobs:
         run: |
           # Check go.work existe (advoq usa workspace mode)
           if [ -f go.work ]; then
-            echo "go.work present, vetting all modules..."
-            for mod in $(go list -m -f '{{.Dir}}' ...); do
+            echo "go.work present, vetting local workspace modules..."
+            go work edit -json | node -e '
+              let input = "";
+              process.stdin.on("data", (chunk) => input += chunk);
+              process.stdin.on("end", () => {
+                const workspace = JSON.parse(input);
+                for (const entry of workspace.Use || []) {
+                  console.log(entry.DiskPath);
+                }
+              });
+            ' | while IFS= read -r mod; do
               echo "--- $mod ---"
-              (cd "$mod" && go vet ./...) || echo "vet failed in $mod (warning, not fatal)"
+              (cd "$mod" && go vet ./...)
             done
           else
             echo "go.work absent, vetting root only"
@@ -121,7 +130,7 @@ jobs:
             if [ -f package.json ]; then
               # Use existing yarn lock (advoq usa yarn 1.22.22)
               yarn install --frozen-lockfile --prefer-offline
-              yarn typecheck || echo "typecheck issues (warning, not fatal)"
+              yarn typecheck
             fi
           fi
 

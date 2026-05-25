@@ -13,9 +13,9 @@ do proprio repo, rodado antes de push.
 
 ## Padrao atual
 
-- Workflow GitHub Actions: `.github/workflows/ci.yml`
+- Workflow GitHub Actions: definido pelo peer repo em `.github/workflows/`
 - Runner label: `runs-on: [self-hosted, civm]`
-- Check required em branch protection: `Gates (typecheck, test, build, invariants)`
+- Check required em branch protection: nome do gate agregador do peer
 - Fonte operacional da VM: checkout local do repo `civm`
 - Runbook admin da VM: `<civm>/runbooks/MULTI-PROJECT-RUNNER.md`
 
@@ -36,6 +36,28 @@ npm run build
 - Nao usar `pull_request_target` com jobs self-hosted.
 - Nao expor secrets a codigo vindo de fork externo.
 - `civm` executa o workflow do peer; ele nao audita codigo sozinho.
+- Hooks de job usam scripts `.sh` gerenciados por
+  `civmctl hook install --execute`; nao usar wrappers customizados nem
+  symlinks diretos para o binario Go.
+
+## Operacao da VM
+
+Comandos read-only uteis para diagnostico:
+
+```bash
+civmctl parity
+civmctl health
+civmctl capacity --json
+civmctl doctor --repos=auto --json
+civmctl idle-check --json
+civmctl metrics dump --stdout
+civmctl actions-metrics --org=<org> --period=month --repos=auto --json
+```
+
+Comandos mutaveis (`bootstrap`, `cleanup --execute`, `hook install --execute`,
+`runner watchdog --execute`, `runner restart/remove/upgrade --execute` e
+`self-upgrade --execute`) devem seguir os runbooks do repo `civm` e os guards
+de host idle.
 
 ## Termos obsoletos em docs ativas
 
