@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.1](https://github.com/advoq/civm/compare/v1.8.0...v1.8.1) (2026-05-25)
+
+
+### Bug Fixes
+
+* **templates:** limit Advoq router vet to local modules ([#51](https://github.com/advoq/civm/issues/51)) ([c454dd3](https://github.com/advoq/civm/commit/c454dd36389c2b10dd6667b17e1054fc0942c5a8))
+
 ## [1.8.0](https://github.com/advoq/civm/compare/v1.7.0...v1.8.0) (2026-05-23)
 
 
