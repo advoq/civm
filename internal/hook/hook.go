@@ -163,49 +163,58 @@ func Run(ctx context.Context, opts Options) Result {
 func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	roots := workRoots(opts)
 	caps := cacheCaps()
-	hotCaches := cachePaths()
 	estCap := len(roots) + len(caps) + 8
-	if purgeCaches {
-		estCap += len(hotCaches)
-	}
 	actions := make([]Action, 0, estCap)
 	for _, root := range roots {
-		actions = append(actions, cleanWorkRoot(opts, root))
+		actions = append(actions, cleanWorkRoot(opts, root, purgeCaches))
 	}
-	// Em modo disk-pressure usamos commandAction (erro derruba o hook → sinal
-	// claro de problema). Em modo rotineiro usamos commandActionWarn: erro
-	// de uma ferramenta auxiliar (buildx ausente, fstrim em FS sem suporte,
-	// sudo sem NOPASSWD) vira aviso e o hook continua — cleanup é
-	// best-effort entre jobs.
+	// apt/journal/fstrim keep disk-pressure semantics: fatal at job-started
+	// (clear signal the runner could not free space), best-effort at
+	// job-completed.
 	runCmd := commandAction
 	if !purgeCaches {
 		runCmd = commandActionWarn
 	}
-	if purgeCaches {
-		for _, path := range hotCaches {
-			actions = append(actions, removePath(opts, path, "cache"))
-		}
-		actions = append(actions, runCmd(opts, ctx, "docker_prune", "docker", "system", "prune", "-af", "--volumes"))
-	} else {
-		for _, c := range caps {
-			actions = append(actions, trimCacheByAge(opts, c.path, c.maxBytes, c.minProtect))
-		}
-		actions = append(actions, runCmd(opts, ctx, "docker_buildx_prune", "docker", "buildx", "prune", "--force", "--filter", civm.DefaultDockerBuildxPruneFilter))
-		actions = append(actions, runCmd(opts, ctx, "docker_image_prune", "docker", "image", "prune", "-af", "--filter", civm.DefaultDockerImagePruneFilter))
-		actions = append(actions, runCmd(opts, ctx, "docker_container_prune", "docker", "container", "prune", "-f"))
-		actions = append(actions, runCmd(opts, ctx, "docker_volume_prune", "docker", "volume", "prune", "-f"))
+	// Cache trim is age-based in BOTH modes. A wholesale purge of the shared
+	// $HOME caches at job-started deletes the hot go-build/npm cache out from
+	// under a concurrent sibling job mid-compile ("could not import ...: no
+	// such file or directory"). trimCacheByAge protects recently-used files
+	// (minProtect); HardFailPct still guards genuinely-full disk.
+	for _, c := range caps {
+		actions = append(actions, trimCacheByAge(opts, c.path, c.maxBytes, c.minProtect))
 	}
+	// Docker prune is always age-filtered and best-effort (commandActionWarn,
+	// never fatal) in both modes. We must NOT run `docker system prune
+	// --volumes` at job-started: its unfiltered content GC corrupts a
+	// concurrent `docker pull` on a sibling job ("unable to lease content:
+	// lease does not exist"), and on a busy daemon it can be OOM-killed
+	// ("docker_prune: signal: killed") — a fatal cleanup error at job-started
+	// would then reject the starting job. Filtered prunes free old
+	// images/build cache without touching content a sibling is pulling, and
+	// HardFailPct still guards genuinely-full disk.
+	actions = append(actions, commandActionWarn(opts, ctx, "docker_buildx_prune", "docker", "buildx", "prune", "--force", "--filter", civm.DefaultDockerBuildxPruneFilter))
+	actions = append(actions, commandActionWarn(opts, ctx, "docker_image_prune", "docker", "image", "prune", "-af", "--filter", civm.DefaultDockerImagePruneFilter))
+	actions = append(actions, commandActionWarn(opts, ctx, "docker_container_prune", "docker", "container", "prune", "-f"))
+	actions = append(actions, commandActionWarn(opts, ctx, "docker_volume_prune", "docker", "volume", "prune", "-f"))
 	actions = append(actions, runCmd(opts, ctx, "apt_clean", "sudo", "apt-get", "clean"))
 	actions = append(actions, runCmd(opts, ctx, "journal_vacuum", "sudo", "journalctl", "--vacuum-time=1d"))
 	actions = append(actions, runCmd(opts, ctx, "fstrim", "sudo", "fstrim", "-av"))
 	return actions
 }
 
-func cleanWorkRoot(opts Options, root string) Action {
+func cleanWorkRoot(opts Options, root string, preserveActiveWorkspace bool) Action {
 	a := Action{Name: "work_root", Path: root, Executed: opts.Execute}
 	if !safeWorkRoot(root) {
 		a.Error = "unsafe work root"
 		return a
+	}
+	// At job-started the runner has already created the active job's
+	// GITHUB_WORKSPACE under this root. Deleting it frees almost nothing but
+	// breaks the starting job ("working directory ... No such file or
+	// directory"). job-completed still cleans it once the job is done.
+	protected := ""
+	if preserveActiveWorkspace {
+		protected = activeWorkspaceEntry(root, opts.GitHubWorkspace)
 	}
 	entries, err := opts.ReadDirFn(root)
 	if err != nil {
@@ -220,6 +229,9 @@ func cleanWorkRoot(opts Options, root string) Action {
 		if name == "_tool" || name == "_actions" {
 			continue
 		}
+		if protected != "" && name == protected {
+			continue
+		}
 		path := filepath.Join(root, name)
 		if opts.Execute {
 			if err := opts.RemoveAllFn(path); err != nil {
@@ -229,6 +241,29 @@ func cleanWorkRoot(opts Options, root string) Action {
 		}
 	}
 	return a
+}
+
+// activeWorkspaceEntry returns the top-level entry under root that contains the
+// active GITHUB_WORKSPACE, or "" when workspace is empty or not under root.
+// Example: root=.../_work, ws=.../_work/advoq/advoq -> "advoq". Used at
+// job-started so disk-pressure cleanup never deletes the workspace the runner
+// just created for the starting job.
+func activeWorkspaceEntry(root, workspace string) string {
+	if strings.TrimSpace(workspace) == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(workspace))
+	if err != nil {
+		return ""
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	parts := strings.SplitN(rel, string(filepath.Separator), 2)
+	if parts[0] == "" {
+		return ""
+	}
+	return parts[0]
 }
 
 func removePath(opts Options, path, name string) Action {
@@ -498,7 +533,7 @@ func demoteIgnorableCacheDeleteRaces(actions []Action) {
 }
 
 func isIgnorableCacheDeleteRace(a Action) bool {
-	if a.Name != "cache" {
+	if a.Name != "cache" && a.Name != "cache_trim" {
 		return false
 	}
 	return strings.Contains(strings.ToLower(a.Error), "directory not empty")

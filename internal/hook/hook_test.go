@@ -122,44 +122,98 @@ func TestJobCompletedPreservesHotCachesUnderHome(t *testing.T) {
 	}
 }
 
-// TestJobStartedPurgesHotCachesUnderDiskPressure valida o outro lado:
-// quando disk pressure está ativa em job-started (acima de pre-cleanup-pct),
-// os caches sob $HOME SÃO removidos como medida agressiva para liberar
-// espaço antes do job começar.
-func TestJobStartedPurgesHotCachesUnderDiskPressure(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+// TestJobStartedUnderPressureTrimsCachesByAge valida que, sob disk pressure,
+// job-started faz trim por idade dos caches ($HOME) em vez de wipe total. O
+// wipe total apagava o go-build cache quente de um job concorrente em
+// compilação ("could not import ...: no such file or directory").
+func TestJobStartedUnderPressureTrimsCachesByAge(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("RUNNER_TEMP", "")
 	t.Setenv("GITHUB_WORKSPACE", "")
 	t.Setenv("GITHUB_REPOSITORY", "")
 	t.Setenv("GITHUB_RUN_ID", "")
 
-	var removed []string
 	opts := DefaultOptionsFromEnv(EventJobStarted)
 	opts.Execute = true
 	opts.PreCleanupPct = 50
 	opts.HardFailPct = 95
-	// 80% disco usado, acima de PreCleanupPct → cleanup purga caches
+	// 80% disco usado, acima de PreCleanupPct → cleanup roda.
 	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 20, nil }
-	opts.RemoveAllFn = func(p string) error { removed = append(removed, p); return nil }
+	opts.RemoveAllFn = func(string) error { return nil }
 	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
 	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
 	opts.LogPath = ""
 	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
 	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
 
-	Run(context.Background(), opts)
+	res := Run(context.Background(), opts)
 
-	wantCache := filepath.Join(home, ".cache", "go-build")
-	found := false
-	for _, r := range removed {
-		if r == wantCache {
-			found = true
-			break
+	var hasTrim, hasWholesalePurge bool
+	for _, a := range res.Actions {
+		switch a.Name {
+		case "cache_trim":
+			hasTrim = true
+		case "cache":
+			hasWholesalePurge = true
 		}
 	}
-	if !found {
-		t.Errorf("disk pressure cleanup deveria purgar go-build cache; removed=%v", removed)
+	if !hasTrim {
+		t.Errorf("job-started under pressure should age-trim caches; actions=%+v", res.Actions)
+	}
+	if hasWholesalePurge {
+		t.Errorf("job-started must not wholesale-purge shared caches (races concurrent builds); actions=%+v", res.Actions)
+	}
+}
+
+// TestJobStartedPreservesActiveWorkspaceUnderDiskPressure valida que, sob disk
+// pressure em job-started, o cleanup NÃO apaga o GITHUB_WORKSPACE que o runner
+// acabou de criar para o job que está começando — senão o job falha com
+// "working directory ... No such file or directory". Outras entradas stale de
+// _work (ex.: _temp) ainda são limpas e os caches sob $HOME ainda purgados.
+func TestJobStartedPreservesActiveWorkspaceUnderDiskPressure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("RUNNER_TEMP", "")
+	workRoot := "/home/civm-test/actions-runner-advoq/_work"
+	t.Setenv("GITHUB_WORKSPACE", workRoot+"/advoq/advoq")
+	t.Setenv("GITHUB_REPOSITORY", "advoq/advoq")
+	t.Setenv("GITHUB_RUN_ID", "1")
+
+	var removed []string
+	opts := DefaultOptionsFromEnv(EventJobStarted)
+	opts.Execute = true
+	opts.PreCleanupPct = 50
+	opts.HardFailPct = 95
+	// 80% usado, acima de PreCleanupPct → disk pressure cleanup.
+	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 20, nil }
+	opts.RemoveAllFn = func(p string) error { removed = append(removed, p); return nil }
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.LogPath = ""
+	opts.WorkRoot = workRoot
+	opts.ReadDirFn = func(path string) ([]os.DirEntry, error) {
+		if path != workRoot {
+			return nil, fmt.Errorf("unexpected ReadDir path: %s", path)
+		}
+		return []os.DirEntry{
+			fakeDirEntry("_tool"),
+			fakeDirEntry("_actions"),
+			fakeDirEntry("_temp"),
+			fakeDirEntry("advoq"),
+		}, nil
+	}
+
+	Run(context.Background(), opts)
+
+	joined := strings.Join(removed, "\n")
+	if strings.Contains(joined, filepath.Join(workRoot, "advoq")) {
+		t.Fatalf("disk-pressure cleanup apagou o workspace ativo %q — quebra o job iniciando; removed=%v", filepath.Join(workRoot, "advoq"), removed)
+	}
+	if !strings.Contains(joined, filepath.Join(workRoot, "_temp")) {
+		t.Fatalf("esperava limpar _temp stale; removed=%v", removed)
+	}
+	if strings.Contains(joined, filepath.Join(workRoot, "_tool")) || strings.Contains(joined, filepath.Join(workRoot, "_actions")) {
+		t.Fatalf("removeu cache quente _tool/_actions; removed=%v", removed)
 	}
 }
 
@@ -171,9 +225,11 @@ func TestJobStartedDemotesCacheDeleteRaceWhenDiskDropsBelowHardFail(t *testing.T
 	t.Setenv("GITHUB_REPOSITORY", "")
 	t.Setenv("GITHUB_RUN_ID", "")
 
+	now := time.Now()
 	statCalls := 0
 	opts := DefaultOptionsFromEnv(EventJobStarted)
 	opts.Execute = true
+	opts.Now = now
 	opts.PreCleanupPct = 70
 	opts.HardFailPct = 90
 	opts.StatfsFn = func(string) (uint64, uint64, error) {
@@ -183,11 +239,13 @@ func TestJobStartedDemotesCacheDeleteRaceWhenDiskDropsBelowHardFail(t *testing.T
 		}
 		return 100, 35, nil // 65% used after cleanup, below hard fail.
 	}
+	// A large, old cache file the age-trim must remove, but the remove races a
+	// concurrent writer ("directory not empty") — must demote to a warning.
+	opts.WalkDirFn = walkCacheFiles([]cacheFile{
+		{path: "/home/.cache/go-build/old", size: 8 * (int64(1) << 30), mtime: now.Add(-72 * time.Hour)},
+	})
 	opts.RemoveAllFn = func(p string) error {
-		if strings.Contains(p, ".cache/go-build") {
-			return fmt.Errorf("remove %s: directory not empty", p)
-		}
-		return nil
+		return fmt.Errorf("remove %s: directory not empty", p)
 	}
 	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
 	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
@@ -247,7 +305,7 @@ func TestRunErrorsOnUnsupportedEvent(t *testing.T) {
 }
 
 func TestCleanWorkRootRejectsUnsafeRoot(t *testing.T) {
-	a := cleanWorkRoot(Options{Execute: true}, "/etc/passwd")
+	a := cleanWorkRoot(Options{Execute: true}, "/etc/passwd", false)
 	if a.Error == "" {
 		t.Fatalf("expected unsafe error, got %+v", a)
 	}
@@ -258,7 +316,7 @@ func TestCleanWorkRootHandlesReadDirError(t *testing.T) {
 		Execute:   true,
 		ReadDirFn: func(string) ([]os.DirEntry, error) { return nil, fmt.Errorf("EACCES") },
 	}
-	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work")
+	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work", false)
 	if a.Error == "" {
 		t.Fatalf("expected ReadDir error to propagate, got %+v", a)
 	}
@@ -269,7 +327,7 @@ func TestCleanWorkRootSkipsMissingDir(t *testing.T) {
 		Execute:   true,
 		ReadDirFn: func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist },
 	}
-	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work")
+	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work", false)
 	if a.Error != "" {
 		t.Fatalf("missing dir should be silent, got %+v", a)
 	}
@@ -283,7 +341,7 @@ func TestCleanWorkRootPropagatesRemoveError(t *testing.T) {
 		},
 		RemoveAllFn: func(string) error { return fmt.Errorf("EBUSY") },
 	}
-	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work")
+	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work", false)
 	if a.Error == "" {
 		t.Fatalf("expected RemoveAll error to propagate, got %+v", a)
 	}
@@ -733,9 +791,11 @@ func TestJobStartedUnderPressureSurfacesCommandFailureAsError(t *testing.T) {
 	opts.HardFailPct = 95
 	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 20, nil }
 	opts.RemoveAllFn = func(string) error { return nil }
-	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if name == "docker" {
-			return nil, fmt.Errorf("docker daemon down")
+	// Docker prune is best-effort (see TestJobStartedDockerPruneErrorIsNonFatal);
+	// the apt/journal/fstrim maintenance still fails closed at job-started.
+	opts.RunFn = func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "sudo" {
+			return nil, fmt.Errorf("apt-get clean failed")
 		}
 		return nil, nil
 	}
@@ -747,7 +807,7 @@ func TestJobStartedUnderPressureSurfacesCommandFailureAsError(t *testing.T) {
 	res := Run(context.Background(), opts)
 
 	if res.Decision != DecisionError {
-		t.Fatalf("disk-pressure command failure should surface as Error decision, got %v", res.Decision)
+		t.Fatalf("disk-pressure maintenance failure should surface as Error decision, got %v", res.Decision)
 	}
 }
 
@@ -813,7 +873,7 @@ func TestCacheCapsUsesCivmConstants(t *testing.T) {
 	}
 }
 
-func TestJobStartedUnderPressureKeepsAggressiveDockerPrune(t *testing.T) {
+func TestJobStartedUnderPressureUsesFilteredDockerPrune(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("RUNNER_TEMP", "")
 	t.Setenv("GITHUB_WORKSPACE", "")
@@ -838,8 +898,46 @@ func TestJobStartedUnderPressureKeepsAggressiveDockerPrune(t *testing.T) {
 	Run(context.Background(), opts)
 
 	joined := strings.Join(commands, "\n")
-	if !strings.Contains(joined, "docker system prune -af --volumes") {
-		t.Errorf("disk-pressure mode should keep aggressive docker prune, got:\n%s", joined)
+	// Unfiltered `docker system prune --volumes` is forbidden: it GCs content a
+	// sibling job is actively pulling and can be OOM-killed.
+	if strings.Contains(joined, "docker system prune") {
+		t.Errorf("job-started must not run unfiltered docker system prune, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "docker image prune -af --filter") {
+		t.Errorf("job-started should run age-filtered docker image prune, got:\n%s", joined)
+	}
+}
+
+// TestJobStartedDockerPruneErrorIsNonFatal proves the regression that broke CI:
+// a docker prune that errors or is killed at job-started ("signal: killed")
+// must NOT fail the hook and reject the starting job. Docker maintenance is
+// best-effort; HardFailPct is the only gate that rejects a job for disk.
+func TestJobStartedDockerPruneErrorIsNonFatal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RUNNER_TEMP", "")
+	t.Setenv("GITHUB_WORKSPACE", "")
+	t.Setenv("GITHUB_REPOSITORY", "")
+	t.Setenv("GITHUB_RUN_ID", "")
+	opts := DefaultOptionsFromEnv(EventJobStarted)
+	opts.Execute = true
+	opts.PreCleanupPct = 50
+	opts.HardFailPct = 95
+	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 20, nil }
+	opts.RemoveAllFn = func(string) error { return nil }
+	opts.RunFn = func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "docker" {
+			return nil, fmt.Errorf("signal: killed")
+		}
+		return nil, nil
+	}
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.LogPath = ""
+	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
+	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+
+	res := Run(context.Background(), opts)
+	if res.Decision == DecisionError || res.ExitCode != 0 {
+		t.Fatalf("docker prune error at job-started must not fail the hook, got %+v", res)
 	}
 }
 
