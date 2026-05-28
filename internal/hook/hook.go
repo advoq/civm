@@ -168,13 +168,6 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	for _, root := range roots {
 		actions = append(actions, cleanWorkRoot(opts, root, purgeCaches))
 	}
-	// apt/journal/fstrim keep disk-pressure semantics: fatal at job-started
-	// (clear signal the runner could not free space), best-effort at
-	// job-completed.
-	runCmd := commandAction
-	if !purgeCaches {
-		runCmd = commandActionWarn
-	}
 	// Cache trim is age-based in BOTH modes. A wholesale purge of the shared
 	// $HOME caches at job-started deletes the hot go-build/npm cache out from
 	// under a concurrent sibling job mid-compile ("could not import ...: no
@@ -196,9 +189,13 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_image_prune", "docker", "image", "prune", "-af", "--filter", civm.DefaultDockerImagePruneFilter))
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_container_prune", "docker", "container", "prune", "-f"))
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_volume_prune", "docker", "volume", "prune", "-f"))
-	actions = append(actions, runCmd(opts, ctx, "apt_clean", "sudo", "apt-get", "clean"))
-	actions = append(actions, runCmd(opts, ctx, "journal_vacuum", "sudo", "journalctl", "--vacuum-time=1d"))
-	actions = append(actions, runCmd(opts, ctx, "fstrim", "sudo", "fstrim", "-av"))
+	// apt_clean, journal_vacuum and fstrim are opportunistic disk reclaim and
+	// must also be best-effort. apt-get clean returns exit 100 when a sibling
+	// job holds the dpkg/apt lock, and a fatal cleanup error at job-started
+	// would reject the starting job. Never let job-started cleanup fail a job.
+	actions = append(actions, commandActionWarn(opts, ctx, "apt_clean", "sudo", "apt-get", "clean"))
+	actions = append(actions, commandActionWarn(opts, ctx, "journal_vacuum", "sudo", "journalctl", "--vacuum-time=1d"))
+	actions = append(actions, commandActionWarn(opts, ctx, "fstrim", "sudo", "fstrim", "-av"))
 	return actions
 }
 
@@ -378,13 +375,6 @@ func trimCacheByAge(opts Options, root string, maxBytes int64, minProtect time.D
 	}
 	a.BytesFreed = freed
 	return a
-}
-
-// commandAction roda um comando externo capturando erro em Action.Error —
-// um erro aqui aborta o hook via firstActionError. Apropriado para modo
-// disk-pressure onde queremos sinal claro de falha.
-func commandAction(opts Options, ctx context.Context, actionName, name string, args ...string) Action {
-	return runWithTimeout(opts, ctx, actionName, false /*errorAsWarning*/, name, args...)
 }
 
 // commandActionWarn é a variante tolerante: falha de comando vira Warning,
