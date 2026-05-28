@@ -163,11 +163,7 @@ func Run(ctx context.Context, opts Options) Result {
 func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	roots := workRoots(opts)
 	caps := cacheCaps()
-	hotCaches := cachePaths()
 	estCap := len(roots) + len(caps) + 8
-	if purgeCaches {
-		estCap += len(hotCaches)
-	}
 	actions := make([]Action, 0, estCap)
 	for _, root := range roots {
 		actions = append(actions, cleanWorkRoot(opts, root, purgeCaches))
@@ -179,16 +175,13 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	if !purgeCaches {
 		runCmd = commandActionWarn
 	}
-	// Cache layer: disk-pressure (job-started) purges hot caches wholesale;
-	// routine (job-completed) trims them by age.
-	if purgeCaches {
-		for _, path := range hotCaches {
-			actions = append(actions, removePath(opts, path, "cache"))
-		}
-	} else {
-		for _, c := range caps {
-			actions = append(actions, trimCacheByAge(opts, c.path, c.maxBytes, c.minProtect))
-		}
+	// Cache trim is age-based in BOTH modes. A wholesale purge of the shared
+	// $HOME caches at job-started deletes the hot go-build/npm cache out from
+	// under a concurrent sibling job mid-compile ("could not import ...: no
+	// such file or directory"). trimCacheByAge protects recently-used files
+	// (minProtect); HardFailPct still guards genuinely-full disk.
+	for _, c := range caps {
+		actions = append(actions, trimCacheByAge(opts, c.path, c.maxBytes, c.minProtect))
 	}
 	// Docker prune is always age-filtered and best-effort (commandActionWarn,
 	// never fatal) in both modes. We must NOT run `docker system prune
@@ -540,7 +533,7 @@ func demoteIgnorableCacheDeleteRaces(actions []Action) {
 }
 
 func isIgnorableCacheDeleteRace(a Action) bool {
-	if a.Name != "cache" {
+	if a.Name != "cache" && a.Name != "cache_trim" {
 		return false
 	}
 	return strings.Contains(strings.ToLower(a.Error), "directory not empty")
