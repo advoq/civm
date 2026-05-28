@@ -176,17 +176,26 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	for _, c := range caps {
 		actions = append(actions, trimCacheByAge(opts, c.path, c.maxBytes, c.minProtect))
 	}
-	// Docker prune is always age-filtered and best-effort (commandActionWarn,
-	// never fatal) in both modes. We must NOT run `docker system prune
-	// --volumes` at job-started: its unfiltered content GC corrupts a
-	// concurrent `docker pull` on a sibling job ("unable to lease content:
-	// lease does not exist"), and on a busy daemon it can be OOM-killed
-	// ("docker_prune: signal: killed") — a fatal cleanup error at job-started
-	// would then reject the starting job. Filtered prunes free old
-	// images/build cache without touching content a sibling is pulling, and
-	// HardFailPct still guards genuinely-full disk.
+	// Docker prune is always best-effort (commandActionWarn, never fatal) in
+	// both modes. Two concurrency hazards on the shared runner:
+	//
+	//  1. `docker system prune --volumes` unfiltered content GC corrupts a
+	//     concurrent `docker pull` on a sibling job ("unable to lease content:
+	//     lease does not exist") — so we never run it here.
+	//  2. `docker image prune -a` removes ALL unused TAGGED images. The age
+	//     `--filter until=` matches on image CREATED date (the vendor build
+	//     date), not pull date, so a recently-pulled but old vendor image
+	//     (redis, minio, alpine, clamav, postgres base) is deleted out from
+	//     under a sibling job that is mid `compose up --build` — the sibling
+	//     then fails with "No such image". So job cleanup prunes DANGLING
+	//     images only (`-f`, no `-a`): untagged superseded layers are safe to
+	//     remove and are the bulk of build churn, while tagged images another
+	//     job pulled or built are never touched.
+	//
+	// Build cache (the largest disk consumer) is still trimmed by buildx prune
+	// (until=24h), and HardFailPct guards genuinely-full disk.
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_buildx_prune", "docker", "buildx", "prune", "--force", "--filter", civm.DefaultDockerBuildxPruneFilter))
-	actions = append(actions, commandActionWarn(opts, ctx, "docker_image_prune", "docker", "image", "prune", "-af", "--filter", civm.DefaultDockerImagePruneFilter))
+	actions = append(actions, commandActionWarn(opts, ctx, "docker_image_prune", "docker", "image", "prune", "-f"))
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_container_prune", "docker", "container", "prune", "-f"))
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_volume_prune", "docker", "volume", "prune", "-f"))
 	// apt_clean, journal_vacuum and fstrim are opportunistic disk reclaim and
