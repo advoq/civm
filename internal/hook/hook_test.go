@@ -778,7 +778,7 @@ func TestJobCompletedDemotesCommandFailureToWarning(t *testing.T) {
 	}
 }
 
-func TestJobStartedUnderPressureSurfacesCommandFailureAsError(t *testing.T) {
+func TestJobStartedCleanupCommandFailureIsNonFatal(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("RUNNER_TEMP", "")
 	t.Setenv("GITHUB_WORKSPACE", "")
@@ -791,8 +791,10 @@ func TestJobStartedUnderPressureSurfacesCommandFailureAsError(t *testing.T) {
 	opts.HardFailPct = 95
 	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 20, nil }
 	opts.RemoveAllFn = func(string) error { return nil }
-	// Docker prune is best-effort (see TestJobStartedDockerPruneErrorIsNonFatal);
-	// the apt/journal/fstrim maintenance still fails closed at job-started.
+	// All job-started cleanup is best-effort. apt-get clean returns exit 100
+	// when a sibling job holds the dpkg/apt lock; a fatal cleanup error must
+	// not reject the starting job. Only HardFailPct (genuinely full disk)
+	// fails closed at job-started.
 	opts.RunFn = func(_ context.Context, name string, _ ...string) ([]byte, error) {
 		if name == "sudo" {
 			return nil, fmt.Errorf("apt-get clean failed")
@@ -806,8 +808,23 @@ func TestJobStartedUnderPressureSurfacesCommandFailureAsError(t *testing.T) {
 
 	res := Run(context.Background(), opts)
 
-	if res.Decision != DecisionError {
-		t.Fatalf("disk-pressure maintenance failure should surface as Error decision, got %v", res.Decision)
+	if res.Decision == DecisionError {
+		t.Fatalf("job-started cleanup command failure must not be fatal, actions=%+v", res.Actions)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0 (cleanup warnings must not fail the hook)", res.ExitCode)
+	}
+	var sawAptWarn bool
+	for _, a := range res.Actions {
+		if a.Error != "" {
+			t.Errorf("job-started cleanup action %s should warn, got Error=%s", a.Name, a.Error)
+		}
+		if a.Name == "apt_clean" && a.Warning != "" {
+			sawAptWarn = true
+		}
+	}
+	if !sawAptWarn {
+		t.Errorf("expected apt_clean Warning, actions=%+v", res.Actions)
 	}
 }
 
