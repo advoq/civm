@@ -788,9 +788,11 @@ func TestJobStartedUnderPressureSurfacesCommandFailureAsError(t *testing.T) {
 	opts.HardFailPct = 95
 	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 20, nil }
 	opts.RemoveAllFn = func(string) error { return nil }
-	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if name == "docker" {
-			return nil, fmt.Errorf("docker daemon down")
+	// Docker prune is best-effort (see TestJobStartedDockerPruneErrorIsNonFatal);
+	// the apt/journal/fstrim maintenance still fails closed at job-started.
+	opts.RunFn = func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "sudo" {
+			return nil, fmt.Errorf("apt-get clean failed")
 		}
 		return nil, nil
 	}
@@ -802,7 +804,7 @@ func TestJobStartedUnderPressureSurfacesCommandFailureAsError(t *testing.T) {
 	res := Run(context.Background(), opts)
 
 	if res.Decision != DecisionError {
-		t.Fatalf("disk-pressure command failure should surface as Error decision, got %v", res.Decision)
+		t.Fatalf("disk-pressure maintenance failure should surface as Error decision, got %v", res.Decision)
 	}
 }
 
@@ -868,7 +870,7 @@ func TestCacheCapsUsesCivmConstants(t *testing.T) {
 	}
 }
 
-func TestJobStartedUnderPressureKeepsAggressiveDockerPrune(t *testing.T) {
+func TestJobStartedUnderPressureUsesFilteredDockerPrune(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("RUNNER_TEMP", "")
 	t.Setenv("GITHUB_WORKSPACE", "")
@@ -893,8 +895,46 @@ func TestJobStartedUnderPressureKeepsAggressiveDockerPrune(t *testing.T) {
 	Run(context.Background(), opts)
 
 	joined := strings.Join(commands, "\n")
-	if !strings.Contains(joined, "docker system prune -af --volumes") {
-		t.Errorf("disk-pressure mode should keep aggressive docker prune, got:\n%s", joined)
+	// Unfiltered `docker system prune --volumes` is forbidden: it GCs content a
+	// sibling job is actively pulling and can be OOM-killed.
+	if strings.Contains(joined, "docker system prune") {
+		t.Errorf("job-started must not run unfiltered docker system prune, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "docker image prune -af --filter") {
+		t.Errorf("job-started should run age-filtered docker image prune, got:\n%s", joined)
+	}
+}
+
+// TestJobStartedDockerPruneErrorIsNonFatal proves the regression that broke CI:
+// a docker prune that errors or is killed at job-started ("signal: killed")
+// must NOT fail the hook and reject the starting job. Docker maintenance is
+// best-effort; HardFailPct is the only gate that rejects a job for disk.
+func TestJobStartedDockerPruneErrorIsNonFatal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RUNNER_TEMP", "")
+	t.Setenv("GITHUB_WORKSPACE", "")
+	t.Setenv("GITHUB_REPOSITORY", "")
+	t.Setenv("GITHUB_RUN_ID", "")
+	opts := DefaultOptionsFromEnv(EventJobStarted)
+	opts.Execute = true
+	opts.PreCleanupPct = 50
+	opts.HardFailPct = 95
+	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 20, nil }
+	opts.RemoveAllFn = func(string) error { return nil }
+	opts.RunFn = func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "docker" {
+			return nil, fmt.Errorf("signal: killed")
+		}
+		return nil, nil
+	}
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.LogPath = ""
+	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
+	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+
+	res := Run(context.Background(), opts)
+	if res.Decision == DecisionError || res.ExitCode != 0 {
+		t.Fatalf("docker prune error at job-started must not fail the hook, got %+v", res)
 	}
 }
 

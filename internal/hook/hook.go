@@ -172,29 +172,37 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	for _, root := range roots {
 		actions = append(actions, cleanWorkRoot(opts, root, purgeCaches))
 	}
-	// Em modo disk-pressure usamos commandAction (erro derruba o hook → sinal
-	// claro de problema). Em modo rotineiro usamos commandActionWarn: erro
-	// de uma ferramenta auxiliar (buildx ausente, fstrim em FS sem suporte,
-	// sudo sem NOPASSWD) vira aviso e o hook continua — cleanup é
-	// best-effort entre jobs.
+	// apt/journal/fstrim keep disk-pressure semantics: fatal at job-started
+	// (clear signal the runner could not free space), best-effort at
+	// job-completed.
 	runCmd := commandAction
 	if !purgeCaches {
 		runCmd = commandActionWarn
 	}
+	// Cache layer: disk-pressure (job-started) purges hot caches wholesale;
+	// routine (job-completed) trims them by age.
 	if purgeCaches {
 		for _, path := range hotCaches {
 			actions = append(actions, removePath(opts, path, "cache"))
 		}
-		actions = append(actions, runCmd(opts, ctx, "docker_prune", "docker", "system", "prune", "-af", "--volumes"))
 	} else {
 		for _, c := range caps {
 			actions = append(actions, trimCacheByAge(opts, c.path, c.maxBytes, c.minProtect))
 		}
-		actions = append(actions, runCmd(opts, ctx, "docker_buildx_prune", "docker", "buildx", "prune", "--force", "--filter", civm.DefaultDockerBuildxPruneFilter))
-		actions = append(actions, runCmd(opts, ctx, "docker_image_prune", "docker", "image", "prune", "-af", "--filter", civm.DefaultDockerImagePruneFilter))
-		actions = append(actions, runCmd(opts, ctx, "docker_container_prune", "docker", "container", "prune", "-f"))
-		actions = append(actions, runCmd(opts, ctx, "docker_volume_prune", "docker", "volume", "prune", "-f"))
 	}
+	// Docker prune is always age-filtered and best-effort (commandActionWarn,
+	// never fatal) in both modes. We must NOT run `docker system prune
+	// --volumes` at job-started: its unfiltered content GC corrupts a
+	// concurrent `docker pull` on a sibling job ("unable to lease content:
+	// lease does not exist"), and on a busy daemon it can be OOM-killed
+	// ("docker_prune: signal: killed") — a fatal cleanup error at job-started
+	// would then reject the starting job. Filtered prunes free old
+	// images/build cache without touching content a sibling is pulling, and
+	// HardFailPct still guards genuinely-full disk.
+	actions = append(actions, commandActionWarn(opts, ctx, "docker_buildx_prune", "docker", "buildx", "prune", "--force", "--filter", civm.DefaultDockerBuildxPruneFilter))
+	actions = append(actions, commandActionWarn(opts, ctx, "docker_image_prune", "docker", "image", "prune", "-af", "--filter", civm.DefaultDockerImagePruneFilter))
+	actions = append(actions, commandActionWarn(opts, ctx, "docker_container_prune", "docker", "container", "prune", "-f"))
+	actions = append(actions, commandActionWarn(opts, ctx, "docker_volume_prune", "docker", "volume", "prune", "-f"))
 	actions = append(actions, runCmd(opts, ctx, "apt_clean", "sudo", "apt-get", "clean"))
 	actions = append(actions, runCmd(opts, ctx, "journal_vacuum", "sudo", "journalctl", "--vacuum-time=1d"))
 	actions = append(actions, runCmd(opts, ctx, "fstrim", "sudo", "fstrim", "-av"))
