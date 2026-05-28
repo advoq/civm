@@ -710,13 +710,18 @@ func TestJobCompletedUsesGentleDockerSequence(t *testing.T) {
 	joined := strings.Join(commands, "\n")
 	for _, want := range []string{
 		"docker buildx prune --force --filter until=24h",
-		"docker image prune -af --filter until=168h",
+		"docker image prune -f",
 		"docker container prune -f",
 		"docker volume prune -f",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("job-completed missing gentle docker step %q\nGot:\n%s", want, joined)
 		}
+	}
+	// Dangling-only image prune: never `-a` (would delete a concurrent job's
+	// pulled/built tagged images) and never aggressive system prune.
+	if strings.Contains(joined, "docker image prune -a") {
+		t.Errorf("image prune must be dangling-only (no -a), got:\n%s", joined)
 	}
 	if strings.Contains(joined, "docker system prune") {
 		t.Errorf("job-completed should not run aggressive docker system prune, got:\n%s", joined)
@@ -920,8 +925,15 @@ func TestJobStartedUnderPressureUsesFilteredDockerPrune(t *testing.T) {
 	if strings.Contains(joined, "docker system prune") {
 		t.Errorf("job-started must not run unfiltered docker system prune, got:\n%s", joined)
 	}
-	if !strings.Contains(joined, "docker image prune -af --filter") {
-		t.Errorf("job-started should run age-filtered docker image prune, got:\n%s", joined)
+	// Image prune must be dangling-only: `-a` removes a concurrent job's
+	// recently-pulled-but-old-vendor-dated tagged images (redis, minio, alpine,
+	// clamav, postgres base) mid `compose up --build`, which then fails with
+	// "No such image".
+	if !strings.Contains(joined, "docker image prune -f") {
+		t.Errorf("job-started should run dangling-only docker image prune, got:\n%s", joined)
+	}
+	if strings.Contains(joined, "docker image prune -a") {
+		t.Errorf("job-started image prune must not use -a (deletes sibling images), got:\n%s", joined)
 	}
 }
 
