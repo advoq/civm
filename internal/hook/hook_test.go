@@ -163,6 +163,61 @@ func TestJobStartedPurgesHotCachesUnderDiskPressure(t *testing.T) {
 	}
 }
 
+// TestJobStartedPreservesActiveWorkspaceUnderDiskPressure valida que, sob disk
+// pressure em job-started, o cleanup NÃO apaga o GITHUB_WORKSPACE que o runner
+// acabou de criar para o job que está começando — senão o job falha com
+// "working directory ... No such file or directory". Outras entradas stale de
+// _work (ex.: _temp) ainda são limpas e os caches sob $HOME ainda purgados.
+func TestJobStartedPreservesActiveWorkspaceUnderDiskPressure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("RUNNER_TEMP", "")
+	workRoot := "/home/civm-test/actions-runner-advoq/_work"
+	t.Setenv("GITHUB_WORKSPACE", workRoot+"/advoq/advoq")
+	t.Setenv("GITHUB_REPOSITORY", "advoq/advoq")
+	t.Setenv("GITHUB_RUN_ID", "1")
+
+	var removed []string
+	opts := DefaultOptionsFromEnv(EventJobStarted)
+	opts.Execute = true
+	opts.PreCleanupPct = 50
+	opts.HardFailPct = 95
+	// 80% usado, acima de PreCleanupPct → disk pressure cleanup.
+	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 20, nil }
+	opts.RemoveAllFn = func(p string) error { removed = append(removed, p); return nil }
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.LogPath = ""
+	opts.WorkRoot = workRoot
+	opts.ReadDirFn = func(path string) ([]os.DirEntry, error) {
+		if path != workRoot {
+			return nil, fmt.Errorf("unexpected ReadDir path: %s", path)
+		}
+		return []os.DirEntry{
+			fakeDirEntry("_tool"),
+			fakeDirEntry("_actions"),
+			fakeDirEntry("_temp"),
+			fakeDirEntry("advoq"),
+		}, nil
+	}
+
+	Run(context.Background(), opts)
+
+	joined := strings.Join(removed, "\n")
+	if strings.Contains(joined, filepath.Join(workRoot, "advoq")) {
+		t.Fatalf("disk-pressure cleanup apagou o workspace ativo %q — quebra o job iniciando; removed=%v", filepath.Join(workRoot, "advoq"), removed)
+	}
+	if !strings.Contains(joined, filepath.Join(workRoot, "_temp")) {
+		t.Fatalf("esperava limpar _temp stale; removed=%v", removed)
+	}
+	if strings.Contains(joined, filepath.Join(workRoot, "_tool")) || strings.Contains(joined, filepath.Join(workRoot, "_actions")) {
+		t.Fatalf("removeu cache quente _tool/_actions; removed=%v", removed)
+	}
+	if !strings.Contains(joined, filepath.Join(home, ".cache", "go-build")) {
+		t.Fatalf("esperava purgar go-build cache sob disk pressure; removed=%v", removed)
+	}
+}
+
 func TestJobStartedDemotesCacheDeleteRaceWhenDiskDropsBelowHardFail(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -247,7 +302,7 @@ func TestRunErrorsOnUnsupportedEvent(t *testing.T) {
 }
 
 func TestCleanWorkRootRejectsUnsafeRoot(t *testing.T) {
-	a := cleanWorkRoot(Options{Execute: true}, "/etc/passwd")
+	a := cleanWorkRoot(Options{Execute: true}, "/etc/passwd", false)
 	if a.Error == "" {
 		t.Fatalf("expected unsafe error, got %+v", a)
 	}
@@ -258,7 +313,7 @@ func TestCleanWorkRootHandlesReadDirError(t *testing.T) {
 		Execute:   true,
 		ReadDirFn: func(string) ([]os.DirEntry, error) { return nil, fmt.Errorf("EACCES") },
 	}
-	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work")
+	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work", false)
 	if a.Error == "" {
 		t.Fatalf("expected ReadDir error to propagate, got %+v", a)
 	}
@@ -269,7 +324,7 @@ func TestCleanWorkRootSkipsMissingDir(t *testing.T) {
 		Execute:   true,
 		ReadDirFn: func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist },
 	}
-	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work")
+	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work", false)
 	if a.Error != "" {
 		t.Fatalf("missing dir should be silent, got %+v", a)
 	}
@@ -283,7 +338,7 @@ func TestCleanWorkRootPropagatesRemoveError(t *testing.T) {
 		},
 		RemoveAllFn: func(string) error { return fmt.Errorf("EBUSY") },
 	}
-	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work")
+	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work", false)
 	if a.Error == "" {
 		t.Fatalf("expected RemoveAll error to propagate, got %+v", a)
 	}

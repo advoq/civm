@@ -170,7 +170,7 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	}
 	actions := make([]Action, 0, estCap)
 	for _, root := range roots {
-		actions = append(actions, cleanWorkRoot(opts, root))
+		actions = append(actions, cleanWorkRoot(opts, root, purgeCaches))
 	}
 	// Em modo disk-pressure usamos commandAction (erro derruba o hook → sinal
 	// claro de problema). Em modo rotineiro usamos commandActionWarn: erro
@@ -201,11 +201,19 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	return actions
 }
 
-func cleanWorkRoot(opts Options, root string) Action {
+func cleanWorkRoot(opts Options, root string, preserveActiveWorkspace bool) Action {
 	a := Action{Name: "work_root", Path: root, Executed: opts.Execute}
 	if !safeWorkRoot(root) {
 		a.Error = "unsafe work root"
 		return a
+	}
+	// At job-started the runner has already created the active job's
+	// GITHUB_WORKSPACE under this root. Deleting it frees almost nothing but
+	// breaks the starting job ("working directory ... No such file or
+	// directory"). job-completed still cleans it once the job is done.
+	protected := ""
+	if preserveActiveWorkspace {
+		protected = activeWorkspaceEntry(root, opts.GitHubWorkspace)
 	}
 	entries, err := opts.ReadDirFn(root)
 	if err != nil {
@@ -220,6 +228,9 @@ func cleanWorkRoot(opts Options, root string) Action {
 		if name == "_tool" || name == "_actions" {
 			continue
 		}
+		if protected != "" && name == protected {
+			continue
+		}
 		path := filepath.Join(root, name)
 		if opts.Execute {
 			if err := opts.RemoveAllFn(path); err != nil {
@@ -229,6 +240,29 @@ func cleanWorkRoot(opts Options, root string) Action {
 		}
 	}
 	return a
+}
+
+// activeWorkspaceEntry returns the top-level entry under root that contains the
+// active GITHUB_WORKSPACE, or "" when workspace is empty or not under root.
+// Example: root=.../_work, ws=.../_work/advoq/advoq -> "advoq". Used at
+// job-started so disk-pressure cleanup never deletes the workspace the runner
+// just created for the starting job.
+func activeWorkspaceEntry(root, workspace string) string {
+	if strings.TrimSpace(workspace) == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(workspace))
+	if err != nil {
+		return ""
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	parts := strings.SplitN(rel, string(filepath.Separator), 2)
+	if parts[0] == "" {
+		return ""
+	}
+	return parts[0]
 }
 
 func removePath(opts Options, path, name string) Action {
