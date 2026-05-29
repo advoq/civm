@@ -9,6 +9,10 @@ import (
 	"testing"
 )
 
+// missingPath is a path that is guaranteed not to exist, used to drive
+// error branches in syscall-backed defaults.
+const missingPath = "/this/path/does/not/exist/civm-capacity-test"
+
 func TestCheckBlocksWhenDiskHigh(t *testing.T) {
 	opts := DefaultOptions()
 	opts.MaxDiskPct = 80
@@ -152,5 +156,102 @@ func TestCheckLockErrorLeavesInactive(t *testing.T) {
 	}
 	if !r.AcceptingJobs {
 		t.Fatalf("lock telemetry error must not block job acceptance: %+v", r)
+	}
+}
+
+// TestCheckUsesDefaultFnsWhenNil drives Check with a fully empty Options so the
+// nil-guards wire in defaultStatfs/defaultRun/defaultLockActive/defaultPortBlocks.
+// The default StatfsFn reads the real "/" mount, which is always present in CI,
+// so the call must succeed and the report must accept jobs (root is never full).
+func TestCheckUsesDefaultFnsWhenNil(t *testing.T) {
+	r := Check(context.Background(), Options{})
+	if r.DiskPath != "/" {
+		t.Fatalf("default path = %q, want /", r.DiskPath)
+	}
+	if r.DiskTotalGB <= 0 {
+		t.Fatalf("default statfs should report a non-zero total: %+v", r)
+	}
+	// The host root is not expected to be full; defaults must accept jobs and
+	// must not record a blocking reason.
+	if !r.AcceptingJobs || r.Reason != "" {
+		t.Fatalf("defaults should accept jobs on a healthy root: %+v", r)
+	}
+}
+
+// TestCountRunnerWorkersOnRunFail covers the error branch where pgrep itself
+// fails (distinct from the already-tested invalid-output branch).
+func TestCountRunnerWorkersOnRunFail(t *testing.T) {
+	got := countRunnerWorkers(context.Background(),
+		func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("pgrep boom") })
+	if got != 0 {
+		t.Fatalf("got %d, want 0 when pgrep fails", got)
+	}
+}
+
+// TestRenderTextLockHeldWithoutHolder covers the "(unknown)" fallback when the
+// lock is active but the holder label is empty.
+func TestRenderTextLockHeldWithoutHolder(t *testing.T) {
+	var buf bytes.Buffer
+	RenderText(&buf, Report{AcceptingJobs: true, DockerHeavyLockActive: true})
+	out := buf.String()
+	if !strings.Contains(out, "Docker-heavy lock: held by (unknown)") {
+		t.Fatalf("expected unknown-holder fallback, got %q", out)
+	}
+}
+
+// TestRenderTextNoLockOmitsLockLine asserts the lock line is absent when no lock
+// is held, keeping the accepting/blocked branches symmetric.
+func TestRenderTextNoLockOmitsLockLine(t *testing.T) {
+	var buf bytes.Buffer
+	RenderText(&buf, Report{AcceptingJobs: true})
+	if strings.Contains(buf.String(), "Docker-heavy lock") {
+		t.Fatalf("lock line should be omitted when inactive: %q", buf.String())
+	}
+}
+
+// TestDefaultStatfs exercises the real syscall path for both the happy "/" case
+// and the error branch for a path that cannot be stat'd.
+func TestDefaultStatfs(t *testing.T) {
+	total, free, err := defaultStatfs("/")
+	if err != nil {
+		t.Fatalf("statfs / failed: %v", err)
+	}
+	if total == 0 || free > total {
+		t.Fatalf("implausible statfs result: total=%d free=%d", total, free)
+	}
+
+	if _, _, err := defaultStatfs(missingPath); err == nil {
+		t.Fatalf("statfs on a missing path should error")
+	}
+}
+
+// TestDefaultRun runs a trivial, always-present command to cover the production
+// exec wrapper. "true" succeeds with empty output on every supported platform.
+func TestDefaultRun(t *testing.T) {
+	out, err := defaultRun(context.Background(), "true")
+	if err != nil {
+		t.Fatalf("defaultRun true failed: %v out=%q", err, out)
+	}
+}
+
+// TestDefaultLockActiveAbsent calls the production default directly. In the unit
+// environment the docker-heavy lock heartbeat file is absent, so dockerlock
+// reports not-active and the wrapper returns the benign (false,"",nil) tuple.
+func TestDefaultLockActiveAbsent(t *testing.T) {
+	active, holder, err := defaultLockActive()
+	if err != nil {
+		t.Fatalf("defaultLockActive should not error when lock is absent: %v", err)
+	}
+	if active || holder != "" {
+		t.Fatalf("absent lock must report inactive/empty, got active=%v holder=%q", active, holder)
+	}
+}
+
+// TestDefaultPortBlocksAbsent calls the production default directly. The sticky
+// port-block state file is absent in the unit environment, so the read error
+// branch must yield a nil map (observability is best-effort, never fatal).
+func TestDefaultPortBlocksAbsent(t *testing.T) {
+	if got := defaultPortBlocks(); got != nil {
+		t.Fatalf("absent port-block state must yield nil, got %+v", got)
 	}
 }
