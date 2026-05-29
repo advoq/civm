@@ -453,6 +453,158 @@ imprevisivelmente.
 
 Ver §"Disk hygiene" abaixo para automacao.
 
+## Runtime de isolamento multi-projeto (primitivo do civm)
+
+> **Fonte de verdade:** `docs/specs/multi-project-isolation/SPECv2.md`.
+> Esta seção formaliza, como **primitivo injetado pelo civm**, as três
+> regras manuais de §"Riscos compartilhados" (project-name único, portas
+> não-fixas, serialização do daemon). As regras manuais continuam
+> válidas para peers que ainda não consomem os primitivos; o caminho
+> Day-0 é consumir os primitivos abaixo.
+
+### Variáveis injetadas pelo `hook install`
+
+`civmctl hook install --execute` grava, em cada
+`/home/*/actions-runner*/.env`, além dos dois hooks de job
+(`ACTIONS_RUNNER_HOOK_*`), três variáveis de isolamento por runner
+(civm SPECv2 RF-1 / ITEM-6 override / DT-v2-8):
+
+| Var | Origem | Para que serve |
+|---|---|---|
+| `CIVM_RUNNER_SLOT` | `runnerSlot(dir)` = basename do diretório sem o prefixo `actions-runner-` (DT-v2-12) | Slot estável por runner; base do project-name |
+| `CIVM_PORT_BASE` | `portblock.Allocate(slot)` — bloco de 64 portas sticky por slot dentro de `[20000,32000)` (DT-v2-2) | Base do bloco de portas host-publicadas do peer |
+| `COMPOSE_PROJECT_NAME` | `= CIVM_RUNNER_SLOT` (default p/ compose fora do devctl) | Project-name docker default; peers com run-uniqueness sobrepõem em runtime |
+
+`upsertEnv` é determinístico e **rejeita** qualquer chave `extra` com
+prefixo `ACTIONS_RUNNER_HOOK_*` (DT-v2-8); as chaves de `extra` são
+reanexadas em ordem alfabética após os dois hooks.
+
+> **Nota para o advoq (consumidor):** o `COMPOSE_PROJECT_NAME` injetado
+> é só o `slot`. O advoq **sobrepõe em runtime** com
+> `projectName() = sanitize(CIVM_RUNNER_SLOT|advoq) + "-" + sanitize(GITHUB_RUN_ID|local)`
+> para garantir unicidade **por-run** que o slot puro não dá (advoq
+> SPECv2 DT-v2-1). O `CIVM_PORT_BASE` injetado vira `CIVM_*_PORT =
+> base+0..10` e as URLs do `web/.env` (advoq SPECv2 §Mapa de portas).
+
+### Bloco de portas — janela `[20000,32000)`
+
+`portblock.Allocate` aloca um bloco de 64 portas por slot dentro de
+`[20000,32000)` (187 blocos), com `flock(LOCK_EX)` sobre o `StatePath`
+durante todo o ciclo read→find→write e persistência via temp +
+`os.Rename` atômico (civm SPECv2 ITEM-3 override / DT-v2-2). Exaustão da
+janela → `ErrPortWindowExhausted`, que **falha o `hook install`**
+(operador remove runner morto; sem auto-eviction no v1 — DT-v2-19).
+
+A janela `[20000,32000)` é **disjunta** da faixa ephemeral do kernel
+(`/proc/sys/net/ipv4/ip_local_port_range`, lower ≥ 32768) e dos
+host-ports dos peers — evidência colada no Slice 0 (DT-v2-11). Por isso
+jobs nunca devem bind porta fixa fora do bloco alocado; ver §"Riscos
+compartilhados" item 2.
+
+### Lock docker-heavy — `civmctl lock --exec --scope docker-heavy`
+
+Um único lock global em `/run/civm/docker-heavy.lock` serializa todo
+trabalho docker-heavy entre runners do mesmo daemon. Embrulhe o trabalho
+docker-heavy assim:
+
+```bash
+civmctl lock --exec --scope docker-heavy --budget 50m --wait 75m -- make up-local
+```
+
+Semântica (civm SPECv2 ITEM-4 override / DT-v2-1/17):
+
+- `--scope` ∈ {`docker-heavy`}; outro valor → exit `64` (DT-v2-17). O
+  `scope` é só rótulo de observabilidade; o lock é global.
+- O **heartbeat é estendido enquanto o processo holder vive** (toda a
+  vida do `--exec`). `--budget` (HOLD) é **apenas alarme**
+  (`over_budget=true` no `lock_release`), **nunca** mata job vivo
+  (DT-v2-1).
+- Staleness (reclaimável) = **PID morto** OU heartbeat sem atualização há
+  > 3× `DefaultDockerHeavyHeartbeatSeconds`. `IsActive` confere PID
+  vivo **e** `pid_start_ticks` (campo 22 de `/proc/<pid>/stat`) para não
+  reclamar de PID reusado (DT-v2-3).
+- Aquisição = `flock(LOCK_EX|LOCK_NB)` com backoff linear 100 ms ± 10 ms
+  até `--wait` (DT-v2-4).
+- Cleanup/job-started que encontram lock fresco logam
+  `deferred-by-docker-heavy-lock` e **retornam cedo sem erro** (no-op),
+  re-executando depois (DT-v2-16) — nunca matam o holder vivo.
+
+**Exit codes** (civm SPECv2 §Exit codes / DT-v2-7):
+
+| Código | Significado |
+|---|---|
+| `0` | `--exec`: comando interno terminou com sucesso |
+| _exit do comando_ | `--exec`: propaga o exit do comando interno em falha |
+| `64` | flags inválidas / `--scope` desconhecido |
+| `75` | não adquiriu o lock dentro do `--wait` budget (`ErrWaitBudgetExceeded`) |
+| `77` | falha interna de flock/heartbeat/IO |
+
+Não existe código para "HOLD expirado": por DT-v2-1 não há force-kill;
+HOLD só marca `over_budget`.
+
+#### Definição de "docker-heavy" (civm SPECv2 §Definição docker-heavy / DT-v2-10)
+
+- **É docker-heavy (embrulhar em `civmctl lock --exec`):**
+  `docker compose up/down/run`, `docker build`, `docker buildx`,
+  `docker pull` — qualquer operação que aloca recursos do daemon
+  (imagem/container/rede/volume) e pode colidir com job concorrente.
+- **NÃO é:** `docker ps`, `docker logs`, `docker inspect`,
+  `docker version` (read-only).
+
+### ci-guard — `civmctl ci-guard`
+
+Lint do compose/workflow do peer contra os invariantes de isolamento
+(civm SPECv2 ITEM-5 override / DT-v2-9/14). Disciplina única:
+**#5 Availability heuristic**.
+
+```bash
+civmctl ci-guard --repo-root . --mode report --json
+```
+
+| Regra | Detecta | Severidade |
+|---|---|---|
+| R1 | `container_name` fixo no compose | ERROR |
+| R2 | host-port estática no compose | ERROR |
+| R3 | compose sem project-name | ERROR |
+| R4 | docker-heavy sem `civmctl lock` | WARN (só `report`) |
+
+`--mode enforce` retorna exit 1 se houver ≥1 ERROR não-waivado; R4
+**nunca** conta como violation em `enforce`. Waiver line-based:
+`# civm:ci-guard-allow <rule> <motivo>` suprime `<rule>` na próxima
+linha significativa; waiver que não casa nenhum finding → WARN
+`orphan-waiver`.
+
+### Gating do runner `civm-e2e` (consumidor)
+
+Peers que precisam do bring-up docker-heavy completo (ex.: advoq E2E)
+usam o label opcional `civm-e2e`, gateado por GitHub variable para não
+enfileirar para sempre quando o label ainda não está vivo (advoq SPECv2
+DT-v2-8):
+
+```yaml
+runs-on: ${{ vars.CIVM_E2E_RUNNER_AVAILABLE == 'true' && fromJSON('["self-hosted","civm","civm-e2e"]') || fromJSON('["self-hosted","civm"]') }}
+```
+
+O operador civm seta `CIVM_E2E_RUNNER_AVAILABLE=true` quando registra um
+runner com o label `civm-e2e` vivo.
+
+### Rollback trigger (isolamento docker-heavy)
+
+Avaliado sobre os **primeiros 5 runs consecutivos de cada peer nas
+primeiras 48h** pós-deploy (civm SPECv2 §Rollback trigger v2). Reverter
+a slice (`self-upgrade` versão anterior + `rm
+/var/lib/civm/port-blocks.json`) se **qualquer**:
+
+- colisão de container (`docker ps --format '{{.Names}}' | sort | uniq -d` ≥1 cross-runner); OU
+- `EADDRINUSE` em `[20000,32000)` no journal; OU
+- mesmo `COMPOSE_PROJECT_NAME` em >1 runner ativo; OU
+- lock-wait p95 > 600000 ms (10 min) sobre os 5 runs; OU
+- `ci-guard --mode=enforce` com falso-positivo bloqueante não-waivável; OU
+- disco em `DefaultHardFailPct` (90%) com lock docker-heavy fresco.
+
+Abort imediato (não espera 5 runs): qualquer lock-wait único exceder o
+`--wait` budget (75 min).
+
 ## Runner parity com ubuntu-latest
 
 Para que peer repos rodem na civm **identicamente** ao GitHub-hosted

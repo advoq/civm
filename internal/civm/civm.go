@@ -59,6 +59,43 @@ const (
 	// Timeout por comando dentro do hook cleanup. Evita que um docker travado
 	// segure o runner durante todo o TimeoutStartSec do systemd (30 min).
 	DefaultRoutineCleanupCmdTimeoutSecs = 120
+
+	// Reclamação de volume do host (docs/specs/host-volume-reclamation).
+	DefaultHostVolumeWarnFreeGB = 30 // alinhado ao runbook ">30GB livres"
+	DefaultHostVolumeCritFreeGB = 10 // alinhado ao runbook "<10GB"
+	// DefaultHostVolumeHeadroomGB é o mínimo de V: livre ANTES do Optimize-VHD;
+	// abaixo disso aborta sem zero-fill (folga p/ crescimento temporário do
+	// VHDX na compactação).
+	DefaultHostVolumeHeadroomGB      = 15
+	DefaultHostMetricsPath           = "/var/lib/civm/host-metrics.json" // cópia entregue ao guest
+	DefaultHostMetricsMaxAgeMinutes  = 30                                // stale acima disso
+	DefaultHostMetricsFileNameOnHost = "civm-host-metrics.json"          // nome do arquivo no host (V:\)
+	DefaultMaintenanceStatePath      = "/var/lib/civm/maintenance.json"  // snapshot de drain idempotente
+	DefaultMaintenanceLockPath       = "/var/lib/civm/maintenance.lock"  // flock anti-concorrência de enter/exit
+
+	// Isolamento multi-projeto (docs/specs/multi-project-isolation, ITEM-2/3).
+	// CIVM_PORT_BASE é um bloco de DefaultRunnerPortBlockSize portas por runner,
+	// base sticky persistida em DefaultPortBlockStatePath (mapa slot->base).
+	// A janela [DefaultRunnerPortBlockStart, DefaultRunnerPortWindowEnd) fica
+	// acima dos defaults conhecidos dos peers e abaixo da faixa ephemeral do
+	// kernel Linux (32768+), evitando colisão com ambos.
+	DefaultRunnerPortBlockStart = 20000
+	DefaultRunnerPortBlockSize  = 64
+	DefaultRunnerPortWindowEnd  = 32000 // < faixa ephemeral do kernel (32768+)
+	DefaultPortBlockStatePath   = "/var/lib/civm/port-blocks.json"
+
+	// Serialização de trabalho docker-heavy box-wide (docs/specs/multi-project-isolation,
+	// ITEM-4). Um único lock global protege qualquer operação que aloca recursos
+	// do daemon (docker compose up/down/run, docker build/buildx, docker pull).
+	DefaultDockerHeavyLockPath = "/run/civm/docker-heavy.lock"
+	// HOLD: além disso o heartbeat continua (não mata job vivo), apenas marca
+	// over_budget=true no lock_release como sinal de alarme (SPECv2 DT-v2-1).
+	DefaultDockerHeavyLockBudgetMinutes = 50
+	// WAIT: além disso a aquisição falha alto com ErrWaitBudgetExceeded.
+	DefaultDockerHeavyLockWaitMinutes = 75
+	// Intervalo de reescrita do heartbeat; staleness = heartbeat parado por
+	// > 3× este valor OU PID morto OU pidStartTicks divergente (SPECv2 DT-v2-1/3).
+	DefaultDockerHeavyHeartbeatSeconds = 30
 )
 
 var (

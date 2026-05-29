@@ -11,6 +11,13 @@ import (
 
 const exitUsage = 64
 
+// Exit codes for `civmctl lock` (docs/specs/multi-project-isolation SPECv2,
+// §Exit codes / DT-v2-7). 75/77 are intentionally distinct from 64 (usage).
+const (
+	exitLockWaitTimeout = 75 // ErrWaitBudgetExceeded: lock not acquired within WaitBudget
+	exitLockInternal    = 77 // flock/heartbeat/IO failure in the lock layer
+)
+
 // hookEventFromArgv0 detects when civmctl was invoked as a runner hook
 // (via script job-started.sh or job-completed.sh in /opt/civm/hooks).
 // Returns the event name and true when the basename matches; otherwise false.
@@ -68,6 +75,12 @@ func main() {
 		os.Exit(runHook(args))
 	case "capacity":
 		os.Exit(runCapacity(args))
+	case "host-disk":
+		os.Exit(runHostDisk(args))
+	case "maintenance":
+		os.Exit(runMaintenance(args))
+	case "disk-doctor":
+		os.Exit(runDiskDoctor(args))
 	case "metrics":
 		os.Exit(runMetrics(args))
 	case "reverse-watchdog":
@@ -82,6 +95,10 @@ func main() {
 		os.Exit(runActionsMetrics(args))
 	case "self-upgrade":
 		os.Exit(runSelfUpgrade(args))
+	case "ci-guard":
+		os.Exit(runCIGuard(args))
+	case "lock":
+		os.Exit(runLock(args))
 	case "-h", "--help", "help":
 		printHelp()
 		os.Exit(0)
@@ -124,6 +141,8 @@ COMANDOS
   active-runs     Lista workflow runs in_progress + queued + ETA (avg historico)
   actions-metrics Agrega minutos billable + run counts cross-repo (espelha Actions Usage Metrics)
   self-upgrade    Rebuilda civmctl do /opt/civm e substitui /usr/local/bin/civmctl
+  ci-guard        Lint de compose/workflow do peer contra invariantes de isolamento
+  lock            Serializa trabalho docker-heavy (acquire/release/--exec com heartbeat + budget)
   help            Esta mensagem
 
 EXEMPLOS
@@ -167,6 +186,8 @@ EXEMPLOS
   sudo civmctl hook install --execute --runner-glob='/srv/ci/actions-runner*'
   sudo civmctl self-upgrade
   sudo civmctl self-upgrade --execute
+  civmctl ci-guard --repo-root . --mode report --json
+  civmctl lock --exec --scope docker-heavy --budget 50m --wait 75m -- make up-local
 
 DOCUMENTACAO
   PRD/SPEC: docs/specs/civmctl/
