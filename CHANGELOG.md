@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.8.2](https://github.com/advoq/civm/compare/v1.8.1...v1.8.2) (2026-05-28)
+
+
+### Bug Fixes
+
+* **hook:** make job-started apt/journal/fstrim cleanup best-effort ([#55](https://github.com/advoq/civm/issues/55)) ([f9c9add](https://github.com/advoq/civm/commit/f9c9addb2965e14105c5c6007eed2b811ed64f51))
+* **hook:** make job-started cleanup safe for concurrent jobs on shared runner ([#53](https://github.com/advoq/civm/issues/53)) ([6ec6b69](https://github.com/advoq/civm/commit/6ec6b6986cdad4f1b5025083dfd6eef2038ecdea))
+* **hook:** prune dangling images only, never -a, on shared runner ([#56](https://github.com/advoq/civm/issues/56)) ([36d26b1](https://github.com/advoq/civm/commit/36d26b1cfc9875cc1bfe1035ab2e6dd528b13ab2))
+
 ## [1.8.1](https://github.com/advoq/civm/compare/v1.8.0...v1.8.1) (2026-05-25)
 
 
