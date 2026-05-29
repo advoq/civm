@@ -119,3 +119,38 @@ func TestRenderTextIncludesStateAndReason(t *testing.T) {
 		t.Fatalf("text missing fields: %q", out)
 	}
 }
+
+func TestCheckPopulatesDockerHeavyLockActive(t *testing.T) {
+	r := Check(context.Background(), Options{
+		StatfsFn:     func(string) (uint64, uint64, error) { return 100, 50, nil },
+		RunFn:        func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		LockActiveFn: func() (bool, string, error) { return true, "docker-heavy advoq/advoq#42", nil },
+		PortBlocksFn: func() map[string]int { return map[string]int{"cmpx": 20000, "advoq": 20064} },
+	})
+	if !r.DockerHeavyLockActive || r.DockerHeavyLockHolder != "docker-heavy advoq/advoq#42" {
+		t.Fatalf("lock fields not populated: %+v", r)
+	}
+	if r.RunnerPortBlocks["advoq"] != 20064 {
+		t.Fatalf("port blocks not populated: %+v", r.RunnerPortBlocks)
+	}
+	var buf bytes.Buffer
+	RenderText(&buf, r)
+	if !strings.Contains(buf.String(), "Docker-heavy lock: held by docker-heavy advoq/advoq#42") {
+		t.Fatalf("text missing lock holder: %q", buf.String())
+	}
+}
+
+func TestCheckLockErrorLeavesInactive(t *testing.T) {
+	r := Check(context.Background(), Options{
+		StatfsFn:     func(string) (uint64, uint64, error) { return 100, 50, nil },
+		RunFn:        func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		LockActiveFn: func() (bool, string, error) { return false, "", errors.New("read .hb failed") },
+		PortBlocksFn: func() map[string]int { return nil },
+	})
+	if r.DockerHeavyLockActive || r.DockerHeavyLockHolder != "" {
+		t.Fatalf("lock read error must leave inactive/empty: %+v", r)
+	}
+	if !r.AcceptingJobs {
+		t.Fatalf("lock telemetry error must not block job acceptance: %+v", r)
+	}
+}

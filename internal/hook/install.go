@@ -8,7 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+
+	"github.com/advoq/civm/internal/portblock"
 )
 
 const (
@@ -37,6 +40,10 @@ type InstallOptions struct {
 	MkdirAllFn     func(path string, perm os.FileMode) error
 	RemoveFn       func(path string) error // remove one file or symlink, never recursively
 	RunFn          func(ctx context.Context, name string, args ...string) ([]byte, error)
+	// AllocatePortFn returns the sticky CIVM_PORT_BASE for a runner slot. It is
+	// injected so unit tests never touch the real /var/lib/civm/port-blocks.json
+	// state file; the default wraps portblock.Allocate.
+	AllocatePortFn func(slot string) (int, error)
 }
 
 type InstallResult struct {
@@ -58,8 +65,26 @@ func DefaultInstallOptions() InstallOptions {
 		MkdirAllFn:     os.MkdirAll,
 		RemoveFn:       os.Remove,
 		RunFn:          defaultRun,
+		AllocatePortFn: defaultAllocatePort,
 		RestartRunners: true,
 	}
+}
+
+// defaultAllocatePort assigns (and persists) the sticky port block for a slot
+// using the production portblock state file.
+func defaultAllocatePort(slot string) (int, error) {
+	return portblock.Allocate(portblock.DefaultOptions(), slot)
+}
+
+// runnerSlot derives the CI project slot from a runner directory name (DT-v2-12):
+// "actions-runner-cmpx" -> "cmpx"; "actions-runner" -> "actions-runner";
+// "my-runner" -> "my-runner". No realpath resolution.
+func runnerSlot(dir string) string {
+	b := filepath.Base(dir)
+	if s := strings.TrimPrefix(b, "actions-runner-"); s != b && s != "" {
+		return s
+	}
+	return b
 }
 
 func Install(ctx context.Context, opts InstallOptions) InstallResult {
@@ -106,7 +131,17 @@ func Install(ctx context.Context, opts InstallOptions) InstallResult {
 		envPath := filepath.Join(runner, ".env")
 		res.RunnerEnvFiles = append(res.RunnerEnvFiles, envPath)
 		if opts.Execute {
-			if err := upsertEnv(opts, envPath); err != nil {
+			slot := runnerSlot(runner)
+			base, err := opts.AllocatePortFn(slot)
+			if err != nil {
+				return installError(res, fmt.Errorf("allocate port block for slot %s: %w", slot, err))
+			}
+			extra := map[string]string{
+				"CIVM_RUNNER_SLOT":     slot,
+				"CIVM_PORT_BASE":       strconv.Itoa(base),
+				"COMPOSE_PROJECT_NAME": slot,
+			}
+			if err := upsertEnv(opts, envPath, extra); err != nil {
 				return installError(res, err)
 			}
 		}
@@ -133,7 +168,18 @@ func validateInstallOptions(opts InstallOptions) error {
 	return nil
 }
 
-func upsertEnv(opts InstallOptions, envPath string) error {
+// upsertEnv reconciles the runner .env so it always carries exactly one of each
+// civm-managed hook line plus the caller-provided extra keys. The two
+// ACTIONS_RUNNER_HOOK_* lines are owned by this function, so extra must not try
+// to set them (DT-v2-8). Existing managed/extra keys are stripped first, then
+// the two hooks are reappended, then the extra keys in deterministic alphabetical
+// order — making repeated installs idempotent.
+func upsertEnv(opts InstallOptions, envPath string, extra map[string]string) error {
+	for k := range extra {
+		if strings.HasPrefix(k, "ACTIONS_RUNNER_HOOK_") {
+			return fmt.Errorf("extra must not contain ACTIONS_RUNNER_HOOK_* keys")
+		}
+	}
 	data, err := opts.ReadFileFn(envPath)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -141,9 +187,17 @@ func upsertEnv(opts InstallOptions, envPath string) error {
 	lines := strings.Split(string(data), "\n")
 	var kept []string
 	for _, line := range lines {
-		if strings.HasPrefix(line, "ACTIONS_RUNNER_HOOK_JOB_STARTED=") ||
-			strings.HasPrefix(line, "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=") ||
-			strings.TrimSpace(line) == "" {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		key := line
+		if i := strings.IndexByte(line, '='); i >= 0 {
+			key = line[:i]
+		}
+		if key == "ACTIONS_RUNNER_HOOK_JOB_STARTED" || key == "ACTIONS_RUNNER_HOOK_JOB_COMPLETED" {
+			continue
+		}
+		if _, isExtra := extra[key]; isExtra {
 			continue
 		}
 		kept = append(kept, line)
@@ -152,6 +206,14 @@ func upsertEnv(opts InstallOptions, envPath string) error {
 		"ACTIONS_RUNNER_HOOK_JOB_STARTED="+filepath.Join(opts.HooksDir, startedHookName),
 		"ACTIONS_RUNNER_HOOK_JOB_COMPLETED="+filepath.Join(opts.HooksDir, completedHookName),
 	)
+	extraKeys := make([]string, 0, len(extra))
+	for k := range extra {
+		extraKeys = append(extraKeys, k)
+	}
+	sort.Strings(extraKeys)
+	for _, k := range extraKeys {
+		kept = append(kept, k+"="+extra[k])
+	}
 	return opts.WriteFileFn(envPath, []byte(strings.Join(kept, "\n")+"\n"), 0644)
 }
 
@@ -258,5 +320,8 @@ func applyInstallDefaults(opts *InstallOptions) {
 	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
+	}
+	if opts.AllocatePortFn == nil {
+		opts.AllocatePortFn = defaultAllocatePort
 	}
 }

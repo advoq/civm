@@ -282,6 +282,7 @@ func TestInstallUpsertsHookEnv(t *testing.T) {
 	opts.Execute = true
 	opts.RestartRunners = false
 	opts.GlobFn = func(string) ([]string, error) { return []string{"/home/emdev/actions-runner"}, nil }
+	opts.AllocatePortFn = func(string) (int, error) { return 20000, nil }
 	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
 	opts.ReadFileFn = func(path string) ([]byte, error) { return files[path], nil }
 	opts.WriteFileFn = func(path string, data []byte, perm os.FileMode) error {
@@ -341,7 +342,7 @@ func FuzzUpsertEnv(f *testing.F) {
 				return nil
 			},
 		}
-		if err := upsertEnv(opts, envPath); err != nil {
+		if err := upsertEnv(opts, envPath, nil); err != nil {
 			t.Fatalf("first upsert: %v", err)
 		}
 		first := string(files[envPath])
@@ -358,13 +359,119 @@ func FuzzUpsertEnv(f *testing.F) {
 			t.Fatalf("first pass: missing %q\n%s", wantCompleted, first)
 		}
 		// Idempotency: a second pass must produce the same bytes.
-		if err := upsertEnv(opts, envPath); err != nil {
+		if err := upsertEnv(opts, envPath, nil); err != nil {
 			t.Fatalf("second upsert: %v", err)
 		}
 		if got := string(files[envPath]); got != first {
 			t.Fatalf("not idempotent:\n--- first ---\n%s\n--- second ---\n%s", first, got)
 		}
 	})
+}
+
+func TestRunnerSlot(t *testing.T) {
+	cases := map[string]string{
+		"/home/runner/actions-runner-cmpx": "cmpx",
+		"/home/runner/actions-runner":      "actions-runner",
+		"/srv/ci/my-runner":                "my-runner",
+		"actions-runner-advoq":             "advoq",
+	}
+	for dir, want := range cases {
+		if got := runnerSlot(dir); got != want {
+			t.Fatalf("runnerSlot(%q) = %q, want %q", dir, got, want)
+		}
+	}
+}
+
+func TestUpsertEnvRejectsHookKeysInExtra(t *testing.T) {
+	opts := InstallOptions{
+		HooksDir:    defaultHooksDir,
+		ReadFileFn:  func(string) ([]byte, error) { return nil, nil },
+		WriteFileFn: func(string, []byte, os.FileMode) error { t.Fatal("write must not happen on rejection"); return nil },
+	}
+	err := upsertEnv(opts, "/tmp/x.env", map[string]string{"ACTIONS_RUNNER_HOOK_JOB_STARTED": "/evil"})
+	if err == nil || !strings.Contains(err.Error(), "ACTIONS_RUNNER_HOOK_") {
+		t.Fatalf("expected rejection of hook key in extra, got %v", err)
+	}
+}
+
+func TestUpsertEnvWritesExtraDeterministically(t *testing.T) {
+	files := map[string][]byte{"/tmp/x.env": []byte("FOO=bar\nCIVM_PORT_BASE=999\n")}
+	opts := InstallOptions{
+		HooksDir:    defaultHooksDir,
+		ReadFileFn:  func(p string) ([]byte, error) { return files[p], nil },
+		WriteFileFn: func(p string, d []byte, _ os.FileMode) error { files[p] = d; return nil },
+	}
+	extra := map[string]string{"CIVM_RUNNER_SLOT": "cmpx", "CIVM_PORT_BASE": "20000", "COMPOSE_PROJECT_NAME": "cmpx"}
+	if err := upsertEnv(opts, "/tmp/x.env", extra); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	out := string(files["/tmp/x.env"])
+	// Pre-existing FOO preserved; stale CIVM_PORT_BASE=999 stripped and replaced.
+	for _, want := range []string{"FOO=bar", "CIVM_PORT_BASE=20000", "CIVM_RUNNER_SLOT=cmpx", "COMPOSE_PROJECT_NAME=cmpx"} {
+		if !containsLine(out, want) {
+			t.Fatalf("env missing %q:\n%s", want, out)
+		}
+	}
+	if countPrefix(out, "CIVM_PORT_BASE=") != 1 {
+		t.Fatalf("CIVM_PORT_BASE not deduped:\n%s", out)
+	}
+	// Extra keys are emitted in alphabetical order after the two hook lines.
+	iSlot := strings.Index(out, "CIVM_PORT_BASE=")
+	iName := strings.Index(out, "COMPOSE_PROJECT_NAME=")
+	if iSlot < 0 || iName < 0 || iSlot > strings.Index(out, "CIVM_RUNNER_SLOT=") {
+		t.Fatalf("extra keys not alphabetical:\n%s", out)
+	}
+	// Idempotency: a second pass yields identical bytes.
+	first := out
+	if err := upsertEnv(opts, "/tmp/x.env", extra); err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	if string(files["/tmp/x.env"]) != first {
+		t.Fatalf("extra upsert not idempotent:\n--- first ---\n%s\n--- second ---\n%s", first, files["/tmp/x.env"])
+	}
+}
+
+func TestInstallInjectsSlotAndPortBase(t *testing.T) {
+	files := map[string][]byte{"/home/runner/actions-runner-cmpx/.env": []byte("EXISTING=1\n")}
+	var gotSlot string
+	opts := DefaultInstallOptions()
+	opts.Execute = true
+	opts.RestartRunners = false
+	opts.GlobFn = func(string) ([]string, error) { return []string{"/home/runner/actions-runner-cmpx"}, nil }
+	opts.AllocatePortFn = func(slot string) (int, error) { gotSlot = slot; return 20064, nil }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.ReadFileFn = func(p string) ([]byte, error) { return files[p], nil }
+	opts.WriteFileFn = func(p string, d []byte, _ os.FileMode) error { files[p] = d; return nil }
+	opts.RemoveFn = func(string) error { return os.ErrNotExist }
+	res := Install(context.Background(), opts)
+	if res.Error != "" {
+		t.Fatalf("install error: %s", res.Error)
+	}
+	if gotSlot != "cmpx" {
+		t.Fatalf("AllocatePortFn slot = %q, want cmpx", gotSlot)
+	}
+	env := string(files["/home/runner/actions-runner-cmpx/.env"])
+	for _, want := range []string{"EXISTING=1", "CIVM_RUNNER_SLOT=cmpx", "CIVM_PORT_BASE=20064", "COMPOSE_PROJECT_NAME=cmpx"} {
+		if !containsLine(env, want) {
+			t.Fatalf("env missing %q:\n%s", want, env)
+		}
+	}
+}
+
+func TestInstallSurfacesPortAllocationError(t *testing.T) {
+	opts := DefaultInstallOptions()
+	opts.Execute = true
+	opts.RestartRunners = false
+	opts.GlobFn = func(string) ([]string, error) { return []string{"/home/runner/actions-runner-cmpx"}, nil }
+	opts.AllocatePortFn = func(string) (int, error) { return 0, fmt.Errorf("civm port window exhausted") }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.ReadFileFn = func(string) ([]byte, error) { return nil, nil }
+	opts.WriteFileFn = func(string, []byte, os.FileMode) error { return nil }
+	opts.RemoveFn = func(string) error { return os.ErrNotExist }
+	res := Install(context.Background(), opts)
+	if res.Error == "" || !strings.Contains(res.Error, "allocate port block") {
+		t.Fatalf("expected port allocation error to surface, got %q", res.Error)
+	}
 }
 
 func countPrefix(content, prefix string) int {

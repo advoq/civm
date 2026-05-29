@@ -15,8 +15,14 @@ import (
 	"time"
 
 	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/dockerlock"
 	"github.com/advoq/civm/internal/idle"
 )
+
+// deferredByDockerHeavyLock is the no-op Action name emitted when a docker-heavy
+// job currently holds the box-wide serialization lock (ITEM-10 / DT-v2-16).
+// Cleanup returns early without error so the cron/next hook re-runs later.
+const deferredByDockerHeavyLock = "deferred-by-docker-heavy-lock"
 
 type deleteCandidate struct {
 	path string
@@ -69,6 +75,13 @@ type Options struct {
 	GlobFn     func(pattern string) ([]string, error)
 	RunFn      func(ctx context.Context, name string, args ...string) ([]byte, error)
 	ActivityFn func(ctx context.Context) ([]Activity, error)
+	// LockActiveFn reports whether a docker-heavy job holds the serialization
+	// lock right now; ReclaimStaleFn removes a stale (.hb of a dead holder) lock;
+	// LockHolderFn labels the current holder. All injected so unit tests never
+	// touch /run/civm. Defaults wrap dockerlock (DT-v2-16).
+	LockActiveFn   func() (bool, error)
+	ReclaimStaleFn func() (bool, error)
+	LockHolderFn   func() string
 }
 
 // DefaultOptions returns sane defaults: dry-run, 1d /tmp, 3d _work.
@@ -90,13 +103,33 @@ func DefaultOptions() Options {
 		GlobFn:         filepath.Glob,
 		RunFn:          defaultRun,
 		ActivityFn:     defaultActivities,
+		LockActiveFn:   defaultLockActive,
+		ReclaimStaleFn: defaultReclaimStale,
+		LockHolderFn:   defaultLockHolder,
 	}
 }
+
+// defaultLockActive / defaultReclaimStale / defaultLockHolder wrap dockerlock so
+// cleanup never duplicates the staleness/PID-reuse logic. Import direction is
+// cleanup -> dockerlock only.
+func defaultLockActive() (bool, error)   { return dockerlock.IsActive(dockerlock.DefaultOptions()) }
+func defaultReclaimStale() (bool, error) { return dockerlock.ReclaimStale(dockerlock.DefaultOptions()) }
+func defaultLockHolder() string          { return dockerlock.Holder(dockerlock.DefaultOptions()) }
 
 // Run executes every enabled step and returns one Action per step.
 // Errors are captured per-Action; the function itself returns nil.
 func Run(ctx context.Context, opts Options) []Action {
 	applyDefaults(&opts)
+	// Defer to a live docker-heavy job: pruning the daemon while a build holds
+	// the lock would fight it for resources. A fresh holder -> no-op early
+	// return (exit 0, cron re-runs); a stale holder -> reclaim and proceed.
+	// Never hard-fails on lock read errors (DT-v2-16).
+	if opts.Execute {
+		if active, err := opts.LockActiveFn(); err == nil && active {
+			return []Action{{Name: deferredByDockerHeavyLock, Path: opts.LockHolderFn()}}
+		}
+		_, _ = opts.ReclaimStaleFn()
+	}
 	if opts.Execute && !opts.SkipIdleGuard {
 		if err := ensureIdle(ctx, opts); err != nil {
 			return []Action{{
@@ -133,6 +166,15 @@ func applyDefaults(opts *Options) {
 	}
 	if opts.ActivityFn == nil {
 		opts.ActivityFn = defaultActivities
+	}
+	if opts.LockActiveFn == nil {
+		opts.LockActiveFn = defaultLockActive
+	}
+	if opts.ReclaimStaleFn == nil {
+		opts.ReclaimStaleFn = defaultReclaimStale
+	}
+	if opts.LockHolderFn == nil {
+		opts.LockHolderFn = defaultLockHolder
 	}
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()

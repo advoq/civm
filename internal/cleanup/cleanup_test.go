@@ -39,7 +39,71 @@ func testExecuteOptions() Options {
 	opts.Execute = true
 	opts.ActivityFn = noActivity
 	opts.IdleProbeDelay = 0
+	// Keep the docker-heavy lock check hermetic: no lock held, reclaim is a
+	// no-op. Tests that exercise the defer path override LockActiveFn.
+	opts.LockActiveFn = func() (bool, error) { return false, nil }
+	opts.ReclaimStaleFn = func() (bool, error) { return false, nil }
+	opts.LockHolderFn = func() string { return "" }
 	return opts
+}
+
+func TestRun_DefersToActiveDockerHeavyLock(t *testing.T) {
+	t.Parallel()
+	opts := testExecuteOptions()
+	opts.LockActiveFn = func() (bool, error) { return true, nil }
+	opts.LockHolderFn = func() string { return "docker-heavy advoq/advoq#42" }
+	reclaimed := false
+	opts.ReclaimStaleFn = func() (bool, error) { reclaimed = true; return false, nil }
+	actions := Run(context.Background(), opts)
+	if len(actions) != 1 || actions[0].Name != deferredByDockerHeavyLock {
+		t.Fatalf("expected single deferred action, got %+v", actions)
+	}
+	if actions[0].Err != nil {
+		t.Fatalf("defer must not be an error (exit 0): %v", actions[0].Err)
+	}
+	if actions[0].Path != "docker-heavy advoq/advoq#42" {
+		t.Fatalf("holder not surfaced in deferred action: %q", actions[0].Path)
+	}
+	if reclaimed {
+		t.Fatalf("must NOT reclaim a fresh/active lock")
+	}
+}
+
+func TestRun_ReclaimsStaleLockWhenNotActive(t *testing.T) {
+	t.Parallel()
+	opts := testExecuteOptions()
+	opts.WorkDir = t.TempDir()
+	opts.TmpDir = t.TempDir()
+	opts.DockerPrune = false
+	opts.AptClean = false
+	reclaimed := false
+	opts.LockActiveFn = func() (bool, error) { return false, nil }
+	opts.ReclaimStaleFn = func() (bool, error) { reclaimed = true; return true, nil }
+	actions := Run(context.Background(), opts)
+	if !reclaimed {
+		t.Fatalf("stale/absent lock must trigger ReclaimStale before proceeding")
+	}
+	for _, a := range actions {
+		if a.Name == deferredByDockerHeavyLock {
+			t.Fatalf("must not defer when lock is not active")
+		}
+	}
+}
+
+func TestRun_LockReadErrorDoesNotBlockCleanup(t *testing.T) {
+	t.Parallel()
+	opts := testExecuteOptions()
+	opts.WorkDir = t.TempDir()
+	opts.TmpDir = t.TempDir()
+	opts.DockerPrune = false
+	opts.AptClean = false
+	opts.LockActiveFn = func() (bool, error) { return false, errors.New("read .hb failed") }
+	actions := Run(context.Background(), opts)
+	for _, a := range actions {
+		if a.Name == deferredByDockerHeavyLock {
+			t.Fatalf("lock read error must not defer (DT-v2-16): %+v", actions)
+		}
+	}
 }
 
 func TestRun_DryRun_DetectsOldFiles(t *testing.T) {
