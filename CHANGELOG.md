@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/advoq/civm/compare/v1.8.2...v1.9.0) (2026-05-29)
+
+
+### Features
+
+* **runner:** multi-project isolation and host-volume reclamation ([#57](https://github.com/advoq/civm/issues/57)) ([ddd569e](https://github.com/advoq/civm/commit/ddd569e32e45500aaebdddde0c65aaceae14a5a3))
+
 ## [1.8.2](https://github.com/advoq/civm/compare/v1.8.1...v1.8.2) (2026-05-28)
 
 
