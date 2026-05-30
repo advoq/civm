@@ -532,6 +532,63 @@ func deployReadFileFn(base func(string) ([]byte, error)) func(string) ([]byte, e
 	}
 }
 
+func TestVerifySafeDeleteCapabilityFailsClosed(t *testing.T) {
+	var gotArgs []string
+	opts := InstallOptions{
+		RunFn: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			gotArgs = append([]string{name}, args...)
+			return nil, fmt.Errorf("sudo: a password is required")
+		},
+	}
+	if err := verifySafeDeleteCapability(context.Background(), opts); err == nil {
+		t.Fatal("expected fail-closed error when the --check probe fails")
+	}
+	want := []string{"sudo", "-n", civm.DefaultSafeDeleteWrapperPath, "--check"}
+	if strings.Join(gotArgs, " ") != strings.Join(want, " ") {
+		t.Fatalf("probe argv = %v, want %v", gotArgs, want)
+	}
+}
+
+func TestVerifySafeDeleteCapabilityPassesOnZeroExit(t *testing.T) {
+	opts := InstallOptions{
+		RunFn: func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+	}
+	if err := verifySafeDeleteCapability(context.Background(), opts); err != nil {
+		t.Fatalf("expected nil on a successful probe, got %v", err)
+	}
+}
+
+func TestInstallFailsClosedWhenCapabilityProbeFails(t *testing.T) {
+	opts := InstallOptions{
+		Execute:     true,
+		HooksDir:    "/opt/civm/hooks",
+		CivmctlPath: "/usr/local/bin/civmctl",
+		MkdirAllFn:  func(string, os.FileMode) error { return nil },
+		WriteFileFn: func(string, []byte, os.FileMode) error { return nil },
+		RemoveFn:    func(string) error { return os.ErrNotExist },
+		GlobFn:      func(string) ([]string, error) { return nil, nil },
+		ReadFileFn:  deployReadFileFn(nil),
+		RenameFn:    func(string, string) error { return nil },
+		// visudo (and every other call) succeeds; ONLY the `sudo -n wrapper
+		// --check` capability probe fails, so the install must fail closed.
+		RunFn: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			for _, a := range args {
+				if a == "--check" {
+					return nil, fmt.Errorf("NOPASSWD rule does not match")
+				}
+			}
+			return nil, nil
+		},
+	}
+	res := Install(context.Background(), opts)
+	if res.Error == "" {
+		t.Fatal("expected install to fail closed when the safedelete capability probe fails")
+	}
+	if !strings.Contains(res.Error, "capability probe") {
+		t.Fatalf("error = %q, want mention of the capability probe", res.Error)
+	}
+}
+
 // acceptVisudoRunFn returns a RunFn that accepts visudo validation and records
 // nothing else, so Execute-path tests do not perform real sudo/visudo.
 func acceptVisudoRunFn() func(ctx context.Context, name string, args ...string) ([]byte, error) {

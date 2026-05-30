@@ -35,6 +35,10 @@ import (
 // internal validation, the caller GuardFn, or the symlink/ownership re-check.
 var ErrUnsafePath = errors.New("safedelete: unsafe path")
 
+// rootUID is the only non-runner owner an escalation target may have: a
+// Docker-as-root CI step is the reason root-owned entries appear under _work.
+const rootUID = 0
+
 // Options injects every side effect so unit tests never touch real sudo or the
 // real filesystem outside t.TempDir(). Defaults wrap os / exec.
 type Options struct {
@@ -204,7 +208,17 @@ func (opts Options) resolveAndAffirmOwner(clean string) (string, error) {
 		// delete with no ownership proof is exactly what we refuse.
 		return "", fmt.Errorf("%w: cannot determine owner of %q", ErrUnsafePath, real)
 	}
-	if want := opts.OwnerUIDFn(); uid != want {
+	// The target must be owned by the runner (the happy path, removed without
+	// sudo) OR by root. A root-owned entry is the exact Docker-as-root leftover
+	// the escalation exists to remove — including when the _work entry ITSELF is
+	// root-owned, not just a nested file (DT-v2-20). Refusing it here re-wedges
+	// "Complete runner" for every later job on the runner, defeating the tool's
+	// purpose. Any OTHER uid is still refused: the runner must never
+	// escalate-delete a third user's files. A symlink that escapes the _work tree
+	// is already rejected above by the GuardFn re-check on the resolved path, and
+	// the root-side wrapper independently re-validates the realpath under _work,
+	// so allowing root here does not widen the blast radius beyond _work.
+	if want := opts.OwnerUIDFn(); uid != want && uid != rootUID {
 		return "", fmt.Errorf("%w: %q owned by uid %d, runner is uid %d", ErrUnsafePath, real, uid, want)
 	}
 	return real, nil
