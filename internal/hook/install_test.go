@@ -9,7 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/advoq/civm/internal/civm"
 )
+
+// civmDeployDir mirrors the default deploy source dir used by the Execute path.
+const civmDeployDir = civm.DefaultDeploySourceDir
 
 func TestRenderInstallJSON(t *testing.T) {
 	var buf bytes.Buffer
@@ -135,8 +140,11 @@ func TestInstallWritesHookScripts(t *testing.T) {
 			perms[path] = perm
 			return nil
 		},
-		RemoveFn: func(string) error { return os.ErrNotExist },
-		GlobFn:   func(string) ([]string, error) { return nil, nil },
+		RemoveFn:   func(string) error { return os.ErrNotExist },
+		GlobFn:     func(string) ([]string, error) { return nil, nil },
+		ReadFileFn: deployReadFileFn(nil),
+		RunFn:      acceptVisudoRunFn(),
+		RenameFn:   func(string, string) error { return nil },
 	}
 	res := Install(context.Background(), opts)
 	if res.Error != "" {
@@ -146,9 +154,8 @@ func TestInstallWritesHookScripts(t *testing.T) {
 		"/opt/civm/hooks/job-started.sh":   ScriptContent("/usr/local/bin/civmctl", EventJobStarted),
 		"/opt/civm/hooks/job-completed.sh": ScriptContent("/usr/local/bin/civmctl", EventJobCompleted),
 	}
-	if len(writes) != len(want) {
-		t.Fatalf("writes = %v, want %v", writes, want)
-	}
+	// The Execute path also writes the safedelete wrapper; assert hook scripts
+	// got the expected perms but allow the extra wrapper write.
 	for path, content := range want {
 		if writes[path] != content {
 			t.Fatalf("write %s = %q, want %q", path, writes[path], content)
@@ -156,6 +163,9 @@ func TestInstallWritesHookScripts(t *testing.T) {
 		if perms[path] != 0755 {
 			t.Fatalf("perm %s = %v, want 0755", path, perms[path])
 		}
+	}
+	if perms[civm.DefaultSafeDeleteWrapperPath] != 0755 {
+		t.Fatalf("wrapper perm = %v, want 0755", perms[civm.DefaultSafeDeleteWrapperPath])
 	}
 }
 
@@ -171,8 +181,11 @@ func TestInstallReplacesExistingHookPaths(t *testing.T) {
 			writes[path] = string(data)
 			return nil
 		},
-		RemoveFn: func(p string) error { removes = append(removes, p); return nil },
-		GlobFn:   func(string) ([]string, error) { return nil, nil },
+		RemoveFn:   func(p string) error { removes = append(removes, p); return nil },
+		GlobFn:     func(string) ([]string, error) { return nil, nil },
+		ReadFileFn: deployReadFileFn(nil),
+		RunFn:      acceptVisudoRunFn(),
+		RenameFn:   func(string, string) error { return nil },
 	}
 	res := Install(context.Background(), opts)
 	if res.Error != "" {
@@ -190,8 +203,15 @@ func TestInstallReplacesExistingHookPaths(t *testing.T) {
 			t.Fatalf("expected remove %s, removes=%v", path, removes)
 		}
 	}
-	if len(writes) != 2 {
-		t.Fatalf("writes = %v, want 2 hook scripts", writes)
+	// 2 hook scripts + safedelete wrapper + sudoers temp staging file.
+	if _, ok := writes["/opt/civm/hooks/job-started.sh"]; !ok {
+		t.Fatalf("missing job-started.sh write: %v", writes)
+	}
+	if _, ok := writes["/opt/civm/hooks/job-completed.sh"]; !ok {
+		t.Fatalf("missing job-completed.sh write: %v", writes)
+	}
+	if _, ok := writes[civm.DefaultSafeDeleteWrapperPath]; !ok {
+		t.Fatalf("missing safedelete wrapper write: %v", writes)
 	}
 }
 
@@ -205,6 +225,9 @@ func TestInstallReplacesExistingShHooks(t *testing.T) {
 		WriteFileFn: func(string, []byte, os.FileMode) error { return nil },
 		RemoveFn:    func(p string) error { removes = append(removes, p); return nil },
 		GlobFn:      func(string) ([]string, error) { return nil, nil },
+		ReadFileFn:  deployReadFileFn(nil),
+		RunFn:       acceptVisudoRunFn(),
+		RenameFn:    func(string, string) error { return nil },
 	}
 	Install(context.Background(), opts)
 	wantLegacy := []string{
@@ -284,7 +307,9 @@ func TestInstallUpsertsHookEnv(t *testing.T) {
 	opts.GlobFn = func(string) ([]string, error) { return []string{"/home/emdev/actions-runner"}, nil }
 	opts.AllocatePortFn = func(string) (int, error) { return 20000, nil }
 	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
-	opts.ReadFileFn = func(path string) ([]byte, error) { return files[path], nil }
+	opts.ReadFileFn = deployReadFileFn(func(path string) ([]byte, error) { return files[path], nil })
+	opts.RunFn = acceptVisudoRunFn()
+	opts.RenameFn = func(string, string) error { return nil }
 	opts.WriteFileFn = func(path string, data []byte, perm os.FileMode) error {
 		writes = append(writes, path+"="+string(data))
 		files[path] = data
@@ -440,7 +465,9 @@ func TestInstallInjectsSlotAndPortBase(t *testing.T) {
 	opts.GlobFn = func(string) ([]string, error) { return []string{"/home/runner/actions-runner-cmpx"}, nil }
 	opts.AllocatePortFn = func(slot string) (int, error) { gotSlot = slot; return 20064, nil }
 	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
-	opts.ReadFileFn = func(p string) ([]byte, error) { return files[p], nil }
+	opts.ReadFileFn = deployReadFileFn(func(p string) ([]byte, error) { return files[p], nil })
+	opts.RunFn = acceptVisudoRunFn()
+	opts.RenameFn = func(string, string) error { return nil }
 	opts.WriteFileFn = func(p string, d []byte, _ os.FileMode) error { files[p] = d; return nil }
 	opts.RemoveFn = func(string) error { return os.ErrNotExist }
 	res := Install(context.Background(), opts)
@@ -465,12 +492,51 @@ func TestInstallSurfacesPortAllocationError(t *testing.T) {
 	opts.GlobFn = func(string) ([]string, error) { return []string{"/home/runner/actions-runner-cmpx"}, nil }
 	opts.AllocatePortFn = func(string) (int, error) { return 0, fmt.Errorf("civm port window exhausted") }
 	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
-	opts.ReadFileFn = func(string) ([]byte, error) { return nil, nil }
+	opts.ReadFileFn = deployReadFileFn(nil)
+	opts.RunFn = acceptVisudoRunFn()
+	opts.RenameFn = func(string, string) error { return nil }
 	opts.WriteFileFn = func(string, []byte, os.FileMode) error { return nil }
 	opts.RemoveFn = func(string) error { return os.ErrNotExist }
 	res := Install(context.Background(), opts)
 	if res.Error == "" || !strings.Contains(res.Error, "allocate port block") {
 		t.Fatalf("expected port allocation error to surface, got %q", res.Error)
+	}
+}
+
+// Deploy-source fixtures shared by tests that exercise the Execute path, which
+// now also installs the scoped sudoers wrapper. Content is opaque to these
+// tests (the scoped-sudoers behavior is covered by scoped_sudoers_test.go); they
+// only need ReadFileFn to return non-empty bytes and visudo to succeed.
+const (
+	fixtureWrapperContent = "#!/bin/sh\nexit 0\n"
+	fixtureSudoersContent = "emdev ALL=(root) NOPASSWD: /usr/local/bin/civm-safedelete\n"
+)
+
+// deployReadFileFn returns a ReadFileFn that serves the deploy wrapper + sudoers
+// sources and delegates every other path to base (so callers keep their own
+// .env/file fixtures). A nil base treats unknown paths as empty.
+func deployReadFileFn(base func(string) ([]byte, error)) func(string) ([]byte, error) {
+	wrapperSrc := filepath.Join(civmDeployDir, "bin/civm-safedelete")
+	sudoersSrc := filepath.Join(civmDeployDir, "sudoers.d/civm-cleanup")
+	return func(path string) ([]byte, error) {
+		switch path {
+		case wrapperSrc:
+			return []byte(fixtureWrapperContent), nil
+		case sudoersSrc:
+			return []byte(fixtureSudoersContent), nil
+		}
+		if base != nil {
+			return base(path)
+		}
+		return nil, nil
+	}
+}
+
+// acceptVisudoRunFn returns a RunFn that accepts visudo validation and records
+// nothing else, so Execute-path tests do not perform real sudo/visudo.
+func acceptVisudoRunFn() func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, nil
 	}
 }
 

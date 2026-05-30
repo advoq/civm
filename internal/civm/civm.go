@@ -96,6 +96,29 @@ const (
 	// Intervalo de reescrita do heartbeat; staleness = heartbeat parado por
 	// > 3× este valor OU PID morto OU pidStartTicks divergente (SPECv2 DT-v2-1/3).
 	DefaultDockerHeavyHeartbeatSeconds = 30
+
+	// Escalada de remoção privilegiada para arquivos root-owned no _work
+	// (docs/specs/civm-runner-reliability, DT-v2-1/3/5/8). Steps CI que rodam
+	// como root dentro de containers gravam arquivos no _work montado que o
+	// usuário do runner não consegue apagar (EACCES no unlinkat) — o que trava
+	// o "Complete runner" e quebra todos os jobs seguintes naquele runner.
+	// O ÚNICO binário sob NOPASSWD é o wrapper validado; chown/rm absolutos
+	// são chamados de dentro dele (já root). Caminho absoluto e único elimina a
+	// ambiguidade /usr/bin vs /bin do secure_path do sudo.
+	DefaultSafeDeleteWrapperPath = "/usr/local/bin/civm-safedelete"
+
+	// Raiz de onde installScopedSudoers lê os artefatos versionados em deploy/
+	// (espelha DefaultUnitsSourceDir). Single source of truth: o conteúdo do
+	// wrapper e do sudoers vive só em deploy/; o binário Go nunca embute cópia
+	// (//go:embed é impossível através do boundary do pacote — SPECv2 DT-v2-5).
+	DefaultDeploySourceDir = "/opt/civm/deploy"
+	// Relativo a DefaultDeploySourceDir: o wrapper root validado (deploy/bin).
+	DefaultSafeDeleteWrapperSource = "bin/civm-safedelete"
+	// Relativo a DefaultDeploySourceDir: o drop-in sudoers escopado (deploy/sudoers.d).
+	DefaultScopedSudoersSource = "sudoers.d/civm-cleanup"
+	// Destino do drop-in sudoers ativo; 0440 root:root, validado por visudo -c
+	// antes de ativar (SPECv2 §"Instalação do sudoers", DT-v2-1/3/5).
+	DefaultScopedSudoersDropIn = "/etc/sudoers.d/civm-cleanup"
 )
 
 var (

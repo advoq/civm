@@ -9,6 +9,8 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/advoq/civm/internal/safedelete"
 )
 
 func mkFS(now time.Time) fstest.MapFS {
@@ -34,6 +36,18 @@ func noActivity(context.Context) ([]Activity, error) {
 	return nil, nil
 }
 
+// safeDeleteRecorder captures the paths a hermetic SafeDeleteFn was asked to
+// remove, so tests assert deletion without ever calling real sudo or os.Remove.
+type safeDeleteRecorder struct {
+	targets []string
+	err     error // returned by every call when set (simulates a stuck delete)
+}
+
+func (r *safeDeleteRecorder) fn(_ context.Context, path string) safedelete.Result {
+	r.targets = append(r.targets, path)
+	return safedelete.Result{Err: r.err}
+}
+
 func testExecuteOptions() Options {
 	opts := DefaultOptions()
 	opts.Execute = true
@@ -44,6 +58,9 @@ func testExecuteOptions() Options {
 	opts.LockActiveFn = func() (bool, error) { return false, nil }
 	opts.ReclaimStaleFn = func() (bool, error) { return false, nil }
 	opts.LockHolderFn = func() string { return "" }
+	// Hermetic delete by default (records nothing); tests that assert on
+	// deletion install their own safeDeleteRecorder.
+	opts.SafeDeleteFn = func(context.Context, string) safedelete.Result { return safedelete.Result{} }
 	return opts
 }
 
@@ -201,16 +218,11 @@ func TestRun_WorkCleanupPreservesRunnerToolAndActionCaches(t *testing.T) {
 		"work/repo":                           {Mode: fs.ModeDir | 0755, ModTime: old},
 		"work/repo/file.txt":                  {Data: []byte("ddddd"), ModTime: old},
 	}
-	var rmTargets []string
+	rec := &safeDeleteRecorder{}
 	opts := testExecuteOptions()
 	opts.Now = now
 	opts.WalkFn = walkFS(mfs)
-	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if name == "rm" && len(args) == 2 {
-			rmTargets = append(rmTargets, args[1])
-		}
-		return nil, nil
-	}
+	opts.SafeDeleteFn = rec.fn
 
 	a := scanAndMaybeDelete(context.Background(), opts, "work_old", "work", 14*24*time.Hour)
 	if a.Err != nil {
@@ -219,15 +231,15 @@ func TestRun_WorkCleanupPreservesRunnerToolAndActionCaches(t *testing.T) {
 	if a.BytesFound != 9 || a.BytesFreed != 9 {
 		t.Fatalf("BytesFound=%d BytesFreed=%d, want 9", a.BytesFound, a.BytesFreed)
 	}
-	joined := strings.Join(rmTargets, "\n")
+	joined := strings.Join(rec.targets, "\n")
 	for _, protected := range []string{"work/_tool", "work/_actions"} {
 		if strings.Contains(joined, protected) {
-			t.Fatalf("protected cache %s removido: %v", protected, rmTargets)
+			t.Fatalf("protected cache %s removido: %v", protected, rec.targets)
 		}
 	}
 	for _, want := range []string{"work/_temp", "work/repo"} {
 		if !strings.Contains(joined, want) {
-			t.Fatalf("rm targets omitiu %s: %v", want, rmTargets)
+			t.Fatalf("delete targets omitiu %s: %v", want, rec.targets)
 		}
 	}
 }
@@ -236,7 +248,7 @@ func TestRun_Execute_CallsRm(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
 	mfs := mkFS(now)
-	rmCalls := 0
+	rec := &safeDeleteRecorder{}
 	opts := testExecuteOptions()
 	opts.WorkDir = "work"
 	opts.TmpDir = "tmp"
@@ -244,15 +256,10 @@ func TestRun_Execute_CallsRm(t *testing.T) {
 	opts.WalkFn = walkFS(mfs)
 	opts.DockerPrune = false
 	opts.AptClean = false
-	opts.RunFn = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if name == "rm" {
-			rmCalls++
-		}
-		return []byte(""), nil
-	}
+	opts.SafeDeleteFn = rec.fn
 	actions := Run(context.Background(), opts)
-	if rmCalls == 0 {
-		t.Errorf("nenhum rm chamado; esperava deletar pelo menos 1 caminho")
+	if len(rec.targets) == 0 {
+		t.Errorf("nenhuma remoção solicitada; esperava deletar pelo menos 1 caminho")
 	}
 	executedAny := false
 	for _, a := range actions {
@@ -262,6 +269,77 @@ func TestRun_Execute_CallsRm(t *testing.T) {
 	}
 	if !executedAny {
 		t.Errorf("nenhuma action ficou Executed")
+	}
+}
+
+func TestScanAndMaybeDelete_AccumulatesFirstErrorAndContinues(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-30 * 24 * time.Hour)
+	// Three deletable top-level entries; one of them (a root-owned leftover the
+	// escalation could not reclaim) fails. The sweep must record the first error
+	// but still attempt and free the others (DT-v2-9: no break on first error).
+	mfs := fstest.MapFS{
+		"work/a":       {Mode: fs.ModeDir | 0755, ModTime: old},
+		"work/a/x.txt": {Data: []byte("aaaaa"), ModTime: old},
+		"work/b":       {Mode: fs.ModeDir | 0755, ModTime: old},
+		"work/b/y.txt": {Data: []byte("bbbbb"), ModTime: old},
+		"work/c":       {Mode: fs.ModeDir | 0755, ModTime: old},
+		"work/c/z.txt": {Data: []byte("ccccc"), ModTime: old},
+	}
+	opts := testExecuteOptions()
+	opts.Now = now
+	opts.WalkFn = walkFS(mfs)
+	stuck := errors.New("root-owned, escalation failed")
+	var attempted []string
+	opts.SafeDeleteFn = func(_ context.Context, path string) safedelete.Result {
+		attempted = append(attempted, path)
+		if strings.HasSuffix(path, "/b") {
+			return safedelete.Result{Escalated: true, Err: stuck}
+		}
+		return safedelete.Result{}
+	}
+
+	a := scanAndMaybeDelete(context.Background(), opts, "work_old", "work", 14*24*time.Hour)
+	if a.Err == nil {
+		t.Fatalf("expected the stuck candidate error to be surfaced")
+	}
+	if len(attempted) != 3 {
+		t.Fatalf("attempted %d deletes, want 3 (no break on first error): %v", len(attempted), attempted)
+	}
+	// Two of three succeeded (5 bytes each) -> 10 freed; the stuck one is excluded.
+	if a.BytesFreed != 10 {
+		t.Fatalf("BytesFreed = %d, want 10 (only the two reclaimable trees)", a.BytesFreed)
+	}
+}
+
+func TestCleanupChildGuardScopesEscalation(t *testing.T) {
+	t.Parallel()
+	// The guard mirrors validateCleanupRoot on the PARENT (DT-v2-9): it rejects
+	// candidates whose parent is a dangerous root (/, /home, /root, a bare home),
+	// not arbitrary depth. In production scanAndMaybeDelete only ever passes
+	// direct children of the swept root, so this is the defense-in-depth floor.
+	cases := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"direct child of tmp", "/tmp/leftover", false},
+		{"child of a work root", "/home/runner/actions-runner/_work/repo", false},
+		{"parent is filesystem root", "/etc", true},
+		{"parent is /home (bare)", "/home/someuser", true},
+		{"root itself", "/", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := cleanupChildGuard(tc.path)
+			if tc.wantErr && err == nil {
+				t.Fatalf("cleanupChildGuard(%q) = nil, want error", tc.path)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("cleanupChildGuard(%q) = %v, want nil", tc.path, err)
+			}
+		})
 	}
 }
 
@@ -600,17 +678,12 @@ func TestRun_ExecuteRechecksBeforeDeleting(t *testing.T) {
 		}
 		return []Activity{{PID: 5678, Command: "/home/emdev/actions-runner/_work/repo/repo/script.sh"}}, nil
 	}
-	rmCalls := 0
-	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if name == "rm" {
-			rmCalls++
-		}
-		return nil, nil
-	}
+	rec := &safeDeleteRecorder{}
+	opts.SafeDeleteFn = rec.fn
 
 	actions := Run(context.Background(), opts)
-	if rmCalls != 0 {
-		t.Fatalf("rmCalls = %d, want 0", rmCalls)
+	if len(rec.targets) != 0 {
+		t.Fatalf("delete targets = %v, want none (idle re-check must block deletion)", rec.targets)
 	}
 	if len(actions) == 0 || actions[0].Err == nil {
 		t.Fatalf("esperava erro no primeiro cleanup action: %+v", actions)

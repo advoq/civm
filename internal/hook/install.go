@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/advoq/civm/internal/civm"
 	"github.com/advoq/civm/internal/portblock"
 )
 
@@ -40,6 +41,21 @@ type InstallOptions struct {
 	MkdirAllFn     func(path string, perm os.FileMode) error
 	RemoveFn       func(path string) error // remove one file or symlink, never recursively
 	RunFn          func(ctx context.Context, name string, args ...string) ([]byte, error)
+	// RenameFn atomically activates the sudoers drop-in (temp -> final) only
+	// after visudo validates it. Injected so unit tests never touch real /etc.
+	// Defaults to os.Rename.
+	RenameFn func(oldpath, newpath string) error
+	// DeploySourceDir is the root from which the scoped sudoers + safedelete
+	// wrapper are read at --execute time. Defaults to civm.DefaultDeploySourceDir.
+	// Mirrors DefaultUnitsSourceDir / ScriptContent: a single source of truth in
+	// deploy/, never go:embed (forbidden across the package boundary, DT-v2-5).
+	DeploySourceDir string
+	// SkipScopedSudoers disables installing the privileged safedelete wrapper +
+	// scoped sudoers drop-in. Provisioning (`hook install --execute`,
+	// `bootstrap-everything`) leaves it false so the capability is installed. The
+	// periodic runner watchdog sets it true: its job is light-touch .env repair,
+	// not re-running visudo and rewriting /etc/sudoers.d on every timer tick.
+	SkipScopedSudoers bool
 	// AllocatePortFn returns the sticky CIVM_PORT_BASE for a runner slot. It is
 	// injected so unit tests never touch the real /var/lib/civm/port-blocks.json
 	// state file; the default wraps portblock.Allocate.
@@ -56,17 +72,19 @@ type InstallResult struct {
 
 func DefaultInstallOptions() InstallOptions {
 	return InstallOptions{
-		HooksDir:       defaultHooksDir,
-		CivmctlPath:    defaultCivmctlBin,
-		RunnerGlob:     defaultRunnerGlob,
-		GlobFn:         filepath.Glob,
-		ReadFileFn:     os.ReadFile,
-		WriteFileFn:    os.WriteFile,
-		MkdirAllFn:     os.MkdirAll,
-		RemoveFn:       os.Remove,
-		RunFn:          defaultRun,
-		AllocatePortFn: defaultAllocatePort,
-		RestartRunners: true,
+		HooksDir:        defaultHooksDir,
+		CivmctlPath:     defaultCivmctlBin,
+		RunnerGlob:      defaultRunnerGlob,
+		DeploySourceDir: civm.DefaultDeploySourceDir,
+		GlobFn:          filepath.Glob,
+		ReadFileFn:      os.ReadFile,
+		WriteFileFn:     os.WriteFile,
+		MkdirAllFn:      os.MkdirAll,
+		RemoveFn:        os.Remove,
+		RunFn:           defaultRun,
+		RenameFn:        os.Rename,
+		AllocatePortFn:  defaultAllocatePort,
+		RestartRunners:  true,
 	}
 }
 
@@ -115,6 +133,15 @@ func Install(ctx context.Context, opts InstallOptions) InstallResult {
 		for _, item := range hooks {
 			path := filepath.Join(opts.HooksDir, item.name)
 			if err := ensureHookScript(opts, path, item.event); err != nil {
+				return installError(res, err)
+			}
+		}
+		// Install the privileged safedelete wrapper and the scoped sudoers drop-in
+		// (docs/specs/civm-runner-reliability, DT-v2-1/3/5/7/8). Idempotent and
+		// fail-closed: the sudoers is only activated after visudo accepts it. The
+		// periodic watchdog opts out (SkipScopedSudoers) — provisioning owns it.
+		if !opts.SkipScopedSudoers {
+			if err := installScopedSudoers(ctx, opts); err != nil {
 				return installError(res, err)
 			}
 		}
@@ -320,6 +347,12 @@ func applyInstallDefaults(opts *InstallOptions) {
 	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
+	}
+	if opts.RenameFn == nil {
+		opts.RenameFn = os.Rename
+	}
+	if opts.DeploySourceDir == "" {
+		opts.DeploySourceDir = civm.DefaultDeploySourceDir
 	}
 	if opts.AllocatePortFn == nil {
 		opts.AllocatePortFn = defaultAllocatePort

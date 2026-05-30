@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/safedelete"
 )
 
 type Event string
@@ -74,11 +75,19 @@ type Options struct {
 	Now             time.Time
 	RunFn           func(ctx context.Context, name string, args ...string) ([]byte, error)
 	RemoveAllFn     func(path string) error
-	MkdirAllFn      func(path string, perm os.FileMode) error
-	StatfsFn        func(path string) (totalBytes, freeBytes uint64, err error)
-	DiscoverRootsFn func() ([]string, error)
-	ReadDirFn       func(path string) ([]os.DirEntry, error)
-	WalkDirFn       func(root string, fn fs.WalkDirFunc) error
+	// SafeWorkDeleteFn removes one top-level _work entry, escalating to the
+	// privileged wrapper only when a root-owned file (a containerized CI step
+	// ran as root and wrote into the mounted _work) blocks the unprivileged
+	// delete. Without it, EACCES on a root-owned leftover fails job-completed at
+	// "Complete runner" and wedges every later job on this runner. The GuardFn
+	// scopes the escalation to a direct child of a safeWorkRoot. Injected so
+	// unit tests never call real sudo (DT-v2-1/3/9).
+	SafeWorkDeleteFn func(ctx context.Context, path string) safedelete.Result
+	MkdirAllFn       func(path string, perm os.FileMode) error
+	StatfsFn         func(path string) (totalBytes, freeBytes uint64, err error)
+	DiscoverRootsFn  func() ([]string, error)
+	ReadDirFn        func(path string) ([]os.DirEntry, error)
+	WalkDirFn        func(root string, fn fs.WalkDirFunc) error
 }
 
 func DefaultOptionsFromEnv(event Event) Options {
@@ -101,6 +110,36 @@ func DefaultOptionsFromEnv(event Event) Options {
 		ReadDirFn:       os.ReadDir,
 		WalkDirFn:       filepath.WalkDir,
 	}
+}
+
+// newSafeWorkDelete builds the hook-scoped safedelete closure. It routes the
+// unprivileged remove through the hook's own RemoveAllFn (so an injected
+// RemoveAllFn keeps capturing the happy path) and escalates to the guarded
+// wrapper only for the root-owned _work case. The escalation can only ever
+// target a direct child of a safeWorkRoot.
+func newSafeWorkDelete(removeAllFn func(string) error) func(context.Context, string) safedelete.Result {
+	return func(ctx context.Context, path string) safedelete.Result {
+		return safedelete.Remove(ctx, safedelete.Options{
+			GuardFn:     workChildGuard,
+			RemoveAllFn: removeAllFn,
+		}, path)
+	}
+}
+
+// workChildGuard rejects any path that is not a direct child of a valid
+// safeWorkRoot. safeWorkRoot validates the ROOT (under /home, /actions-runner,
+// trailing /_work); this adapter derives that root from the candidate and
+// confirms the parent/child relation, symmetric to the cleanup guard (DT-v2-9).
+func workChildGuard(path string) error {
+	clean := filepath.Clean(path)
+	parent := filepath.Dir(clean)
+	if !safeWorkRoot(parent) {
+		return fmt.Errorf("parent %q is not a safe _work root", parent)
+	}
+	if filepath.Base(clean) == "" {
+		return fmt.Errorf("%q is not a direct child of a _work root", clean)
+	}
+	return nil
 }
 
 func Run(ctx context.Context, opts Options) Result {
@@ -166,7 +205,7 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	estCap := len(roots) + len(caps) + 8
 	actions := make([]Action, 0, estCap)
 	for _, root := range roots {
-		actions = append(actions, cleanWorkRoot(opts, root, purgeCaches))
+		actions = append(actions, cleanWorkRoot(ctx, opts, root, purgeCaches))
 	}
 	// Cache trim is age-based in BOTH modes. A wholesale purge of the shared
 	// $HOME caches at job-started deletes the hot go-build/npm cache out from
@@ -208,7 +247,7 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	return actions
 }
 
-func cleanWorkRoot(opts Options, root string, preserveActiveWorkspace bool) Action {
+func cleanWorkRoot(ctx context.Context, opts Options, root string, preserveActiveWorkspace bool) Action {
 	a := Action{Name: "work_root", Path: root, Executed: opts.Execute}
 	if !safeWorkRoot(root) {
 		a.Error = "unsafe work root"
@@ -240,8 +279,15 @@ func cleanWorkRoot(opts Options, root string, preserveActiveWorkspace bool) Acti
 		}
 		path := filepath.Join(root, name)
 		if opts.Execute {
-			if err := opts.RemoveAllFn(path); err != nil {
-				a.Error = err.Error()
+			// A CI Docker step that ran as root may have written files into the
+			// mounted _work that this user cannot unlink (EACCES on unlinkat).
+			// safedelete tries the unprivileged remove first and escalates to
+			// the guarded wrapper only for that root-owned case, so the runner
+			// never wedges at "Complete runner". A terminal error (escalation
+			// itself unavailable) surfaces here and stays fatal at job-completed
+			// — it is never silently swallowed (DT-v2-1/3/12).
+			if res := opts.SafeWorkDeleteFn(ctx, path); res.Err != nil {
+				a.Error = res.Err.Error()
 				return a
 			}
 		}
@@ -611,6 +657,9 @@ func applyDefaults(opts *Options) {
 	}
 	if opts.RemoveAllFn == nil {
 		opts.RemoveAllFn = os.RemoveAll
+	}
+	if opts.SafeWorkDeleteFn == nil {
+		opts.SafeWorkDeleteFn = newSafeWorkDelete(opts.RemoveAllFn)
 	}
 	if opts.MkdirAllFn == nil {
 		opts.MkdirAllFn = os.MkdirAll
