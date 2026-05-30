@@ -235,6 +235,11 @@ func repairWatchdogHooks(ctx context.Context, opts WatchdogOptions, report *Watc
 	hookOpts := hook.DefaultInstallOptions()
 	hookOpts.Execute = opts.Execute
 	hookOpts.RestartRunners = false
+	// The watchdog is a light-touch periodic .env repair. The privileged
+	// safedelete wrapper + scoped sudoers are a one-time provisioning concern
+	// (hook install --execute / bootstrap-everything), not something to re-run
+	// (visudo + /etc/sudoers.d rewrite) on every timer tick.
+	hookOpts.SkipScopedSudoers = true
 	if opts.HooksDir != "" {
 		hookOpts.HooksDir = opts.HooksDir
 	}

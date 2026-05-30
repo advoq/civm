@@ -63,6 +63,7 @@ func runHookInstall(args []string) int {
 	hooksDir := fs.String("hooks-dir", defaults.HooksDir, "diretorio dos hooks ACTIONS_RUNNER_HOOK_*")
 	civmctlPath := fs.String("civmctl-path", defaults.CivmctlPath, "binario invocado pelos scripts de hook")
 	runnerGlob := fs.String("runner-glob", defaults.RunnerGlob, "glob dos diretorios actions-runner*")
+	deploySource := fs.String("deploy-source", defaults.DeploySourceDir, "diretorio com deploy/bin/civm-safedelete e deploy/sudoers.d/civm-cleanup")
 	noRestart := fs.Bool("no-restart", false, "nao reiniciar services actions.runner.*")
 	timeoutMin := fs.Int("timeout", civm.DefaultRunnerTimeoutMinutes, "timeout em minutos")
 	if err := fs.Parse(args); err != nil {
@@ -76,6 +77,7 @@ func runHookInstall(args []string) int {
 	opts.HooksDir = *hooksDir
 	opts.CivmctlPath = *civmctlPath
 	opts.RunnerGlob = *runnerGlob
+	opts.DeploySourceDir = *deploySource
 	opts.RestartRunners = !*noRestart
 	res := hook.Install(ctx, opts)
 	if *jsonOut {

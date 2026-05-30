@@ -17,6 +17,7 @@ import (
 	"github.com/advoq/civm/internal/civm"
 	"github.com/advoq/civm/internal/dockerlock"
 	"github.com/advoq/civm/internal/idle"
+	"github.com/advoq/civm/internal/safedelete"
 )
 
 // deferredByDockerHeavyLock is the no-op Action name emitted when a docker-heavy
@@ -82,6 +83,12 @@ type Options struct {
 	LockActiveFn   func() (bool, error)
 	ReclaimStaleFn func() (bool, error)
 	LockHolderFn   func() string
+	// SafeDeleteFn removes one stale candidate, escalating to the privileged
+	// wrapper only when a root-owned file (a containerized CI step ran as root
+	// and wrote into the mounted _work) blocks the unprivileged delete. The
+	// GuardFn scopes the escalation to a direct child of a validated cleanup
+	// root. Injected so unit tests never call real sudo (DT-v2-9).
+	SafeDeleteFn func(ctx context.Context, path string) safedelete.Result
 }
 
 // DefaultOptions returns sane defaults: dry-run, 1d /tmp, 3d _work.
@@ -106,7 +113,34 @@ func DefaultOptions() Options {
 		LockActiveFn:   defaultLockActive,
 		ReclaimStaleFn: defaultReclaimStale,
 		LockHolderFn:   defaultLockHolder,
+		SafeDeleteFn:   defaultSafeDelete,
 	}
+}
+
+// defaultSafeDelete removes one candidate via safedelete with the cleanup-scoped
+// guard. The escalation can only ever target a direct child of a root that
+// validateCleanupRoot accepts, so a root-owned _work leftover is reclaimed
+// without ever widening the blast radius.
+func defaultSafeDelete(ctx context.Context, path string) safedelete.Result {
+	return safedelete.Remove(ctx, safedelete.Options{GuardFn: cleanupChildGuard}, path)
+}
+
+// cleanupChildGuard rejects any path that is not a direct child of a cleanup
+// root that validateCleanupRoot accepts. validateCleanupRoot validates the ROOT
+// (rejects /, dangerous roots, bare home); this adapter derives that root from
+// the candidate and confirms the parent/child relation (DT-v2-9). It is never
+// passed directly as GuardFn because validateCleanupRoot has a (string,error)
+// signature over the root, not the child.
+func cleanupChildGuard(path string) error {
+	clean := filepath.Clean(path)
+	parent := filepath.Dir(clean)
+	if _, err := validateCleanupRoot(parent); err != nil {
+		return fmt.Errorf("parent %q is not a valid cleanup root: %w", parent, err)
+	}
+	if filepath.Dir(clean) != parent || filepath.Base(clean) == "" {
+		return fmt.Errorf("%q is not a direct child of a cleanup root", clean)
+	}
+	return nil
 }
 
 // defaultLockActive / defaultReclaimStale / defaultLockHolder wrap dockerlock so
@@ -175,6 +209,9 @@ func applyDefaults(opts *Options) {
 	}
 	if opts.LockHolderFn == nil {
 		opts.LockHolderFn = defaultLockHolder
+	}
+	if opts.SafeDeleteFn == nil {
+		opts.SafeDeleteFn = defaultSafeDelete
 	}
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()
@@ -267,9 +304,16 @@ func scanAndMaybeDelete(ctx context.Context, opts Options, name, root string, th
 		return a
 	}
 	for _, candidate := range toDelete {
-		if _, err := opts.RunFn(ctx, "rm", "-rf", candidate.path); err != nil {
-			a.Err = err
-			break
+		// safedelete tries an unprivileged remove first, escalating to the
+		// guarded wrapper only for a root-owned _work leftover (a CI Docker step
+		// ran as root). Accumulate the first error but keep going so one stuck
+		// candidate never wedges the whole sweep (DT-v2-9).
+		res := opts.SafeDeleteFn(ctx, candidate.path)
+		if res.Err != nil {
+			if a.Err == nil {
+				a.Err = res.Err
+			}
+			continue
 		}
 		a.BytesFreed += candidate.size
 	}

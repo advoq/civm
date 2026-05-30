@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/safedelete"
 )
 
 func TestJobCompletedCleansWorkspaceButPreservesHotCaches(t *testing.T) {
@@ -305,7 +306,7 @@ func TestRunErrorsOnUnsupportedEvent(t *testing.T) {
 }
 
 func TestCleanWorkRootRejectsUnsafeRoot(t *testing.T) {
-	a := cleanWorkRoot(Options{Execute: true}, "/etc/passwd", false)
+	a := cleanWorkRoot(context.Background(), Options{Execute: true}, "/etc/passwd", false)
 	if a.Error == "" {
 		t.Fatalf("expected unsafe error, got %+v", a)
 	}
@@ -316,7 +317,7 @@ func TestCleanWorkRootHandlesReadDirError(t *testing.T) {
 		Execute:   true,
 		ReadDirFn: func(string) ([]os.DirEntry, error) { return nil, fmt.Errorf("EACCES") },
 	}
-	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work", false)
+	a := cleanWorkRoot(context.Background(), opts, "/home/x/actions-runner/_work", false)
 	if a.Error == "" {
 		t.Fatalf("expected ReadDir error to propagate, got %+v", a)
 	}
@@ -327,7 +328,7 @@ func TestCleanWorkRootSkipsMissingDir(t *testing.T) {
 		Execute:   true,
 		ReadDirFn: func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist },
 	}
-	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work", false)
+	a := cleanWorkRoot(context.Background(), opts, "/home/x/actions-runner/_work", false)
 	if a.Error != "" {
 		t.Fatalf("missing dir should be silent, got %+v", a)
 	}
@@ -341,9 +342,79 @@ func TestCleanWorkRootPropagatesRemoveError(t *testing.T) {
 		},
 		RemoveAllFn: func(string) error { return fmt.Errorf("EBUSY") },
 	}
-	a := cleanWorkRoot(opts, "/home/x/actions-runner/_work", false)
+	// A non-permission RemoveAll error (EBUSY) is NOT a root-owned-file case:
+	// safedelete never escalates and surfaces it so job-completed stays fatal.
+	opts.SafeWorkDeleteFn = newSafeWorkDelete(opts.RemoveAllFn)
+	a := cleanWorkRoot(context.Background(), opts, "/home/x/actions-runner/_work", false)
 	if a.Error == "" {
 		t.Fatalf("expected RemoveAll error to propagate, got %+v", a)
+	}
+}
+
+func TestCleanWorkRootRootOwnedEscalationKeepsRunnerUnwedged(t *testing.T) {
+	// A root-owned leftover (a CI Docker step ran as root) escalates and is
+	// reclaimed; cleanWorkRoot must report NO error so job-completed does not
+	// wedge the runner at "Complete runner".
+	var escalated []string
+	opts := Options{
+		Execute: true,
+		ReadDirFn: func(string) ([]os.DirEntry, error) {
+			return []os.DirEntry{fakeDirEntry("repo"), fakeDirEntry("_temp")}, nil
+		},
+		SafeWorkDeleteFn: func(_ context.Context, path string) safedelete.Result {
+			escalated = append(escalated, path)
+			return safedelete.Result{Escalated: true}
+		},
+	}
+	a := cleanWorkRoot(context.Background(), opts, "/home/x/actions-runner/_work", false)
+	if a.Error != "" {
+		t.Fatalf("root-owned escalation must not surface an error, got %q", a.Error)
+	}
+	if len(escalated) != 2 {
+		t.Fatalf("expected both entries reclaimed, got %v", escalated)
+	}
+}
+
+func TestCleanWorkRootEscalationFailureStaysFatal(t *testing.T) {
+	// If the escalation itself is unavailable (sudoers not installed), the
+	// terminal error must surface so job-completed stays fatal — never silently
+	// swallowed (DT-v2-12).
+	opts := Options{
+		Execute: true,
+		ReadDirFn: func(string) ([]os.DirEntry, error) {
+			return []os.DirEntry{fakeDirEntry("repo")}, nil
+		},
+		SafeWorkDeleteFn: func(context.Context, string) safedelete.Result {
+			return safedelete.Result{Escalated: true, Err: fmt.Errorf("sudo: a password is required")}
+		},
+	}
+	a := cleanWorkRoot(context.Background(), opts, "/home/x/actions-runner/_work", false)
+	if a.Error == "" {
+		t.Fatalf("escalation failure must surface as a fatal error, got %+v", a)
+	}
+}
+
+func TestWorkChildGuardScopesEscalation(t *testing.T) {
+	cases := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"direct child", "/home/x/actions-runner/_work/repo", false},
+		{"the _work root itself", "/home/x/actions-runner/_work", true},
+		{"outside any _work", "/etc/passwd", true},
+		{"home dir", "/home/x", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := workChildGuard(tc.path)
+			if tc.wantErr && err == nil {
+				t.Fatalf("workChildGuard(%q) = nil, want error", tc.path)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("workChildGuard(%q) = %v, want nil", tc.path, err)
+			}
+		})
 	}
 }
 
