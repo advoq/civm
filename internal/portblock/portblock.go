@@ -7,12 +7,18 @@
 // for the same slot returns the same base) and disjoint (distinct slots never
 // share a base).
 //
-// Concurrency contract (SPECv2 DT-v2-2/19): Allocate holds an exclusive flock
-// on the StatePath descriptor for the ENTIRE read -> find -> write cycle and
-// persists via a temp file plus os.Rename so the on-disk state is never torn,
-// even when two processes call Allocate at the same time. When the whole
-// window is occupied it returns ErrPortWindowExhausted, which fails the
-// install and signals the operator to remove a dead runner; there is no
+// Concurrency contract: Allocate holds an exclusive flock on a STABLE sidecar
+// lock file (StatePath + ".lock") for the ENTIRE read -> find -> write cycle
+// and persists StatePath via a temp file plus os.Rename so the on-disk state is
+// never torn, even when two processes call Allocate at the same time. The lock
+// MUST be the sidecar, never StatePath itself: os.Rename swaps StatePath's
+// inode and flock binds to the open inode, so locking StatePath would stop
+// serializing the instant the first writer renames — concurrent allocations
+// would then race the read -> find -> write cycle and hand the same base to two
+// slots (a port-block collision). SPECv2 DT-v2-2/19 specified StatePath; that
+// is corrected here, proven by TestRealFlockSerializesConcurrentAllocate. When
+// the whole window is occupied it returns ErrPortWindowExhausted, which fails
+// the install and signals the operator to remove a dead runner; there is no
 // automatic eviction in v1.
 package portblock
 
@@ -125,16 +131,24 @@ func Allocate(opts Options, slot string) (int, error) {
 		return 0, fmt.Errorf("portblock: criar dir de state %s: %w", opts.StatePath, err)
 	}
 
-	f, err := os.OpenFile(opts.StatePath, os.O_CREATE|os.O_RDWR, 0o600)
+	// Lock a STABLE sidecar, never StatePath itself: writeState persists via
+	// temp file + os.Rename, which swaps StatePath's inode. flock binds to the
+	// open inode, so locking StatePath would stop serializing the instant the
+	// first writer renames, letting concurrent allocations race and hand the
+	// same base to two slots. The .lock sidecar is created once and never
+	// renamed, so its inode is stable and the flock is real cross-process
+	// exclusion for the whole read -> find -> write cycle.
+	lockPath := opts.StatePath + ".lock"
+	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return 0, fmt.Errorf("portblock: abrir state %s: %w", opts.StatePath, err)
+		return 0, fmt.Errorf("portblock: abrir lock %s: %w", lockPath, err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() { _ = lf.Close() }()
 
-	if err := opts.FlockFn(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return 0, fmt.Errorf("portblock: flock %s: %w", opts.StatePath, err)
+	if err := opts.FlockFn(int(lf.Fd()), syscall.LOCK_EX); err != nil {
+		return 0, fmt.Errorf("portblock: flock %s: %w", lockPath, err)
 	}
-	defer func() { _ = opts.FlockFn(int(f.Fd()), syscall.LOCK_UN) }()
+	defer func() { _ = opts.FlockFn(int(lf.Fd()), syscall.LOCK_UN) }()
 
 	state, err := readState(opts)
 	if err != nil {
