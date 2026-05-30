@@ -209,15 +209,15 @@ for name in "${REPO_NAMES[@]}"; do
       bump "$name" warn "title drift: expected '$expected_title' got '$actual_title'"
     fi
 
-    # ---- Check 4: 12 disciplines in body -----------------------------------
+    # ---- Check 4: 13 disciplines in body -----------------------------------
     discipline_count=$(grep -cE '^### [0-9]+\. ' "$doc_full" || true)
     if [ "$name" = "civm" ]; then
-      # civm template uses tables, not H3 headings — accept 0 or 12.
-      if [ "$discipline_count" -ne 0 ] && [ "$discipline_count" -ne 12 ]; then
-        bump "$name" warn "civm: $discipline_count H3 disciplines (expected 0 or 12)"
+      # civm template uses tables, not H3 headings — accept 0 or 13.
+      if [ "$discipline_count" -ne 0 ] && [ "$discipline_count" -ne 13 ]; then
+        bump "$name" warn "civm: $discipline_count H3 disciplines (expected 0 or 13)"
       fi
-    elif [ "$discipline_count" -ne 12 ]; then
-      bump "$name" fail "doc has $discipline_count disciplines (expected 12)"
+    elif [ "$discipline_count" -ne 13 ]; then
+      bump "$name" fail "doc has $discipline_count disciplines (expected 13)"
     fi
   fi
 

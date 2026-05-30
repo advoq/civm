@@ -25,7 +25,7 @@ Operacional (invariantes 1–11 em CI, commit-msg hook, Husky)
 
 ---
 
-## As 12 disciplinas
+## As 13 disciplinas
 
 | # | Disciplina | Regra (1 linha) | Exemplo compexhub | Status CI |
 |---|---|---|---|---|
@@ -41,6 +41,7 @@ Operacional (invariantes 1–11 em CI, commit-msg hook, Husky)
 | 10 | Hyperbolic discounting | TODO sem owner+date bloqueado | `// TODO(@user, YYYY-MM-DD): ...`; pasta `apps/_deferred/<slug>/` com gate numérico de promoção | **Invariante #8** |
 | 11 | Halo effect em libs | Entry em LIBRARIES.md mandatória | Toda dep nova em `package.json`/`go.mod` exige entry em `docs/LIBRARIES.md` com 7 campos (alternativas, custo, rollback) | Manual (CI auto em M5+) |
 | 12 | Priming em prompts | Framing adversarial em PR review e SSDV3 | "qual problema esse código tem?" / "liste 3 cenários de falha" — não "está OK?". Pause após 3 PRs em main evita priming acumulativo | Manual (cultural) |
+| 13 | Ilusão de validade | Valide o propósito, não a existência (existe ≠ funciona); pareie recusa com "legítimo passa?" | safedelete recusava root-owned e teste verde afirmava a recusa (#59); fix = teste de integração contra o modo de falha real | Teste de integração obrigatório (ferramenta destrutiva) |
 
 ---
 

@@ -5,7 +5,6 @@
     "canonical": "# Kahneman disciplines — hygiene para decisões de IA",
     "vitae_specific": "# Kahneman disciplines — higiene de decisão no Vitae",
     "civm_template": "# Kahneman disciplines — template portátil de higiene de decisão",
-    "busson_fork": "# Kahneman disciplines — hygiene para decisões em `busson`",
     "chatwoot_standalone": "# Kahneman disciplines — local decision hygiene",
     "advoqwhatsapp_noaccent": "# Kahneman Disciplines — Higiene Para Decisoes De IA"
   },
@@ -131,17 +130,6 @@
       "surfaces": [
         { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_libraries" },
         { "file": "AGENTS.md", "style": "inline_bold" }
-      ]
-    },
-    {
-      "name": "busson",
-      "path": "busson",
-      "git_url": "https://github.com/emersonbusson/busson.git",
-      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
-      "title": "busson_fork",
-      "surfaces": [
-        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_libraries" },
-        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "pt_generic" }
       ]
     },
     {
