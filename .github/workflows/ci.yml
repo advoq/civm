@@ -269,6 +269,17 @@ jobs:
           /tmp/civmctl-fresh version-pins | head -5
           rm -f /tmp/civmctl-fresh
 
+      - name: Privileged cleanup escalation (integration gate)
+        # safedelete exists to remove root-owned Docker leftovers from _work. A
+        # hermetic unit test can encode the WRONG assumption and still pass —
+        # #59 shipped a test asserting root-owned targets were REFUSED, the exact
+        # opposite of the tool's purpose (DT-v2-20). This step exercises the real
+        # ownership decision against a REAL root-owned fixture on this runner, so
+        # an existence probe (`civm-safedelete --check`) can never again stand in
+        # for "does it actually do its job". Self-skips without passwordless sudo,
+        # so it is a real gate on the self-hosted runner and a no-op on forks.
+        run: go test -tags=integration -run TestIntegration -v ./internal/safedelete/
+
       - name: Workspace cleanup (persistent runner hygiene)
         if: always()
         run: |

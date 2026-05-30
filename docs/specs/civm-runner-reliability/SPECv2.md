@@ -147,6 +147,47 @@ então `rm`, `escalated=true`, **`--` precede o path**; `chown` falha → `rm` t
 `_work/../../etc`, `_work` que é symlink para `/`** recusados antes de qualquer sudo; ctx cancelado → propaga.
 Mais: teste do wrapper em si (shell/Go) que `civm-safedelete rm /etc` é recusado mesmo invocado como root.
 
+### Escalar alvo root-owned + gate de integração — fecha DT-v2-20
+
+Correção **pós-implementação** (descoberta no box em operação, não no PASSO 2.5).
+O passo (3) acima — "`EvalSymlinks` + `Lstat` dono `emdev`" — **recusava** todo
+alvo cujo dono não fosse o runner, inclusive `uid 0` (root). Isso contradiz o
+propósito do `safedelete`: a sobra do Docker-as-root é exatamente um path
+root-owned. O modelo do SPEC assumiu que só **filhos** do `_work` seriam
+root-owned (a entrada top-level sempre do runner); na prática a própria entrada
+`_work/<repo>` ficou root-owned. Resultado: `resolveAndAffirmOwner` retornava
+`ErrUnsafePath` antes da escalada, o erro era fatal em `cleanWorkRoot`
+(job-completed exit 1), **e** o checkout do próximo job batia EACCES — todo job
+Docker quebrava o próximo no box.
+
+**Decisão.** A checagem de dono aceita `uid == runner` (happy path, remove sem
+sudo) **OU** `uid == 0` (root — a sobra que a escalada existe pra limpar via
+`chown -R` + `rm` no wrapper). Qualquer outro uid continua recusado (o runner
+nunca escala-deleta arquivo de terceiro). As guardas reais de blast-radius
+permanecem: `GuardFn` (prefixo `_work`), re-validação do path resolvido (symlink
+que escapa é reprovado) e o wrapper root-side com `realpath` +
+`--one-file-system`. Aceitar root **não** alarga o escopo além do `_work`.
+
+**Por que o SPEC não previu (raiz de processo — disciplina #13 do
+`KAHNEMAN-DISCIPLINES.md`, ilusão de validade):** o teste
+`TestRemoveRejectsRootOwnedResolvedTarget` afirmava a recusa de root-owned como
+correta — hermético + suposição errada + verde = confiança falsa. E o gate de
+deploy era só `civm-safedelete --check` (existe?), nunca "limpa um root-owned de
+verdade?". Existência ≠ função.
+
+**Gate novo (o que segura pra não repetir):**
+
+- Unit: `TestRemoveEscalatesRootOwnedTarget` afirma que root-owned **escala**
+  (propósito), e `TestRemoveRejectsThirdUserOwnedTarget` mantém a recusa só pra
+  terceiro usuário.
+- Integração: `safedelete_integration_test.go` (`//go:build integration`) cria
+  um dir root-owned **real** via sudo e prova que a detecção de dono real deixa
+  passar pra escalada — **falha** no código do #59. Roda no job `runner-smoke`
+  (self-hosted) do `ci.yml`; self-skip sem sudo sem-senha (no-op em fork).
+- Pré-deploy: a validação funcional (escala um root-owned de scratch?) substitui
+  o `--check` de existência como prova de que a ferramenta faz o trabalho, não
+  só de que está instalada.
+
 ### Auto-recuperação do watchdog — fecha DT-v2-2
 
 Substitui DT-8 e ITEM-10 do baseline naquilo que conflita.

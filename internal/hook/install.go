@@ -144,6 +144,12 @@ func Install(ctx context.Context, opts InstallOptions) InstallResult {
 			if err := installScopedSudoers(ctx, opts); err != nil {
 				return installError(res, err)
 			}
+			// Functional capability probe (audit CRITICAL #2 / DT-v2-1/14): the
+			// visudo check above only validates SYNTAX. Prove the escalation will
+			// actually work as root before declaring install successful.
+			if err := verifySafeDeleteCapability(ctx, opts); err != nil {
+				return installError(res, err)
+			}
 		}
 	}
 	runners, err := opts.GlobFn(opts.RunnerGlob)
@@ -180,6 +186,23 @@ func Install(ctx context.Context, opts InstallOptions) InstallResult {
 		res.Restarted = true
 	}
 	return res
+}
+
+// verifySafeDeleteCapability runs the privileged wrapper's no-op capability probe
+// through sudo. It is the FUNCTIONAL counterpart to the visudo SYNTAX check in
+// installScopedSudoers: installing the wrapper + sudoers drop-in proves nothing
+// until `sudo -n <wrapper> --check` actually returns 0. A secure_path mismatch, a
+// wrong sudoers user, or a non-invokable wrapper passes visudo yet wedges the
+// runner at "Complete runner" in production. Fail-closed here (audit CRITICAL #2,
+// DT-v2-1/14) so a broken escalation never ships silently behind a green install.
+func verifySafeDeleteCapability(ctx context.Context, opts InstallOptions) error {
+	if _, err := opts.RunFn(ctx, "sudo", "-n", civm.DefaultSafeDeleteWrapperPath, "--check"); err != nil {
+		return fmt.Errorf(
+			"safedelete capability probe failed (sudo -n %s --check): %w; the NOPASSWD "+
+				"rule does not match or the wrapper is not invokable as root",
+			civm.DefaultSafeDeleteWrapperPath, err)
+	}
+	return nil
 }
 
 func validateInstallOptions(opts InstallOptions) error {

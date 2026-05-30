@@ -13,7 +13,7 @@ import (
 
 const (
 	runnerUID    = 1000
-	rootUID      = 0
+	otherUID     = 2000
 	safeWorkRoot = "/home/runner/actions-runner/_work"
 	safeChild    = safeWorkRoot + "/repo"
 	wrapperPath  = civm.DefaultSafeDeleteWrapperPath
@@ -316,18 +316,51 @@ func TestRemoveRejectsSymlinkToRoot(t *testing.T) {
 	}
 }
 
-func TestRemoveRejectsRootOwnedResolvedTarget(t *testing.T) {
+func TestRemoveEscalatesRootOwnedTarget(t *testing.T) {
 	rec := &recorder{}
 	opts := baseOptions(rec)
-	// The resolved target is owned by root, not the runner: refuse before sudo.
+	// The resolved target is owned by root — the exact Docker-as-root leftover
+	// the escalation exists to remove (a CI step ran a container as root and the
+	// _work entry itself, not just a nested file, ended up root-owned). The
+	// unprivileged delete hits EACCES, so the guarded wrapper is invoked to chown
+	// the tree back to the runner and the retry succeeds. Refusing here (the old
+	// behavior) wedged "Complete runner" for every later job on the runner.
 	opts.FileOwnerUIDFn = func(fs.FileInfo) (int, bool) { return rootUID, true }
+	calls := 0
+	opts.RemoveAllFn = func(string) error {
+		calls++
+		if calls == 1 {
+			return fs.ErrPermission
+		}
+		return nil
+	}
+
+	res := Remove(context.Background(), opts, safeChild)
+	if res.Err != nil {
+		t.Fatalf("Err = %v, want nil escalating a root-owned target", res.Err)
+	}
+	if !res.Escalated {
+		t.Fatalf("Escalated = false, want true for a root-owned target")
+	}
+	if got := rec.ops(); len(got) != 1 || got[0] != "chown" {
+		t.Fatalf("escalation ops = %v, want [chown]", got)
+	}
+}
+
+func TestRemoveRejectsThirdUserOwnedTarget(t *testing.T) {
+	rec := &recorder{}
+	opts := baseOptions(rec)
+	// Owned by neither the runner nor root: the runner must never escalate-delete
+	// a third user's files, even inside the _work tree. Only runner-owned (the
+	// happy path) and root-owned (Docker leftover) are eligible for removal.
+	opts.FileOwnerUIDFn = func(fs.FileInfo) (int, bool) { return otherUID, true }
 
 	res := Remove(context.Background(), opts, safeChild)
 	if !errors.Is(res.Err, ErrUnsafePath) {
-		t.Fatalf("Err = %v, want ErrUnsafePath for a non-runner-owned target", res.Err)
+		t.Fatalf("Err = %v, want ErrUnsafePath for a third-user-owned target", res.Err)
 	}
 	if len(rec.calls) != 0 {
-		t.Fatalf("wrapper invoked for a non-runner-owned target: %v", rec.calls)
+		t.Fatalf("wrapper invoked for a third-user-owned target: %v", rec.calls)
 	}
 }
 
