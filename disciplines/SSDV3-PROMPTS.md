@@ -32,10 +32,15 @@ Se um passo encontrar ambiguidade que pertence ao passo anterior, volte um passo
 ```text
 docs/{feature-slug}/
 ├── PRD.md
-└── SPEC.md
+├── SPEC.md
+└── SPECv2.md  # opcional, criado somente quando o Passo 2.5 der no-go
 ```
 
 - `{feature-slug}` deve ser kebab-case, curto e descritivo
+- `SPEC.md` é a primeira versão gerada pelo Passo 2 e deve ser preservada como baseline histórico
+- `SPECv2.md` é a versão melhorada criada pelo Passo 2 quando a auditoria do Passo 2.5 resultar em `no-go`
+- Não sobrescreva `SPEC.md` para incorporar correções de auditoria; gere `SPECv2.md`, salvo pedido explícito do usuário para edição in-place
+- Se `SPECv2.md` já existir e uma nova auditoria ainda der `no-go`, atualize `SPECv2.md` in-place, salvo pedido explícito do usuário para criar `SPECv3.md`
 - Se a feature já tem uma pasta em `docs/`, reutilize-a
 - Se a feature for uma evolução incremental, reutilize a pasta existente ou crie uma subpasta semântica
 
@@ -45,23 +50,22 @@ Toda PRD.md começa com frontmatter YAML. Esses campos alimentam o índice gerad
 
 ```yaml
 ---
-slug: process-events-async-worker
-title: Process Events Async Worker
-milestone: M5-observability
-issues: [636]
+slug: 613-tenant-scoped-outbox
+title: Tenant-scoped outbox com UNIQUE(event_id)
+milestone: M22
+issues: [613]
 ---
-
-# PRD — Process Events Async Worker
+# PRD — Issue #613 — Outbox tenant-scoped
 ```
 
-- `slug`: kebab-case igual ao nome da pasta.
+- `slug`: igual ao nome da pasta (`<issue>-<descricao>` para issues, ou `<descricao>` para mudanças sem issue).
 - `title`: humano, vai aparecer no índice.
-- `milestone`: identificador da milestone (M3, M4, M5...). Use `—` se ainda não associada.
+- `milestone`: identificador (M14, M21, M22...). Use `—` se ainda não associada.
 - `issues`: array de números de issue do GitHub (vazio `[]` se não tem).
 
 O status no índice é derivado da presença de arquivos: `PRD` → só PRD.md; `SPEC` → SPEC.md ou SPECv2.md também presente; `DONE` → IMPL.md presente.
 
-Regenerar o índice: `npm run docs:index`. Validar sincronia em CI: `npm run docs:check`.
+Regenerar o índice: `yarn docs:index` (ou `npm run docs:index`). Validar sincronia em CI: `yarn docs:check`.
 
 ## Referência cognitiva
 
@@ -73,6 +77,14 @@ O objetivo não é teorizar no documento, mas forçar cada etapa crítica a resp
 - qual pergunta obrigatória de Sistema 2 precisa ser respondida
 - qual evidência mínima autoriza avançar
 - qual condição objetiva exige abortar, voltar um passo ou fazer rollback
+
+## Política Day-0 do compexhub
+
+O compexhub ainda não possui produção viva com dados legados obrigatórios. Portanto, toda mudança deve ser especificada e implementada como solução principal e única, no formato correto final para Day-0.
+
+Por padrão, é proibido criar workaround, shim, dual-reader, dual-write, camada de compatibilidade com formato antigo, backfill para produção inexistente, migration incremental corretiva desnecessária ou código morto.
+
+Exceções só são permitidas quando houver requisito explícito e documentado para manter duas versões, integração externa real, dado persistido que não possa ser resetado, ou rollout coordenado aprovado. A exceção deve registrar motivo, prazo de remoção, rollback e evidência.
 
 ## Princípios da versão 3
 
@@ -214,6 +226,9 @@ Pesquise e valide contra a documentação oficial das tecnologias realmente envo
 - Prefira reaproveitar tabelas, env vars, canais Redis, middlewares, componentes e contratos existentes
 - Não proponha novos endpoints, tabelas, eventos ou env vars sem justificar por que os existentes não atendem
 - Aponte breaking changes, estratégia de rollout, rollback e backfill quando aplicável
+- Aplique a política Day-0 do compexhub: proponha a solução correta principal, sem compatibilidade legada, shims, workarounds ou backfills para produção inexistente
+- Se sugerir backfill, migration incremental, dual path ou compatibilidade, declare a exceção Day-0 com motivo objetivo; caso contrário, consolide a modelagem/migration/contrato no desenho final
+- Em **Alternativas descartadas**, descarte explicitamente soluções de compatibilidade quando elas só existirem para preservar versão antiga sem produção viva
 - Liste os documentos que precisarão ser atualizados no mesmo commit quando houver impacto estrutural
 - Se a mudança tiver risco alto, antecipe no PRD quais etapas provavelmente exigirão disciplina explícita de `disciplines/KAHNEMAN-DISCIPLINES.md` no SPEC
 - Mantenha o PRD específico e operacional; evite texto genérico
@@ -389,10 +404,11 @@ CREATE INDEX idx_table_column ON schema.table_name (column);
 
 ---
 
-## PASSO 2 — Geração do SPEC.md (a partir do PRD)
+## PASSO 2 — Geração do SPEC.md / SPECv2.md (a partir do PRD ou auditoria)
 
 > **Leia o `docs/{feature-slug}/PRD.md` e produza um `docs/{feature-slug}/SPEC.md` cirúrgico para implementação.**
-> O SPEC.md não replica o PRD; ele fecha decisões, remove ambiguidade e traduz requisitos em mudanças exatas no repo.
+> Se este Passo 2 estiver sendo reexecutado depois de um `no-go` do Passo 2.5, preserve o `SPEC.md` original e crie/atualize `docs/{feature-slug}/SPECv2.md`.
+> O SPEC não replica o PRD; ele fecha decisões, remove ambiguidade e traduz requisitos em mudanças exatas no repo.
 
 ### Objetivo do Passo 2
 
@@ -405,6 +421,8 @@ CREATE INDEX idx_table_column ON schema.table_name (column);
 
 Leia `docs/{feature-slug}/PRD.md` e gere `docs/{feature-slug}/SPEC.md` com decisões fechadas, rastreabilidade por requisito e instruções implementáveis sem interpretação.
 
+Se você estiver voltando do Passo 2.5 com decisão `no-go`, leia também o relatório da auditoria e gere `docs/{feature-slug}/SPECv2.md` como versão melhorada, sem alterar o `SPEC.md` original.
+
 ### Regras
 
 1. Só inclua o que será realmente implementado agora
@@ -413,6 +431,9 @@ Leia `docs/{feature-slug}/PRD.md` e gere `docs/{feature-slug}/SPEC.md` com decis
 4. Referências a código existente devem usar nome exato de função, struct, tipo ou interface
 5. Ordem dos itens = ordem de implementação
 6. Se o PRD estiver ambíguo, resolva aqui com uma decisão explícita e justificativa
+   - Na primeira execução do Passo 2, grave o resultado em `docs/{feature-slug}/SPEC.md`
+   - Na execução após `no-go` do Passo 2.5, grave o resultado em `docs/{feature-slug}/SPECv2.md`, preservando `SPEC.md`
+   - Se `SPECv2.md` já existir, atualize `SPECv2.md` in-place, salvo pedido explícito para criar nova versão
 7. Toda query SQL deve usar placeholders posicionais (`$1`, `$2`)
 8. Todo handler deve validar input antes de tocar no service layer
 9. Todo endpoint tenant-scoped deve passar por `TenantResolver → Auth → Permission` quando aplicável
@@ -428,6 +449,9 @@ Leia `docs/{feature-slug}/PRD.md` e gere `docs/{feature-slug}/SPEC.md` com decis
     - rollback de migration
     - rollback de dados
       e dizer explicitamente o que é permitido, proibido ou `forward-only` por ambiente
+18. Aplique a política Day-0: o SPEC deve escolher a solução principal e única. Não liste shims, compatibilidade legada, dual-reader, dual-write, backfill ou código morto, salvo exceção explícita e justificada
+19. Para migrations de estruturas ainda não vivas em produção, prefira consolidar a migration inicial correta em vez de criar migration incremental corretiva
+20. Se qualquer arquivo existir apenas para compatibilidade temporária, o SPEC deve marcar o arquivo para não criar ou para deletar, salvo exceção Day-0 documentada
 
 ### Guardrail cognitivo obrigatório
 
@@ -448,6 +472,14 @@ Regras adicionais para etapas críticas:
 - Se algum rollback não for seguro em ambiente compartilhado, o SPEC deve registrar isso como política `forward-only` explícita, com abort trigger correspondente
 
 ### Saída esperada
+
+Quando gerar `SPECv2.md`, manter a mesma estrutura abaixo e adicionar logo após o H1:
+
+```markdown
+> Versão melhorada após auditoria do Passo 2.5.
+> Baseline preservado: `SPEC.md`.
+> Motivo: {resumo objetivo dos blockers corrigidos}.
+```
 
 #### Escopo fechado desta implementação
 
@@ -486,8 +518,8 @@ Decisões tomadas que não estavam explícitas no PRD:
 
 Para cada etapa crítica da implementação, rollout, validação ou rollback, preencher:
 
-| Etapa / ITEM | Disciplina Kahneman | Link                           | Pergunta obrigatória | Evidência mínima | Abort trigger |
-| ------------ | ------------------- | ------------------------------ | -------------------- | ---------------- | ------------- |
+| Etapa / ITEM | Disciplina Kahneman | Link                                       | Pergunta obrigatória | Evidência mínima | Abort trigger |
+| ------------ | ------------------- | ------------------------------------------ | -------------------- | ---------------- | ------------- |
 | ITEM-3       | ...                 | `disciplines/KAHNEMAN-DISCIPLINES.md` | ...                  | ...              | ...           |
 
 #### Checklist de segurança (pré-implementação)
@@ -518,7 +550,9 @@ Para cada migração, na ordem de execução:
 
 - **Schema scope:** `{slug}_{service}` ou `public`
 - **Dependências:** migrações anteriores necessárias
-- **Backfill:** descrever se existe e em qual ordem roda
+- **Política Day-0:** dizer explicitamente se a mudança consolida migration inicial ou cria migration incremental; migration incremental exige justificativa se não houver produção viva
+- **Backfill:** deve ser `N/A — Day-0, sem produção viva` por padrão. Só descrever backfill quando houver dado real que precise ser preservado
+- **Compatibilidade legada:** deve ser `N/A` por padrão. Se existir, justificar a exceção Day-0
 - **Disciplina Kahneman** quando a migração for crítica:
   - **Disciplina**:
   - **Link**:
@@ -594,18 +628,18 @@ Para cada arquivo existente:
 
 Preencha explicitamente:
 
-| Documento                             | Atualização necessária | Motivo                           |
-| ------------------------------------- | ---------------------- | -------------------------------- |
-| `docs/openapi/ms-{name}.openapi.yaml` | Criar / Alterar / N/A  | contrato mudou?                  |
-| `web/src/fsd/shared/api/sdk.types.ts` | Regenerar / N/A        | schema mudou?                    |
-| `docs/config-reference.json`          | Criar / Alterar / N/A  | env var nova?                    |
-| `docs/events-catalog.json`            | Criar / Alterar / N/A  | evento novo?                     |
-| `.env.example`                        | Criar / Alterar / N/A  | configuração nova?               |
-| `CLAUDE.md`                           | Alterar / N/A          | padrão estrutural mudou?         |
-| `.claude/rules/*.md`                  | Alterar / N/A          | convenção nova?                  |
-| `web/CLAUDE.md`                       | Alterar / N/A          | frontend pattern novo?           |
-| `docs/decisions/ADR-NNN-*.md`         | Criar / N/A            | decisão arquitetural relevante?  |
-| `disciplines/KAHNEMAN-DISCIPLINES.md`        | Alterar / N/A          | nova disciplina, link ou anchor? |
+| Documento                                  | Atualização necessária | Motivo                           |
+| ------------------------------------------ | ---------------------- | -------------------------------- |
+| `docs/openapi/ms-{name}.openapi.yaml`      | Criar / Alterar / N/A  | contrato mudou?                  |
+| `web/src/fsd/shared/api/sdk.types.ts`      | Regenerar / N/A        | schema mudou?                    |
+| `docs/config-reference.json`               | Criar / Alterar / N/A  | env var nova?                    |
+| `docs/events-catalog.json`                 | Criar / Alterar / N/A  | evento novo?                     |
+| `.env.example`                             | Criar / Alterar / N/A  | configuração nova?               |
+| `CLAUDE.md`                                | Alterar / N/A          | padrão estrutural mudou?         |
+| `.claude/rules/*.md`                       | Alterar / N/A          | convenção nova?                  |
+| `web/CLAUDE.md`                            | Alterar / N/A          | frontend pattern novo?           |
+| `docs/decisions/ADR-NNN-*.md`              | Criar / N/A            | decisão arquitetural relevante?  |
+| `disciplines/KAHNEMAN-DISCIPLINES.md` | Alterar / N/A          | nova disciplina, link ou anchor? |
 
 #### Ordem de implementação
 
@@ -704,6 +738,8 @@ Pode pular quando a mudança for pequena, local e sem risco estrutural relevante
 
 Revise `docs/{feature-slug}/SPEC.md` como auditoria pré-implementação.
 
+Se `docs/{feature-slug}/SPECv2.md` existir e tiver sido criado como resposta a um `no-go` anterior, revise o `SPECv2.md` como candidato ativo.
+
 Quero uma revisão de lacunas com foco em:
 
 - ambiguidades técnicas ainda não resolvidas
@@ -720,6 +756,8 @@ Quero uma revisão de lacunas com foco em:
 - passos críticos sem pergunta obrigatória, evidência mínima ou abort trigger
 - uso de linguagem vaga (`validar`, `garantir`, `confirmar`, `se necessário`) sem critério observável
 - gaps entre etapas críticas do SPEC e as disciplinas documentadas em `disciplines/KAHNEMAN-DISCIPLINES.md`
+- presença de workaround, shim, compatibilidade legada, dual-reader, dual-write, backfill ou migration incremental corretiva sem exceção Day-0 explícita
+- código novo mantendo versão antiga sem produção viva
 
 ### Formato da resposta
 
@@ -732,19 +770,29 @@ Quero uma revisão de lacunas com foco em:
 ### Regra de saída
 
 - Se houver finding que exija decisão nova, volte ao **Passo 2**
+- Se o arquivo auditado foi `SPEC.md` e o resultado foi `no-go`, **não pare apenas na auditoria**: volte ao **Passo 2 no mesmo turno**, crie `SPECv2.md` corrigindo os findings bloqueantes e preserve o `SPEC.md` original
+- Se o arquivo auditado foi `SPECv2.md` e o resultado foi `no-go`, **não pare apenas na auditoria**: volte ao **Passo 2 no mesmo turno** e atualize `SPECv2.md` in-place, salvo pedido explícito para criar `SPECv3.md`
+- Ao criar ou atualizar o SPEC corrigido depois de um `no-go`, registre no arquivo:
+  - qual SPEC foi auditado
+  - quais findings bloqueantes foram endereçados
+  - que a versão corrigida é o candidato ativo para nova auditoria
 - Se houver etapa crítica sem link para disciplina Kahneman aplicável, sem evidência mínima ou sem abort trigger, o resultado deve ser `no-go`
+- Se houver violação da política Day-0 sem exceção documentada, o resultado deve ser `no-go`
 - Se a auditoria resultar em `go`, siga para o **Passo 3**
 
 ---
 
-## PASSO 3 — Implementação (a partir do SPEC)
+## PASSO 3 — Implementação (a partir do SPEC ativo)
 
-> **Leia o `docs/{feature-slug}/SPEC.md` e execute-o passo a passo.**
+> **Leia o SPEC ativo e execute-o passo a passo.**
 > O Passo 3 não fecha lacunas arquiteturais; ele implementa o que já foi decidido.
+> O SPEC ativo é a última versão auditada com `go`: `SPECv2.md` quando existir e tiver sido aprovado pelo Passo 2.5; caso contrário, `SPEC.md`.
 
 ### Prompt
 
-Implemente a feature descrita em `docs/{feature-slug}/SPEC.md`.
+Implemente a feature descrita no SPEC ativo de `docs/{feature-slug}/`.
+
+Use `docs/{feature-slug}/SPECv2.md` quando ele existir como versão melhorada pós-auditoria e tiver recebido `go` no Passo 2.5. Use `docs/{feature-slug}/SPEC.md` apenas quando não houver `SPECv2.md` ativo.
 
 ### Regras de execução
 
@@ -756,6 +804,9 @@ Implemente a feature descrita em `docs/{feature-slug}/SPEC.md`.
 6. Toda alteração em dado, auth, tenant isolation ou cache deve ser validada com teste
 7. Não refatore código adjacente sem necessidade funcional
 8. Em qualquer item crítico, execute também o bloco `Disciplina Kahneman` antes de avançar para a próxima fatia
+9. Implemente a solução Day-0 limpa definida no SPEC. Não adicione shims, fallbacks, compatibilidade com versões antigas, backfills ou dead code
+10. Se durante a implementação parecer necessário manter duas versões, pare e volte ao Passo 2 para registrar a exceção Day-0
+11. Quando o SPEC consolidar uma estrutura Day-0, reescreva/remova o código antigo necessário em vez de preservar caminhos mortos
 
 ### Ritual de execução por fatia
 
@@ -790,8 +841,10 @@ A cada camada concluída:
 - Mudou shape de resposta ou contrato OpenAPI
 - Surgiu necessidade de rollout, backfill ou rollback não descritos
 - A etapa crítica exige uma decisão que o mapa Kahneman do SPEC ainda não fechou
+- Surgiu necessidade de manter versão antiga, shim, dual path, backfill ou compatibilidade não documentada como exceção Day-0
 
 > **Regra absoluta:** se o código precisar decidir algo que o SPEC não decidiu, a implementação deve parar e o SPEC deve ser atualizado primeiro.
+> Se o SPEC ativo for `SPECv2.md`, atualize `SPECv2.md`; não altere o `SPEC.md` baseline.
 
 ### Validação final
 
