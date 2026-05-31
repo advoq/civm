@@ -25,23 +25,21 @@
 
     Privilege audit (DT-v2-6): both tasks run as SYSTEM with RL HIGHEST. They
     require only the local Hyper-V management right (Optimize-VHD / Start-VM /
-    Get-VM) plus read/write on V:. No network credential and no secret is
-    embedded; the only outbound action is local SSH to the guest using the
-    host's existing key (key management lives outside this registrar).
+    Get-VM), read/write on V:, and outbound SSH to the guest through the
+    dedicated local key under C:\ProgramData\civm\ssh. The private key must be
+    owned/readable only by SYSTEM for Windows OpenSSH. No repo secret is
+    embedded; key management lives outside this registrar.
 
 .PARAMETER ScriptDir
     Directory containing civm-vhdx-optimize.ps1. Defaults to this script's own
     directory so a checked-out deploy/windows tree is self-registering.
-
-.PARAMETER VhdxPath
-    Absolute path to the VHDX passed to civm-vhdx-optimize.ps1 (-VhdxPath).
 
 .PARAMETER VMName
     Hyper-V VM name passed to both scripts. Default gha-ubuntu-2404.
 
 .PARAMETER MinHeadroomGB
     Headroom floor passed to civm-vhdx-optimize.ps1 (-MinHeadroomGB). Mirrors
-    civm.DefaultHostVolumeHeadroomGB (15).
+    civm.DefaultHostVolumeHeadroomGB (8).
 
 .PARAMETER WeeklyDay
     Day of week for the unattended weekly trigger. Default SUN.
@@ -51,8 +49,7 @@
     during Windows Update — DT-v2-16). Default 03:00.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\register-civm-vhdx-optimize.ps1 `
-        -VhdxPath 'V:\gha-ubuntu-2404\Virtual Hard Disks\gha-ubuntu-2404.vhdx'
+    powershell -ExecutionPolicy Bypass -File .\register-civm-vhdx-optimize.ps1
 
 .NOTES
     Run elevated (the schtasks /create for SYSTEM requires admin). Verify with:
@@ -65,11 +62,7 @@
 param(
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$ScriptDir = $PSScriptRoot,
-
-    [Parameter(Mandatory = $true)]
-    [ValidateNotNullOrEmpty()]
-    [string]$VhdxPath,
+    [string]$ScriptDir = '',
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
@@ -77,7 +70,7 @@ param(
 
     [Parameter()]
     [ValidateRange(1, 4096)]
-    [int]$MinHeadroomGB = 15,
+    [int]$MinHeadroomGB = 8,
 
     [Parameter()]
     [ValidateSet('MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN')]
@@ -94,6 +87,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+$scriptRoot = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    $PSScriptRoot
+} else {
+    Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if ([string]::IsNullOrWhiteSpace($ScriptDir)) {
+    $ScriptDir = $scriptRoot
+}
 
 $OptimizeTaskName = 'civm-vhdx-optimize'
 $WatchdogTaskName = 'civm-vhdx-optimize-watchdog'
@@ -185,8 +187,15 @@ if ($PSCmdlet.ShouldProcess($WatchdogScript, "Write watchdog script")) {
 # --- schtasks helpers ---------------------------------------------------------
 function Remove-TaskIfPresent {
     param([string]$Name)
-    & schtasks.exe /query /tn $Name *> $null
-    if ($LASTEXITCODE -eq 0) {
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & schtasks.exe /query /tn $Name > $null 2> $null
+        $exists = ($LASTEXITCODE -eq 0)
+    } finally {
+        $ErrorActionPreference = $oldPreference
+    }
+    if ($exists) {
         if ($PSCmdlet.ShouldProcess($Name, 'schtasks /delete')) {
             & schtasks.exe /delete /tn $Name /f | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "schtasks /delete failed for $Name (exit $LASTEXITCODE)" }
@@ -228,7 +237,7 @@ $resolvedWatchdog = if (Test-Path -LiteralPath $WatchdogScript) {
 } else {
     $WatchdogScript
 }
-$optimizeCmd = '"{0}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{1}" -VMName "{2}" -VhdxPath "{3}" -MinHeadroomGB {4}' -f $PowerShellPath, $resolvedOptimize, $VMName, $VhdxPath, $MinHeadroomGB
+$optimizeCmd = '"{0}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{1}" -MinHeadroomGB {2}' -f $PowerShellPath, $resolvedOptimize, $MinHeadroomGB
 $watchdogCmd = '"{0}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{1}" -VMName "{2}"' -f $PowerShellPath, $resolvedWatchdog, $VMName
 
 # --- Register civm-vhdx-optimize (weekly + manual-trigger friendly) -----------

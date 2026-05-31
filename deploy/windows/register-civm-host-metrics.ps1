@@ -6,8 +6,10 @@
     Idempotently registers a Scheduled Task that runs civm-host-metrics.ps1 as
     SYSTEM on a fixed interval. The collector is read-only on the host (it only
     queries Get-Volume/Get-VHD/Get-VM and delivers a JSON snapshot to the
-    guest), so SYSTEM here needs only the Hyper-V read right plus SSH to the
-    guest; no network listener and no secret are introduced.
+    guest), so SYSTEM here needs only the Hyper-V read right plus outbound SSH
+    to the guest through the dedicated local key under C:\ProgramData\civm\ssh.
+    The private key must be owned/readable only by SYSTEM for Windows OpenSSH.
+    No network listener or repo secret is introduced.
 
     Idempotent: unregister-then-register (schtasks /create /f). Reversible with
     `schtasks /delete /tn civm-host-metrics /f`. Honors -WhatIf via
@@ -23,7 +25,7 @@
 param(
     [string]$TaskName = 'civm-host-metrics',
     # Defaults next to this registrar so deploy/windows/ stays self-contained.
-    [string]$ScriptPath = (Join-Path $PSScriptRoot 'civm-host-metrics.ps1'),
+    [string]$ScriptPath = '',
     # Collector cadence in minutes (DT-v2-9: 10 min, hostdisk MaxAge=30).
     [int]$IntervalMinutes = 10,
     [string]$PowerShellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -31,6 +33,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+$scriptRoot = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    $PSScriptRoot
+} else {
+    Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
+    $ScriptPath = Join-Path $scriptRoot 'civm-host-metrics.ps1'
+}
 
 if (-not (Test-Path -LiteralPath $ScriptPath)) {
     throw "collector script not found: $ScriptPath"
@@ -45,8 +56,14 @@ $action = '"{0}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{1}"'
 
 function Test-TaskExists {
     param([string]$Name)
-    & schtasks.exe /query /tn $Name *> $null
-    return ($LASTEXITCODE -eq 0)
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & schtasks.exe /query /tn $Name > $null 2> $null
+        return ($LASTEXITCODE -eq 0)
+    } finally {
+        $ErrorActionPreference = $oldPreference
+    }
 }
 
 # 1. Unregister an existing task first so re-runs converge (idempotent).

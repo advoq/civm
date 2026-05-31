@@ -36,8 +36,14 @@
 - No host, o serviço Hyper-V precisa estar de pé:
   `(Get-Service vmms).Status -eq 'Running'` (SPECv2 DT-v2-16). Se não
   estiver, **aborte** — não tente compactar.
-- O guest precisa de SSH funcional a partir do host (entrega de métricas
-  e handshake de drain dependem disso — SPECv2 DT-v2-5/17).
+- O guest precisa de SSH funcional a partir do host. As tasks SYSTEM não
+  herdam o `~/.ssh` do usuário interativo; use chave dedicada em
+  `C:\ProgramData\civm\ssh\id_ed25519` com owner/ACL só para SYSTEM
+  (o OpenSSH do Windows rejeita a chave privada se Administrators ou o
+  usuário interativo tiverem acesso), e autorize a `.pub` no
+  `emdev@gha-ubuntu-2404`
+  (entrega de métricas, `fstrim` e handshake de drain dependem disso —
+  SPECv2 DT-v2-5/17).
 
 ## Sintomas (como reconhecer o caso)
 
@@ -122,6 +128,16 @@ Script de host registrado como task SYSTEM rodando a cada **10 min**
 ao guest para somar o lado guest, e escreve
 `V:\civm-host-metrics.json` (`DefaultHostMetricsFileNameOnHost`).
 
+Contrato de SSH:
+
+- destino padrão: `emdev@gha-ubuntu-2404`;
+- chave padrão: `C:\ProgramData\civm\ssh\id_ed25519`;
+- `known_hosts` padrão: `C:\ProgramData\civm\ssh\known_hosts`;
+- a cópia guest-local em `/var/lib/civm/host-metrics.json` usa
+  `sudo -n` porque `/var/lib/civm` é root-owned. Se o sudo sem senha
+  falhar, a task deve marcar `delivery_status:"failed"` em vez de abrir
+  permissão no diretório.
+
 Semântica de falha de entrega (SPECv2 DT-v2-5):
 
 - Se `scp`/`ssh` ao guest falhar (exit ≠ 0): log **WARN**, escreve
@@ -139,6 +155,37 @@ Get-Content V:\civm-host-metrics.json | ConvertFrom-Json
 
 # Confirmar que a task está registrada (SYSTEM, RL HIGHEST, 10 min)
 schtasks /query /tn civm-host-metrics /v /fo LIST
+```
+
+## civm-vhdx-autoreclaim.ps1 (prevenção automática)
+
+Script de host registrado como task SYSTEM a cada **30 min**. Ele é o
+caminho preventivo para o caso recorrente: `V:` vai enchendo durante o
+dia, mas o guest ainda tem espaço livre. Diferente do
+`civm-vhdx-optimize`, ele não altera controlador nem entra em maintenance
+mode; só compacta quando as guardas abaixo passam.
+
+Guardas obrigatórias antes de desligar a VM:
+
+1. lock `V:\civm-autoreclaim.lock` adquirido;
+2. `V:` abaixo de `ThresholdGB` (default 50 GB) e acima de
+   `MinHeadroomGB` (default 8 GB);
+3. VM `gha-ubuntu-2404` está `Running`;
+4. SSH host→guest funciona com a chave de `C:\ProgramData\civm\ssh`;
+5. gap estimado do VHDX ≥ `MinReclaimableGB` (default 8 GB);
+6. `civmctl idle-check` fica verde dentro de 10 min;
+7. `sudo -n fstrim -av` completa com exit 0.
+
+Só depois disso a task executa `Stop-VM -> Optimize-VHD -Mode Full ->
+Start-VM`, com 3 tentativas de `Start-VM` no `finally`. Rollback trigger:
+se a task interromper CI ativo, delete `civm-vhdx-autoreclaim` e mantenha
+apenas a compactação supervisionada até corrigir o predicado de idle.
+
+Registro:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\civm-deploy\register-civm-vhdx-autoreclaim.ps1
+schtasks /query /tn civm-vhdx-autoreclaim /v /fo LIST
 ```
 
 ## civm-vhdx-optimize.ps1 (compactação offline)
@@ -204,9 +251,13 @@ ssh gha-ubuntu-2404 'civmctl host-disk --json'
 
 > **Primeira execução (calibração do headroom):** rode com
 > `Start-Transcript` e poll de `v_free` a cada 5 s, registrando o
-> **low-water mark** do scratch durante o `Optimize-VHD`. Se
-> `DefaultHostVolumeHeadroomGB=15` se mostrar insuficiente, eleve a
-> constante e registre o porquê (SPECv2 DT-v2-19).
+> **low-water mark** do scratch durante o `Optimize-VHD`. Em 2026-05-31,
+> o host Day-0 foi calibrado com `DefaultHostVolumeHeadroomGB=8`, porque
+> `V:` tem 119 GB, o VHDX max tem 110 GB e o volume não pode ser expandido
+> (`Get-PartitionSupportedSize -DriveLetter V` mostrou `SizeMax` igual ao
+> tamanho atual). Rollback trigger: se o low-water real chegar a `<=8 GB`,
+> eleve a constante ou mova/expanda o volume antes de reabilitar a task
+> (SPECv2 DT-v2-19).
 
 ## Maintenance drain handshake
 
@@ -283,6 +334,7 @@ liberar → `fstrim` → medir) é **opt-in** via `--reference-test`.
 `DefaultHostVolumeHeadroomGB` é o mínimo de `V:` livre exigido **antes**
 do `Optimize-VHD`; abaixo disso a task aborta sem zero-fill (folga para o
 crescimento temporário do VHDX durante a compactação — SPECv2 DT-v2-24).
+Valor Day-0 atual: **8 GB**.
 O guard é de **duas fases** (DT-v2-3): uma no início e outra **após o
 drain e antes do shutdown**, porque um job pode ter consumido `V:` no
 intervalo. Se a fase 2 falhar, a task restaura o guest
@@ -374,15 +426,18 @@ ssh gha-ubuntu-2404 'civmctl capacity --json'              # accepting_jobs=true
 
 ## Auditoria de privilégio das Scheduled Tasks
 
-As tasks (`civm-host-metrics`, `civm-vhdx-optimize`,
-`civm-vhdx-optimize-watchdog`) rodam como **SYSTEM** apenas com o direito
-Hyper-V; **sem rede e sem segredo** (SPECv2 DT-v2-6). Registradas por
-`deploy/windows/register-*.ps1` com `schtasks /create ... /ru SYSTEM
-/rl HIGHEST /f`. Reversível por `schtasks /delete`.
+As tasks (`civm-host-metrics`, `civm-vhdx-autoreclaim`,
+`civm-vhdx-optimize`, `civm-vhdx-optimize-watchdog`) rodam como
+**SYSTEM** com direito Hyper-V e SSH outbound para o guest usando chave
+local em `C:\ProgramData\civm\ssh`. Nenhum segredo fica no repo
+(SPECv2 DT-v2-6). Registradas por `deploy/windows/register-*.ps1` com
+`schtasks /create ... /ru SYSTEM /rl HIGHEST /f`. Reversível por
+`schtasks /delete`.
 
 ```powershell
 # Verificar registro/saúde das tasks
 schtasks /query /tn civm-host-metrics            /v /fo LIST
+schtasks /query /tn civm-vhdx-autoreclaim        /v /fo LIST
 schtasks /query /tn civm-vhdx-optimize           /v /fo LIST
 schtasks /query /tn civm-vhdx-optimize-watchdog  /v /fo LIST
 
@@ -392,6 +447,11 @@ schtasks /delete /tn civm-vhdx-optimize /f
 
 ## Histórico
 
+- **2026-05-31** — Autoreclaim promovido a prevenção automática: task a
+  cada 30 min, chave SSH dedicada com private key exclusiva de SYSTEM em
+  `C:\ProgramData\civm\ssh`,
+  entrega de métricas via `sudo -n` em `/var/lib/civm` e guardas de
+  threshold/gap/idle/fstrim antes de desligar a VM.
 - **2026-05-29** — Primeira versão. Autoria a partir de
   `docs/specs/host-volume-reclamation/SPECv2.md` (PASSO 3 pendente):
   árvore de decisão fstrim/SCSI/Optimize-VHD, handshake de drain via

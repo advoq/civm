@@ -176,7 +176,7 @@ issues: []
   // Reclamação de volume do host (docs/specs/host-volume-reclamation).
   DefaultHostVolumeWarnFreeGB    = 30 // alinhado ao runbook ">30GB livres"
   DefaultHostVolumeCritFreeGB    = 10 // alinhado ao runbook "<10GB"
-  DefaultHostVolumeHeadroomGB    = 15 // Optimize-VHD scratch; abaixo disso, abort (sem zero-fill)
+  DefaultHostVolumeHeadroomGB    = 8  // Optimize-VHD scratch; abaixo disso, abort (sem zero-fill)
   DefaultHostMetricsPath         = "/var/lib/civm/host-metrics.json" // cópia entregue ao guest
   DefaultHostMetricsMaxAgeMinutes = 30 // stale acima disso
   DefaultMaintenanceStatePath    = "/var/lib/civm/maintenance.json"

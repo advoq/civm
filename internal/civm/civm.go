@@ -65,8 +65,9 @@ const (
 	DefaultHostVolumeCritFreeGB = 10 // alinhado ao runbook "<10GB"
 	// DefaultHostVolumeHeadroomGB é o mínimo de V: livre ANTES do Optimize-VHD;
 	// abaixo disso aborta sem zero-fill (folga p/ crescimento temporário do
-	// VHDX na compactação).
-	DefaultHostVolumeHeadroomGB      = 15
+	// VHDX na compactação). Calibrado para o host Day-0: V: tem 119GB e o
+	// VHDX max tem 110GB; 15GB é uma violação permanente impossível nesse disco.
+	DefaultHostVolumeHeadroomGB      = 8
 	DefaultHostMetricsPath           = "/var/lib/civm/host-metrics.json" // cópia entregue ao guest
 	DefaultHostMetricsMaxAgeMinutes  = 30                                // stale acima disso
 	DefaultHostMetricsFileNameOnHost = "civm-host-metrics.json"          // nome do arquivo no host (V:\)

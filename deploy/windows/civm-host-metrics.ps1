@@ -30,7 +30,11 @@ param(
     # Guest destination (DefaultHostMetricsPath).
     [string]$GuestMetricsPath = '/var/lib/civm/host-metrics.json',
     # SSH target used to read guest free space and deliver the copy.
-    [string]$GuestSshTarget = 'gha-ubuntu-2404',
+    [string]$GuestSshTarget = 'emdev@gha-ubuntu-2404',
+    # Dedicated host->guest key for SYSTEM scheduled tasks. The private key is
+    # local host state, never repo state.
+    [string]$SshKeyPath = 'C:\ProgramData\civm\ssh\id_ed25519',
+    [string]$KnownHostsPath = 'C:\ProgramData\civm\ssh\known_hosts',
     [int]$SshTimeoutSeconds = 30,
     [string]$LogPath = 'V:\civm-hyperv-maintenance.log'
 )
@@ -49,6 +53,25 @@ function Write-Log {
 
 function ConvertTo-GiB { param([double]$Bytes) return [int64][math]::Round($Bytes / $GiB) }
 
+function Get-SshArgs {
+    param([string]$Target, [int]$TimeoutSeconds)
+    $sshDir = Split-Path -Parent $KnownHostsPath
+    if (-not (Test-Path -LiteralPath $sshDir)) {
+        New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+    }
+    $args = @(
+        '-o', 'BatchMode=yes',
+        '-o', "ConnectTimeout=$TimeoutSeconds",
+        '-o', 'StrictHostKeyChecking=accept-new',
+        '-o', "UserKnownHostsFile=$KnownHostsPath"
+    )
+    if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) {
+        $args += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath)
+    }
+    $args += $Target
+    return $args
+}
+
 # Resolve the VHDX path from the VM when not provided explicitly.
 function Resolve-VhdxPath {
     param([string]$Name, [string]$Explicit)
@@ -63,7 +86,8 @@ function Get-GuestFreeBytes {
     param([string]$Target, [int]$TimeoutSeconds)
     try {
         $remote = "df -B1 --output=avail / | tail -n1 | tr -d '[:space:]'"
-        $out = & ssh -o BatchMode=yes -o "ConnectTimeout=$TimeoutSeconds" -o StrictHostKeyChecking=accept-new $Target $remote 2>$null
+        $sshArgs = Get-SshArgs -Target $Target -TimeoutSeconds $TimeoutSeconds
+        $out = & ssh @sshArgs $remote 2>$null
         if ($LASTEXITCODE -ne 0) { return $null }
         $val = ($out | Out-String).Trim()
         $parsed = 0L
@@ -81,14 +105,17 @@ function Write-JsonAtomic {
     Move-Item -LiteralPath $tmp -Destination $Path -Force
 }
 
-# Deliver the host snapshot into the guest atomically via SSH. Returns $true on
-# success, $false on any failure (caller marks delivery_status=failed, DT-v2-5).
+# Deliver the host snapshot into the guest atomically via SSH. The destination
+# lives under /var/lib/civm (root-owned), so the host user must have passwordless
+# sudo for this bounded write. Returns $true on success, $false on any failure
+# (caller marks delivery_status=failed, DT-v2-5).
 function Send-MetricsToGuest {
     param([string]$Target, [string]$DestPath, [string]$Json, [int]$TimeoutSeconds)
     try {
         $tmpDest = "$DestPath.tmp"
-        $remote = "cat > '$tmpDest' && mv -f '$tmpDest' '$DestPath'"
-        $Json | & ssh -o BatchMode=yes -o "ConnectTimeout=$TimeoutSeconds" -o StrictHostKeyChecking=accept-new $Target $remote 2>$null
+        $remote = "sudo -n sh -c 'cat > $tmpDest && mv -f $tmpDest $DestPath && chmod 0644 $DestPath'"
+        $sshArgs = Get-SshArgs -Target $Target -TimeoutSeconds $TimeoutSeconds
+        $Json | & ssh @sshArgs $remote 2>$null
         return ($LASTEXITCODE -eq 0)
     } catch { return $false }
 }
@@ -122,6 +149,7 @@ try {
             vhdx_file_size_gb = $vhdxFileGB
             vhdx_min_size_gb  = $vhdxMinGB
             vhdx_max_size_gb  = $vhdxMaxGB
+            vhdx_block_size_bytes = [int64]$vhd.BlockSize
             guest_free_gb     = 0
             gap_gb            = $null
             vm_state          = $vmState
@@ -147,6 +175,7 @@ try {
         vhdx_file_size_gb = $vhdxFileGB
         vhdx_min_size_gb  = $vhdxMinGB
         vhdx_max_size_gb  = $vhdxMaxGB
+        vhdx_block_size_bytes = [int64]$vhd.BlockSize
         guest_free_gb     = $guestFreeGB
         gap_gb            = $gapGB
         vm_state          = $vmState
