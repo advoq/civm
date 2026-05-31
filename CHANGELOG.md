@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.11.1](https://github.com/advoq/civm/compare/v1.11.0...v1.11.1) (2026-05-31)
+
+
+### Bug Fixes
+
+* **infra:** harden host vhdx autoreclaim ([4cd6f87](https://github.com/advoq/civm/commit/4cd6f87acbcb0764016c296c17f99a539b451c93))
+* **infra:** harden host vhdx autoreclaim ([aa7357d](https://github.com/advoq/civm/commit/aa7357dde763af0afa0eb2eed79aba2b11ade8c3))
+
+
+### Documentation
+
+* refresh SSDV3 to latest workspace model ([1fd25d3](https://github.com/advoq/civm/commit/1fd25d384f1d94f1c2e4aa708b8a0f7df6cea2b1))
+* refresh SSDV3 to latest workspace model ([89569f9](https://github.com/advoq/civm/commit/89569f97f4bfe8950adf6c93ea11f5777c2a3bde))
+
 ## [1.11.0](https://github.com/advoq/civm/compare/v1.10.0...v1.11.0) (2026-05-31)
 
 
