@@ -48,6 +48,9 @@ type Metrics struct {
 	VHDXMinSizeGB int64 `json:"vhdx_min_size_gb"`
 	// VHDXMaxSizeGB is the maximum configured size of the VHDX (Get-VHD).
 	VHDXMaxSizeGB int64 `json:"vhdx_max_size_gb"`
+	// VHDXBlockSizeBytes is the dynamic VHDX block size. Values above 1 MiB are
+	// a known reclaim blocker on this host class.
+	VHDXBlockSizeBytes int64 `json:"vhdx_block_size_bytes,omitempty"`
 	// GuestFreeGB is the guest root filesystem free space, gathered by the host
 	// task over SSH. It is 0 when delivery failed (host-only snapshot).
 	GuestFreeGB int64 `json:"guest_free_gb"`
@@ -213,6 +216,9 @@ func RenderJSON(w io.Writer, r Report) error {
 func RenderText(w io.Writer, r Report) {
 	fmt.Fprintf(w, "Host disk: level=%s stale=%t v_free=%dGB/%dGB vhdx_file=%dGB vhdx_max=%dGB guest_free=%dGB gap=%dGB\n",
 		r.Level, r.Stale, r.VFreeGB, r.VSizeGB, r.VHDXFileSizeGB, r.VHDXMaxSizeGB, r.GuestFreeGB, r.GapGB)
+	if r.VHDXBlockSizeBytes > 0 {
+		fmt.Fprintf(w, "VHDXBlockSizeBytes: %d\n", r.VHDXBlockSizeBytes)
+	}
 	if r.FreeHeadroomViolation {
 		fmt.Fprintln(w, "FreeHeadroomViolation: v_free below Optimize-VHD scratch headroom")
 	}

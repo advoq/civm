@@ -46,7 +46,7 @@ func marshalMetrics(t *testing.T, m Metrics) []byte {
 }
 
 func TestCheckLevelOK(t *testing.T) {
-	m := Metrics{VFreeGB: 50, VSizeGB: 200, VHDXMaxSizeGB: 150, Timestamp: testFresh}
+	m := Metrics{VFreeGB: 50, VSizeGB: 200, VHDXMaxSizeGB: 150, VHDXBlockSizeBytes: 1048576, Timestamp: testFresh}
 	r, err := Check(optsWith(t, marshalMetrics(t, m), nil))
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
@@ -56,6 +56,9 @@ func TestCheckLevelOK(t *testing.T) {
 	}
 	if r.FreeHeadroomViolation || r.AllocationHeadroomViolation {
 		t.Fatalf("want no headroom violations, got %+v", r)
+	}
+	if r.VHDXBlockSizeBytes != 1048576 {
+		t.Fatalf("block size = %d, want 1048576", r.VHDXBlockSizeBytes)
 	}
 }
 
@@ -119,8 +122,8 @@ func TestCheckDeliveryFailedForcesCrit(t *testing.T) {
 }
 
 func TestCheckFreeHeadroomViolation(t *testing.T) {
-	// VFreeGB below headroom (15) but allocation headroom satisfied.
-	m := Metrics{VFreeGB: 12, VSizeGB: 300, VHDXMaxSizeGB: 150, Timestamp: testFresh}
+	// VFreeGB below headroom (8) but allocation headroom satisfied.
+	m := Metrics{VFreeGB: 6, VSizeGB: 300, VHDXMaxSizeGB: 150, Timestamp: testFresh}
 	r, err := Check(optsWith(t, marshalMetrics(t, m), nil))
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
@@ -129,14 +132,14 @@ func TestCheckFreeHeadroomViolation(t *testing.T) {
 		t.Fatalf("want free headroom violation, got %+v", r)
 	}
 	if r.AllocationHeadroomViolation {
-		t.Fatalf("allocation headroom should be fine (300-150=150>=15): %+v", r)
+		t.Fatalf("allocation headroom should be fine (300-150=150>=8): %+v", r)
 	}
 }
 
 func TestCheckAllocationHeadroomViolation(t *testing.T) {
-	// VSizeGB-VHDXMaxSizeGB = 160-150 = 10 < 15 -> allocation violation.
+	// VSizeGB-VHDXMaxSizeGB = 155-150 = 5 < 8 -> allocation violation.
 	// VFreeGB high (40) so no free headroom violation.
-	m := Metrics{VFreeGB: 40, VSizeGB: 160, VHDXMaxSizeGB: 150, Timestamp: testFresh}
+	m := Metrics{VFreeGB: 40, VSizeGB: 155, VHDXMaxSizeGB: 150, Timestamp: testFresh}
 	r, err := Check(optsWith(t, marshalMetrics(t, m), nil))
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
@@ -145,7 +148,7 @@ func TestCheckAllocationHeadroomViolation(t *testing.T) {
 		t.Fatalf("want allocation headroom violation, got %+v", r)
 	}
 	if r.FreeHeadroomViolation {
-		t.Fatalf("free headroom should be fine (40>=15): %+v", r)
+		t.Fatalf("free headroom should be fine (40>=8): %+v", r)
 	}
 }
 
@@ -215,7 +218,7 @@ func TestDefaultOptions(t *testing.T) {
 	if opts.MaxAge != 30*time.Minute {
 		t.Fatalf("default maxage = %v", opts.MaxAge)
 	}
-	if opts.WarnFreeGB != 30 || opts.CritFreeGB != 10 || opts.HeadroomGB != 15 {
+	if opts.WarnFreeGB != 30 || opts.CritFreeGB != 10 || opts.HeadroomGB != 8 {
 		t.Fatalf("default thresholds = %+v", opts)
 	}
 }
@@ -243,7 +246,7 @@ func TestRenderJSON(t *testing.T) {
 }
 
 func TestRenderText(t *testing.T) {
-	m := Metrics{VFreeGB: 12, VSizeGB: 160, VHDXMaxSizeGB: 150, Timestamp: testFresh}
+	m := Metrics{VFreeGB: 6, VSizeGB: 155, VHDXMaxSizeGB: 150, VHDXBlockSizeBytes: 1048576, Timestamp: testFresh}
 	r, err := Check(optsWith(t, marshalMetrics(t, m), nil))
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
@@ -256,5 +259,8 @@ func TestRenderText(t *testing.T) {
 	}
 	if !strings.Contains(out, "FreeHeadroomViolation") || !strings.Contains(out, "AllocationHeadroomViolation") {
 		t.Fatalf("text render must surface both headroom violations: %s", out)
+	}
+	if !strings.Contains(out, "VHDXBlockSizeBytes: 1048576") {
+		t.Fatalf("text render must surface VHDX block size: %s", out)
 	}
 }

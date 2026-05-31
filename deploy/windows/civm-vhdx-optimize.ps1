@@ -49,12 +49,12 @@
 
 .PARAMETER MinHeadroomGB
     Minimum free GB required on V: BEFORE Optimize-VHD (both guard phases).
-    Mirrors civm.DefaultHostVolumeHeadroomGB (15). Below this the script aborts
+    Mirrors civm.DefaultHostVolumeHeadroomGB (8). Below this the script aborts
     without zero-fill.
 
 .PARAMETER GuestSshTarget
-    SSH destination for the guest. Default = VMName (the host's SSH config maps
-    the VM name to the guest, matching civm-host-metrics.ps1).
+    SSH destination for the guest. Default = emdev@gha-ubuntu-2404 so SYSTEM
+    tasks do not depend on an interactive user's SSH config.
 
 .NOTES
     NON-DISRUPTIVE ALTERNATIVE: when the VHDX already sits on a SCSI controller
@@ -65,8 +65,9 @@
     maintenance window, never during Windows Update, and alert if it does not
     complete within 2 h (DT-v2-16).
 
-    Privilege: registered as a SYSTEM Scheduled Task with the Hyper-V right
-    only; no network secret, no interactive trigger (see
+    Privilege: registered as a SYSTEM Scheduled Task with the Hyper-V right,
+    V: access, and outbound SSH through the dedicated local key under
+    C:\ProgramData\civm\ssh; no repo secret, no interactive trigger (see
     register-civm-vhdx-optimize.ps1).
 #>
 [CmdletBinding(SupportsShouldProcess)]
@@ -75,17 +76,23 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$VMName = 'gha-ubuntu-2404',
 
-    [Parameter(Mandatory = $true)]
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$VhdxPath,
+    [string]$VhdxPath = 'V:\Hyper-V\gha-ubuntu-2404\Virtual Hard Disks\gha-ubuntu-2404.vhdx',
 
     [Parameter()]
     [ValidateRange(1, 4096)]
-    [int]$MinHeadroomGB = 15,
+    [int]$MinHeadroomGB = 8,
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$GuestSshTarget = ''
+    [string]$GuestSshTarget = 'emdev@gha-ubuntu-2404',
+
+    [Parameter()]
+    [string]$SshKeyPath = 'C:\ProgramData\civm\ssh\id_ed25519',
+
+    [Parameter()]
+    [string]$KnownHostsPath = 'C:\ProgramData\civm\ssh\known_hosts'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,10 +109,6 @@ $StartAttempts   = 3                              # DT-v2-1 / DT-v2-15
 $StartSleepSec   = 10                             # DT-v2-1 sleep between attempts
 $IdleWaitSec     = 600                            # re-loop idle-check ceiling
 $SshTimeoutSec   = 30                             # DT-v2-1 SSH
-
-if ([string]::IsNullOrWhiteSpace($GuestSshTarget)) {
-    $GuestSshTarget = $VMName
-}
 
 # --- Structured logging to V:\civm-hyperv-maintenance.log + stdout -----------
 # Events match SPEC.md §Eventos/log: optimize_start, optimize_end,
@@ -146,13 +149,20 @@ function Invoke-GuestSsh {
     param(
         [Parameter(Mandatory = $true)][string]$RemoteCommand
     )
+    $sshDir = Split-Path -Parent $KnownHostsPath
+    if (-not [string]::IsNullOrWhiteSpace($sshDir) -and -not (Test-Path -LiteralPath $sshDir)) {
+        New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+    }
     $sshArgs = @(
         '-o', "ConnectTimeout=$SshTimeoutSec",
         '-o', 'BatchMode=yes',
         '-o', 'StrictHostKeyChecking=accept-new',
-        $GuestSshTarget,
-        $RemoteCommand
+        '-o', "UserKnownHostsFile=$KnownHostsPath"
     )
+    if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) {
+        $sshArgs += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath)
+    }
+    $sshArgs += @($GuestSshTarget, $RemoteCommand)
     $output = & ssh @sshArgs 2>&1
     return [pscustomobject]@{
         ExitCode = $LASTEXITCODE
