@@ -174,7 +174,7 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 		}
 	}
 
-	hookChecks, hookSeverity := collectHookChecks(opts, systemd, systemdErr)
+	hookChecks, hookSeverity := collectHookChecks(ctx, opts, systemd, systemdErr)
 	report.HookChecks = hookChecks
 	worst = maxSeverity(worst, hookSeverity)
 
@@ -273,18 +273,42 @@ func inferReposFromSystemd(systemd []runner.Status) []string {
 	return repos
 }
 
-func collectHookChecks(opts Options, systemd []runner.Status, systemdErr error) ([]HookCheck, Severity) {
+func collectHookChecks(ctx context.Context, opts Options, systemd []runner.Status, systemdErr error) ([]HookCheck, Severity) {
 	checks := []HookCheck{
 		checkHookScript(opts, "HOOK_JOB_STARTED", hook.StartedHookName, hook.EventJobStarted),
 		checkHookScript(opts, "HOOK_JOB_COMPLETED", hook.CompletedHookName, hook.EventJobCompleted),
 		checkRunnerEnvHooks(opts),
 		checkRunnerServices(systemd, systemdErr),
+		checkScopedSudoers(ctx, opts),
 	}
 	worst := SeverityOK
 	for _, check := range checks {
 		worst = maxSeverity(worst, check.Severity)
 	}
 	return checks, worst
+}
+
+// checkScopedSudoers proves the privileged-delete escalation capability the way
+// safedelete will actually use it at runtime, instead of reading the sudoers
+// drop-in — which is 0440 root:root (unreadable as the runner user) and whose
+// existence is not function. It runs the wrapper's no-op self-check under
+// sudo -n: a secure_path mismatch, a missing NOPASSWD rule or a removed wrapper
+// all surface here as the capability being gone (DT-v2-10; testing.md
+// "existence != function"). Mirrors install's verifySafeDeleteCapability so the
+// ongoing health check catches drift after a clean install.
+func checkScopedSudoers(ctx context.Context, opts Options) HookCheck {
+	if _, err := opts.RunFn(ctx, "sudo", "-n", civm.DefaultSafeDeleteWrapperPath, "--check"); err != nil {
+		return HookCheck{
+			Name:     "SCOPED_SUDOERS",
+			Severity: SeverityCritical,
+			Detail:   fmt.Sprintf("sudo -n %s --check failed (%v); run sudo civmctl hook install --execute", civm.DefaultSafeDeleteWrapperPath, err),
+		}
+	}
+	return HookCheck{
+		Name:     "SCOPED_SUDOERS",
+		Severity: SeverityOK,
+		Detail:   fmt.Sprintf("sudo -n %s --check ok", civm.DefaultSafeDeleteWrapperPath),
+	}
 }
 
 func checkHookScript(opts Options, checkName, hookName string, event hook.Event) HookCheck {

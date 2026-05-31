@@ -539,11 +539,30 @@ func TestAppendLogNoopWhenDisabled(t *testing.T) {
 }
 
 func TestSafeWorkRoot(t *testing.T) {
-	valid := "/home/emdev/actions-runner-advoq/_work"
-	if !safeWorkRoot(valid) {
-		t.Fatalf("expected safe: %s", valid)
+	// Legitimate roots MUST still pass — a refusal-only test could lock in an
+	// over-tight guard that re-wedges every runner (testing.md: pair refusal
+	// with its positive).
+	for _, root := range []string{
+		"/home/emdev/actions-runner-advoq/_work",
+		"/home/runner/actions-runner/_work",
+		"//home//emdev//actions-runner//_work", // cleans to the canonical shape
+	} {
+		if !safeWorkRoot(root) {
+			t.Fatalf("expected safe: %s", root)
+		}
 	}
-	for _, root := range []string{"/", "/home/emdev", "/tmp/_work", "/home/emdev/actions-runner/_tool"} {
+	for _, root := range []string{
+		"/",
+		"/home/emdev",
+		"/tmp/_work",
+		"/home/emdev/actions-runner/_tool",
+		// Substring decoys the old strings.Contains guard wrongly accepted but
+		// the segment-aware glob match rejects (DT-v2-7): "actions-runner" is
+		// not the runner-dir segment directly under /home/<user>.
+		"/home/x/sub/actions-runner/_work",
+		"/home/x/actions-runnerEVIL/deep/_work",
+		"/home/x/actions-runner/_work/repo", // a child, not the root itself
+	} {
 		if safeWorkRoot(root) {
 			t.Fatalf("expected unsafe: %s", root)
 		}
@@ -1069,10 +1088,11 @@ func FuzzSafeWorkRoot(f *testing.F) {
 		if !filepath.IsAbs(clean) {
 			t.Fatalf("safeWorkRoot accepted non-absolute %q (clean=%q)", root, clean)
 		}
-		if !strings.HasPrefix(clean, "/home/") ||
-			!strings.Contains(clean, "/actions-runner") ||
-			!strings.HasSuffix(clean, "/_work") {
-			t.Fatalf("safeWorkRoot accepted %q but clean=%q breaks invariant", root, clean)
+		// Anything accepted must match the canonical work-root glob as a
+		// path-SEGMENT match — no substring slips through (DT-v2-7).
+		ok, err := filepath.Match(workRootGlob, clean)
+		if err != nil || !ok {
+			t.Fatalf("safeWorkRoot accepted %q but clean=%q does not match %q", root, clean, workRootGlob)
 		}
 		for _, part := range strings.Split(clean, "/") {
 			if part == ".." {

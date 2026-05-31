@@ -493,14 +493,21 @@ func workRoots(opts Options) []string {
 	return roots
 }
 
+// workRootGlob is the single canonical shape of a runner _work root:
+// /home/<user>/actions-runner*/_work. Discovery and the safeWorkRoot guard both
+// match it via filepath.Match, whose '*' never crosses a path separator — a
+// path-SEGMENT match, not a substring, so a decoy like
+// /home/x/sub/actions-runnerEVIL/deep/_work cannot slip past the privileged
+// delete guard (DT-v2-7; testing.md "guard text must match guard behavior").
+const workRootGlob = "/home/*/actions-runner*/_work"
+
 func safeWorkRoot(root string) bool {
 	clean := filepath.Clean(root)
 	if !filepath.IsAbs(clean) {
 		return false
 	}
-	return strings.HasPrefix(clean, "/home/") &&
-		strings.Contains(clean, "/actions-runner") &&
-		strings.HasSuffix(clean, "/_work")
+	ok, err := filepath.Match(workRootGlob, clean)
+	return err == nil && ok
 }
 
 // cachePaths deriva a lista de paths de cacheCaps() — fonte única de verdade.
@@ -682,7 +689,7 @@ func applyDefaults(opts *Options) {
 }
 
 func discoverRunnerWorkRoots() ([]string, error) {
-	return filepath.Glob("/home/*/actions-runner*/_work")
+	return filepath.Glob(workRootGlob)
 }
 
 func defaultRun(ctx context.Context, name string, args ...string) ([]byte, error) {

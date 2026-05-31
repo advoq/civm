@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/advoq/civm/internal/civm"
 	"github.com/advoq/civm/internal/health"
 	"github.com/advoq/civm/internal/hook"
 	"github.com/advoq/civm/internal/runner"
@@ -180,7 +181,7 @@ func TestCollectAndRenderJSON(t *testing.T) {
 	if len(parsed.GitHubRepos) != 2 || parsed.GitHubRepos[1].Runners[0].Classification != "legacy_stale" {
 		t.Fatalf("parsed = %+v", parsed)
 	}
-	if len(parsed.HookChecks) != 4 {
+	if len(parsed.HookChecks) != 5 {
 		t.Fatalf("hook checks not rendered in JSON: %+v", parsed.HookChecks)
 	}
 }
@@ -202,6 +203,11 @@ func TestCollectReportsHookContractFailures(t *testing.T) {
 	}
 	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]GitHubRunner, error) {
 		return []GitHubRunner{{Repo: repo, Name: "civm-self", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
+	}
+	// Capability probe present, so the only criticals come from the hook
+	// contract failures this test exercises (not from SCOPED_SUDOERS).
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, nil
 	}
 	opts.GlobFn = func(string) ([]string, error) {
 		return []string{"/home/emdev/actions-runner"}, nil
@@ -302,6 +308,37 @@ func TestCollectRejectsBadRepo(t *testing.T) {
 	}
 }
 
+func TestCheckScopedSudoersCapabilityProbe(t *testing.T) {
+	t.Parallel()
+
+	// Capability present: the probe exits 0 -> SCOPED_SUDOERS OK. And it must
+	// run the EXACT privileged invocation safedelete uses (sudo -n <wrapper>
+	// --check), not read a file — existence is not function (DT-v2-10).
+	var got string
+	okOpts := DefaultOptions()
+	okOpts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		got = strings.Join(append([]string{name}, args...), " ")
+		return nil, nil
+	}
+	if c := checkScopedSudoers(context.Background(), okOpts); c.Severity != SeverityOK {
+		t.Fatalf("probe success should be OK, got %+v", c)
+	}
+	want := "sudo -n " + civm.DefaultSafeDeleteWrapperPath + " --check"
+	if got != want {
+		t.Fatalf("probe invocation = %q, want %q", got, want)
+	}
+
+	// Pair the positive with the refusal: capability gone (sudo -n fails) ->
+	// Critical. A success-only test could hide a probe that never fails.
+	failOpts := DefaultOptions()
+	failOpts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New("sudo: a password is required")
+	}
+	if c := checkScopedSudoers(context.Background(), failOpts); c.Severity != SeverityCritical {
+		t.Fatalf("probe failure should be Critical, got %+v", c)
+	}
+}
+
 func assertHookCheck(t *testing.T, report Report, name string, severity Severity, detailContains string) {
 	t.Helper()
 	for _, check := range report.HookChecks {
@@ -316,6 +353,11 @@ func assertHookCheck(t *testing.T, report Report, name string, severity Severity
 }
 
 func stubHookContractOK(opts *Options) {
+	// The SCOPED_SUDOERS check runs the safedelete capability probe via RunFn;
+	// mock it as present so the hook contract reads fully green.
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, nil
+	}
 	opts.GlobFn = func(string) ([]string, error) {
 		return []string{"/home/emdev/actions-runner"}, nil
 	}

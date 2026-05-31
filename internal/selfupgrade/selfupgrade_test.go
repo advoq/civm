@@ -173,6 +173,41 @@ func TestRun_VerifyFailureCleansTempAndAborts(t *testing.T) {
 	}
 }
 
+func TestDefaultVerify(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// A binary whose version-pins prints output and exits 0 verifies.
+	good := filepath.Join(dir, "good")
+	writeStubBinary(t, good, "echo civmctl version pins\nexit 0")
+	if err := defaultVerify(good); err != nil {
+		t.Fatalf("good binary should verify: %v", err)
+	}
+
+	// Pair the positive with the failures the gate must catch: a non-zero exit
+	// (a build that compiles but breaks in command dispatch) is rejected...
+	bad := filepath.Join(dir, "bad")
+	writeStubBinary(t, bad, "echo boom 1>&2\nexit 3")
+	if err := defaultVerify(bad); err == nil {
+		t.Fatal("non-zero exit should fail verify")
+	}
+
+	// ...and so is empty output, which --help-style smoke would have missed.
+	empty := filepath.Join(dir, "empty")
+	writeStubBinary(t, empty, "exit 0")
+	if err := defaultVerify(empty); err == nil {
+		t.Fatal("empty output should fail verify")
+	}
+}
+
+func writeStubBinary(t *testing.T, path, body string) {
+	t.Helper()
+	script := "#!/usr/bin/env bash\n" + body + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil { //nolint:gosec // G306: test stub must be executable
+		t.Fatalf("write stub binary: %v", err)
+	}
+}
+
 func TestRun_RenameFailureCleansTemp(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

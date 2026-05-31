@@ -4,7 +4,8 @@
 // scp / dpkg ceremony.
 //
 // Safety guarantees:
-//   - Build is verified (--version) before the swap.
+//   - Build is verified (version-pins, a real deterministic subcommand) before
+//     the swap — not --help, which any binary that merely links satisfies.
 //   - Swap is os.Rename within the same dir → atomic per POSIX.
 //   - On any failure path, the target binary is untouched.
 //   - Temp build artifact is removed on error.
@@ -18,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -48,7 +50,7 @@ type Result struct {
 }
 
 // DefaultOptions retorna padrões de produção (build via `go build`,
-// verify via `civmctl-new --help`, rename via os.Rename).
+// verify via `civmctl-new version-pins`, rename via os.Rename).
 func DefaultOptions() Options {
 	return Options{
 		SourceDir: "/opt/civm",
@@ -157,13 +159,21 @@ func defaultBuild(ctx context.Context, sourceDir, output string) error {
 	return nil
 }
 
-// defaultVerify roda `<path> --help` que NÃO depende de syscalls de runner
-// (parity faria) — apenas confirma que o binário lança e o help é
-// reconhecido. Exit 0 esperado.
+// defaultVerify roda `<path> version-pins`, um subcomando determinístico que
+// despacha lógica real (renderiza os version pins via specs.Ubuntu2404) sem
+// depender de syscall de runner, root ou estado do box. É um smoke genuíno do
+// binário recém-buildado: uma build que compila mas quebra no dispatch falha
+// aqui — ao contrário de `--help`, que qualquer binário que apenas linka
+// satisfaz (auditoria #13: existência != função). Exige exit 0 E saída não
+// vazia.
 func defaultVerify(path string) error {
-	cmd := exec.Command(path, "--help") //nolint:gosec // G204: path é o binário recém-buildado, sob nosso controle
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("--help check: %w", err)
+	cmd := exec.Command(path, "version-pins") //nolint:gosec // G204: path é o binário recém-buildado, sob nosso controle
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("version-pins check: %w: %s", err, string(out))
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return fmt.Errorf("version-pins check: empty output from %s", path)
 	}
 	return nil
 }
