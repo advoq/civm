@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.11.0](https://github.com/advoq/civm/compare/v1.10.0...v1.11.0) (2026-05-31)
+
+
+### Features
+
+* **runner:** harden privileged primitives + sync Kahneman discipline [#13](https://github.com/advoq/civm/issues/13) ([#63](https://github.com/advoq/civm/issues/63)) ([f222f4d](https://github.com/advoq/civm/commit/f222f4d41f38313f23e0a09911b12b4643a7e0b9))
+
+
+### Bug Fixes
+
+* **safedelete:** escalate root-owned _work targets and gate it for real ([#61](https://github.com/advoq/civm/issues/61)) ([61e4450](https://github.com/advoq/civm/commit/61e44504f37d3b8a8113869362049412e8b73376))
+
 ## [1.10.0](https://github.com/advoq/civm/compare/v1.9.0...v1.10.0) (2026-05-30)
 
 
