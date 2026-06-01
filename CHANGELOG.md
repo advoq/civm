@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.2](https://github.com/advoq/civm/compare/v1.11.1...v1.11.2) (2026-06-01)
+
+
+### Bug Fixes
+
+* **runner:** treat host-busy watchdog skip as success ([#68](https://github.com/advoq/civm/issues/68)) ([f0b0760](https://github.com/advoq/civm/commit/f0b0760940e5c2920511f5b598a9f21e8494be9f))
+
 ## [1.11.1](https://github.com/advoq/civm/compare/v1.11.0...v1.11.1) (2026-05-31)
 
 
