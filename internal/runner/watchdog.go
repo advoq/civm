@@ -198,7 +198,15 @@ func Watchdog(ctx context.Context, opts WatchdogOptions) WatchdogReport {
 			if opts.RerunNetworkFailures {
 				report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "warning", Reason: reason, Detail: detail})
 			}
-			report.Exit = maxExit(report.Exit, 1)
+			// A busy host (and a probe that cannot prove idle) is the expected
+			// steady state on a shared runner box: deferring maintenance to the
+			// next idle tick is correct behavior, not a watchdog failure. The
+			// warning event above preserves observability. Marking the systemd
+			// unit failed on every tick (the box is busy most of the time) would
+			// only keep it perpetually red and mask genuine faults. Non-zero is
+			// reserved for real failures: hook-install / runner-restart errors
+			// (exit 2) and a runner that stays offline after repair (exit 1).
+			// Ref: docs/specs/civm-runner-reliability/SPEC.md RF-6 / ITEM-10.
 			return report
 		}
 	}

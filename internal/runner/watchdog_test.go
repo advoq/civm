@@ -135,14 +135,60 @@ func TestWatchdogBusyHostDoesNotMutate(t *testing.T) {
 	}
 
 	report := Watchdog(context.Background(), opts)
-	if report.Exit != 1 {
-		t.Fatalf("Exit = %d, want 1", report.Exit)
+	// host-busy is the expected steady state on a shared runner box: the
+	// watchdog must defer maintenance (no mutations) AND report success
+	// (exit 0). Marking the systemd unit failed on every busy tick would
+	// keep it perpetually red and mask genuine faults. (Kahneman #13: the
+	// prior assertion wanted exit 1, locking in the opposite of the purpose.)
+	if report.Exit != 0 {
+		t.Fatalf("Exit = %d, want 0 (host-busy deferral is success) events=%+v", report.Exit, report.Events)
 	}
 	if !hasWatchdogEventWithReason(report, "rerun-skipped", "host-busy") {
 		t.Fatalf("events = %+v, want rerun-skipped host-busy", report.Events)
 	}
 	if hookCalls != 0 || restartCalls != 0 || rerunCalls != 0 {
 		t.Fatalf("mutated despite busy host: hooks=%d restarts=%d reruns=%d", hookCalls, restartCalls, rerunCalls)
+	}
+}
+
+func TestWatchdogIdleUnknownDefersWithoutFailing(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.RerunNetworkFailures = true
+	// A failed idle probe means we cannot prove the host is idle, so the
+	// watchdog must refrain from acting. Like host-busy, this is a safe
+	// deferral, not a watchdog failure: exit 0 with a warning event, never a
+	// red systemd unit. (SPEC RF-6: non-zero is reserved for real faults.)
+	hookCalls := 0
+	restartCalls := 0
+	rerunCalls := 0
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		return nil, errors.New("ps probe failed")
+	}
+	opts.HookInstallFn = func(context.Context, hook.InstallOptions) hook.InstallResult {
+		hookCalls++
+		return hook.InstallResult{}
+	}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "sudo" && strings.Contains(strings.Join(args, " "), "systemctl restart") {
+			restartCalls++
+		}
+		return []byte("active\n"), nil
+	}
+	opts.RerunFn = func(context.Context, string, int64) error {
+		rerunCalls++
+		return nil
+	}
+
+	report := Watchdog(context.Background(), opts)
+	if report.Exit != 0 {
+		t.Fatalf("Exit = %d, want 0 (host-idle-unknown deferral is success) events=%+v", report.Exit, report.Events)
+	}
+	if !hasWatchdogEventWithReason(report, "runner-restart-skipped", "host-idle-unknown") {
+		t.Fatalf("events = %+v, want runner-restart-skipped host-idle-unknown", report.Events)
+	}
+	if hookCalls != 0 || restartCalls != 0 || rerunCalls != 0 {
+		t.Fatalf("mutated despite unknown host state: hooks=%d restarts=%d reruns=%d", hookCalls, restartCalls, rerunCalls)
 	}
 }
 
