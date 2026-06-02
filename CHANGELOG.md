@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.0](https://github.com/advoq/civm/compare/v1.12.0...v1.13.0) (2026-06-02)
+
+
+### Features
+
+* **runner:** auto-restart wedged runner via hooks.jsonl sentinel ([#79](https://github.com/advoq/civm/issues/79)) ([ce1ad5c](https://github.com/advoq/civm/commit/ce1ad5c5ad35db5adb4bdfc3d932503fc33c2b6b))
+
 ## [1.12.0](https://github.com/advoq/civm/compare/v1.11.3...v1.12.0) (2026-06-02)
 
 
