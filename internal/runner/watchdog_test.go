@@ -192,6 +192,153 @@ func TestWatchdogIdleUnknownDefersWithoutFailing(t *testing.T) {
 	}
 }
 
+// --- ITEM-10 broken-runner auto-restart (DT-8) ---
+
+type detectIO struct {
+	files      map[string][]byte
+	restarted  []string
+	restartErr error
+}
+
+func newDetectIO() *detectIO { return &detectIO{files: map[string][]byte{}} }
+
+func (d *detectIO) opts(now time.Time) WatchdogOptions {
+	return WatchdogOptions{
+		Execute:            true,
+		HooksLogPath:       "/var/log/civm/hooks.jsonl",
+		MarkerPath:         "/var/lib/civm/marker.json",
+		AutoRestartPerHour: 3,
+		NowFn:              func() time.Time { return now },
+		ReadFileFn: func(p string) ([]byte, error) {
+			if b, ok := d.files[p]; ok {
+				return b, nil
+			}
+			return nil, os.ErrNotExist
+		},
+		WriteFileFn: func(p string, b []byte, _ os.FileMode) error { d.files[p] = b; return nil },
+		MkdirAllFn:  func(string, os.FileMode) error { return nil },
+		RestartFn: func(_ context.Context, unit string) error {
+			d.restarted = append(d.restarted, unit)
+			return d.restartErr
+		},
+	}
+}
+
+func sentinelLine(now time.Time, workRoot string) string {
+	return `{"time":"` + now.Format(time.RFC3339) + `","event":"job-completed","decision":"error","work_root":"` +
+		workRoot + `","actions":[{"name":"work_root","error":"wrapper rm failed: boom"}]}`
+}
+
+func brokenRunnerSystemd() []Status {
+	return []Status{
+		{UnitName: "actions.runner.advoq-org.civm-advoq-org.service", Name: "civm-advoq-org", WorkingDirectory: "/home/emdev/actions-runner-advoq-org"},
+		{UnitName: "actions.runner.vitae.civm-vitae.service", Name: "civm-vitae", WorkingDirectory: "/home/emdev/actions-runner-vitae"},
+	}
+}
+
+func TestDetectBrokenRunnerRestartsCorrectUnit(t *testing.T) {
+	t.Parallel()
+	now := testWatchdogNow
+	io := newDetectIO()
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now.Add(-5*time.Minute), "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	var report WatchdogReport
+	detectBrokenRunner(context.Background(), io.opts(now), brokenRunnerSystemd(), &report)
+	if len(io.restarted) != 1 || io.restarted[0] != "actions.runner.advoq-org.civm-advoq-org.service" {
+		t.Fatalf("restarted = %v, want only the advoq-org unit (deterministic WorkRoot map)", io.restarted)
+	}
+	if !hasWatchdogEvent(report, "runner-auto-restarted") {
+		t.Fatalf("events = %+v, want runner-auto-restarted", report.Events)
+	}
+}
+
+func TestDetectBrokenRunnerNoSentinelNoRestart(t *testing.T) {
+	t.Parallel()
+	now := testWatchdogNow
+	io := newDetectIO()
+	// job-completed with a CLEAN work_root action (no error) — not a sentinel.
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(`{"time":"` + now.Format(time.RFC3339) + `","decision":"ok","work_root":"/home/emdev/actions-runner-advoq-org/_work","actions":[{"name":"work_root","executed":true}]}` + "\n")
+	var report WatchdogReport
+	detectBrokenRunner(context.Background(), io.opts(now), brokenRunnerSystemd(), &report)
+	if len(io.restarted) != 0 {
+		t.Fatalf("restarted = %v, want none (no broken sentinel)", io.restarted)
+	}
+}
+
+func TestDetectBrokenRunnerStaleSentinelIgnored(t *testing.T) {
+	t.Parallel()
+	now := testWatchdogNow
+	io := newDetectIO()
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now.Add(-3*time.Hour), "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	var report WatchdogReport
+	detectBrokenRunner(context.Background(), io.opts(now), brokenRunnerSystemd(), &report)
+	if len(io.restarted) != 0 {
+		t.Fatalf("restarted = %v, want none (sentinel older than 1h)", io.restarted)
+	}
+}
+
+func TestDetectBrokenRunnerUnknownWorkRootDoesNotTouchWrongUnit(t *testing.T) {
+	t.Parallel()
+	now := testWatchdogNow
+	io := newDetectIO()
+	// work_root maps to NO known unit → must restart nothing (never guess).
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now, "/home/emdev/actions-runner-ghost/_work") + "\n")
+	var report WatchdogReport
+	detectBrokenRunner(context.Background(), io.opts(now), brokenRunnerSystemd(), &report)
+	if len(io.restarted) != 0 {
+		t.Fatalf("restarted = %v, want none (no unit owns the work_root)", io.restarted)
+	}
+	if !hasWatchdogEventWithReason(report, "runner-auto-restart-skipped", "no-unit-for-work-root") {
+		t.Fatalf("events = %+v, want no-unit-for-work-root skip", report.Events)
+	}
+}
+
+func TestDetectBrokenRunnerRateCapSkips(t *testing.T) {
+	t.Parallel()
+	now := testWatchdogNow
+	io := newDetectIO()
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now, "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	// Pre-seed the marker at the cap for this unit in the current hour.
+	io.files["/var/lib/civm/marker.json"] = []byte(`{"reruns":{},"auto_restarts":{"actions.runner.advoq-org.civm-advoq-org.service":{"count":3,"window_start":"` + now.Format(time.RFC3339) + `"}}}`)
+	var report WatchdogReport
+	detectBrokenRunner(context.Background(), io.opts(now), brokenRunnerSystemd(), &report)
+	if len(io.restarted) != 0 {
+		t.Fatalf("restarted = %v, want none (rate cap reached)", io.restarted)
+	}
+	if !hasWatchdogEventWithReason(report, "runner-auto-restart-skipped", "rate-cap-reached") {
+		t.Fatalf("events = %+v, want rate-cap-reached skip", report.Events)
+	}
+}
+
+func TestDetectBrokenRunnerRestartErrorExits2(t *testing.T) {
+	t.Parallel()
+	now := testWatchdogNow
+	io := newDetectIO()
+	io.restartErr = errors.New("systemctl restart failed")
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now, "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	var report WatchdogReport
+	detectBrokenRunner(context.Background(), io.opts(now), brokenRunnerSystemd(), &report)
+	if report.Exit != 2 {
+		t.Fatalf("Exit = %d, want 2 (real restart failure)", report.Exit)
+	}
+}
+
+func TestDetectBrokenRunnerDryRunCandidateOnly(t *testing.T) {
+	t.Parallel()
+	now := testWatchdogNow
+	io := newDetectIO()
+	opts := io.opts(now)
+	opts.Execute = false
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now, "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	var report WatchdogReport
+	detectBrokenRunner(context.Background(), opts, brokenRunnerSystemd(), &report)
+	if len(io.restarted) != 0 {
+		t.Fatalf("restarted = %v, want none in dry-run", io.restarted)
+	}
+	if !hasWatchdogEvent(report, "runner-auto-restarted") {
+		t.Fatalf("dry-run should surface the candidate event: %+v", report.Events)
+	}
+}
+
 func TestWatchdogRepairsHooksWhenIdle(t *testing.T) {
 	t.Parallel()
 	opts := baseWatchdogOptions(t)

@@ -39,6 +39,8 @@ type WatchdogOptions struct {
 	HooksDir             string
 	RunnerGlob           string
 	CivmctlPath          string
+	HooksLogPath         string // shared hooks.jsonl tail read for the broken-runner sentinel (ITEM-10)
+	AutoRestartPerHour   int    // cap of sentinel-driven auto-restarts per unit per rolling hour
 	RunFn                func(ctx context.Context, name string, args ...string) ([]byte, error)
 	NetworkFn            func(ctx context.Context, timeout time.Duration) error
 	ActivityFn           func(ctx context.Context) ([]idle.Activity, error)
@@ -54,6 +56,11 @@ type WatchdogOptions struct {
 	MkdirAllFn           func(path string, perm os.FileMode) error
 	NowFn                func() time.Time
 	SleepFn              func(d time.Duration)
+	// RestartFn restarts a single broken runner unit. It deliberately does NOT
+	// gate on host-idle (unlike runner.Restart): a wedged unit must recover even
+	// while OTHER runners on the shared box are busy — restarting one unit does
+	// not disturb another unit's job. Injected for hermetic tests.
+	RestartFn func(ctx context.Context, unit string) error
 }
 
 type WatchdogReport struct {
@@ -131,22 +138,24 @@ type FailureClassification struct {
 
 func DefaultWatchdogOptions() WatchdogOptions {
 	return WatchdogOptions{
-		Execute:        false,
-		InferRepos:     true,
-		NetworkTimeout: 10 * time.Second,
-		RestartDelay:   10 * time.Second,
-		IdleProbeDelay: 2 * time.Second,
-		MaxRunAge:      DefaultWatchdogMaxRunAge,
-		RunLimit:       defaultWatchdogRunLimit,
-		MarkerPath:     DefaultWatchdogMarkerPath,
-		RunFn:          defaultRun,
-		ActivityFn:     idle.DefaultActivities,
-		ReadFileFn:     os.ReadFile,
-		WriteFileFn:    os.WriteFile,
-		MkdirAllFn:     os.MkdirAll,
-		NowFn:          time.Now,
-		SleepFn:        time.Sleep,
-		HookInstallFn:  hook.Install,
+		Execute:            false,
+		InferRepos:         true,
+		NetworkTimeout:     10 * time.Second,
+		RestartDelay:       10 * time.Second,
+		IdleProbeDelay:     2 * time.Second,
+		MaxRunAge:          DefaultWatchdogMaxRunAge,
+		RunLimit:           defaultWatchdogRunLimit,
+		MarkerPath:         DefaultWatchdogMarkerPath,
+		HooksLogPath:       civm.DefaultHooksLogPath,
+		AutoRestartPerHour: civm.DefaultRunnerAutoRestartPerHour,
+		RunFn:              defaultRun,
+		ActivityFn:         idle.DefaultActivities,
+		ReadFileFn:         os.ReadFile,
+		WriteFileFn:        os.WriteFile,
+		MkdirAllFn:         os.MkdirAll,
+		NowFn:              time.Now,
+		SleepFn:            time.Sleep,
+		HookInstallFn:      hook.Install,
 	}
 }
 
@@ -183,6 +192,12 @@ func Watchdog(ctx context.Context, opts WatchdogOptions) WatchdogReport {
 
 	ghBefore, repoOnline := collectWatchdogGitHubRunners(ctx, opts, repos, &report)
 	report.RunnerOnline = anyRepoOnline(repoOnline)
+
+	// Auto-recover a wedged runner BEFORE the idle skip: a broken-runner sentinel
+	// in hooks.jsonl means that unit is stuck and must restart even while other
+	// units are busy. Sentinel-gated + per-unit hourly cap (RF-6 / ITEM-10).
+	// In dry-run it only surfaces candidates; it restarts only with Execute.
+	detectBrokenRunner(ctx, opts, systemd, &report)
 
 	idleResult := idle.Result{Status: idle.StatusIdle, ExitCode: idle.StatusIdle.ExitCode()}
 	if opts.Execute {
@@ -300,6 +315,169 @@ func restartWatchdogRunners(ctx context.Context, opts WatchdogOptions, systemd [
 			return err
 		}
 		report.add(event)
+	}
+	return nil
+}
+
+// hookLogRecord is the subset of a hooks.jsonl line the watchdog needs to detect
+// a broken-runner sentinel and map it to a runner unit.
+type hookLogRecord struct {
+	Time     time.Time `json:"time"`
+	Decision string    `json:"decision"`
+	WorkRoot string    `json:"work_root"`
+	Actions  []struct {
+		Name  string `json:"name"`
+		Error string `json:"error"`
+	} `json:"actions"`
+}
+
+func hookRecordIsBrokenSentinel(rec hookLogRecord) bool {
+	// The wedging signal is specifically a work_root cleanup that failed: the
+	// privileged escalation could not reclaim a root-owned _work leftover, so the
+	// runner is stuck at "Complete runner" and every next job fails. We do NOT
+	// trigger on decision=="error" alone (it also covers disk-pressure rejections
+	// that need no restart) — only on the work_root action error (DT-8).
+	for _, a := range rec.Actions {
+		if a.Name == "work_root" && strings.TrimSpace(a.Error) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// unitForWorkRoot maps a hook work_root to the owning runner unit deterministically
+// via Status.WorkingDirectory (work_root = <WorkingDirectory>/_work[...]). Longest
+// matching prefix wins so a shorter dir never shadows a nested one. Returns "" when
+// no unit owns the path — the watchdog then refuses to restart anything (never a
+// guess on a shared box).
+func unitForWorkRoot(workRoot string, systemd []Status) string {
+	clean := filepath.Clean(workRoot)
+	best, bestLen := "", -1
+	for _, s := range systemd {
+		if s.UnitName == "" || s.WorkingDirectory == "" {
+			continue
+		}
+		wd := filepath.Clean(s.WorkingDirectory)
+		if clean == wd || strings.HasPrefix(clean, wd+string(filepath.Separator)) {
+			if len(wd) > bestLen {
+				best, bestLen = s.UnitName, len(wd)
+			}
+		}
+	}
+	return best
+}
+
+// detectBrokenRunner scans the tail of the shared hooks.jsonl for a broken-runner
+// sentinel (a recent work_root cleanup error => wedged runner), maps it to the
+// owning systemd unit via WorkingDirectory, and restarts that unit, capped per
+// unit per rolling hour (anti restart-loop). It runs BEFORE the idle skip and is
+// NOT gated by host-idle: a wedged unit must recover even while other units are
+// busy — restarting one unit does not disturb another unit's job. Best-effort:
+// an unreadable/absent/truncated log is a no-op, never a watchdog failure
+// (RF-6 / ITEM-10 / DT-8).
+func detectBrokenRunner(ctx context.Context, opts WatchdogOptions, systemd []Status, report *WatchdogReport) {
+	data, err := opts.ReadFileFn(opts.HooksLogPath)
+	if err != nil || len(strings.TrimSpace(string(data))) == 0 {
+		return
+	}
+	cutoff := opts.NowFn().Add(-time.Hour)
+	lines := strings.Split(string(data), "\n")
+	if len(lines) > 500 {
+		lines = lines[len(lines)-500:]
+	}
+	brokenDirs := map[string]bool{}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var rec hookLogRecord
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue // skip malformed/truncated lines
+		}
+		if rec.WorkRoot == "" {
+			continue
+		}
+		if !rec.Time.IsZero() && rec.Time.Before(cutoff) {
+			continue // stale sentinel
+		}
+		if hookRecordIsBrokenSentinel(rec) {
+			brokenDirs[rec.WorkRoot] = true
+		}
+	}
+	if len(brokenDirs) == 0 {
+		return
+	}
+	units := map[string]bool{}
+	for workRoot := range brokenDirs {
+		if unit := unitForWorkRoot(workRoot, systemd); unit != "" {
+			units[unit] = true
+		} else {
+			report.add(WatchdogEvent{Event: "runner-auto-restart-skipped", Severity: "warning", Reason: "no-unit-for-work-root", Detail: workRoot})
+		}
+	}
+	if len(units) == 0 {
+		return
+	}
+	state, err := loadRerunState(opts)
+	if err != nil {
+		report.add(WatchdogEvent{Event: "runner-auto-restart-skipped", Severity: "warning", Reason: "marker-read-failed", Detail: err.Error()})
+		return
+	}
+	now := opts.NowFn()
+	unitNames := make([]string, 0, len(units))
+	for u := range units {
+		unitNames = append(unitNames, u)
+	}
+	sort.Strings(unitNames)
+	mutated := false
+	for _, unit := range unitNames {
+		w := state.AutoRestarts[unit]
+		if w.WindowStart.IsZero() || now.Sub(w.WindowStart) >= time.Hour {
+			w = autoRestartWindow{Count: 0, WindowStart: now}
+		}
+		if w.Count >= opts.AutoRestartPerHour {
+			report.add(WatchdogEvent{Event: "runner-auto-restart-skipped", Severity: "warning", Unit: unit, Reason: "rate-cap-reached", Detail: fmt.Sprintf("%d/%d this hour", w.Count, opts.AutoRestartPerHour)})
+			continue
+		}
+		event := WatchdogEvent{Event: "runner-auto-restarted", Severity: "warning", Unit: unit, Reason: "broken-runner-sentinel", Executed: opts.Execute}
+		if !opts.Execute {
+			report.add(event) // dry-run: surface the candidate without acting
+			continue
+		}
+		if err := opts.RestartFn(ctx, unit); err != nil {
+			event.Severity = "critical"
+			event.Detail = err.Error()
+			report.add(event)
+			report.Exit = maxExit(report.Exit, 2)
+			continue
+		}
+		w.Count++
+		state.AutoRestarts[unit] = w
+		mutated = true
+		report.add(event)
+	}
+	if mutated {
+		if err := writeRerunState(opts, state); err != nil {
+			report.add(WatchdogEvent{Event: "runner-auto-restart-skipped", Severity: "warning", Reason: "marker-write-failed", Detail: err.Error()})
+		}
+	}
+}
+
+// defaultWatchdogRestart restarts a single runner unit directly (sudo systemctl
+// restart + is-active verify). Unlike runner.Restart it does NOT gate on host
+// idle — see WatchdogOptions.RestartFn.
+func defaultWatchdogRestart(ctx context.Context, opts WatchdogOptions, unit string) error {
+	if err := civm.ValidateServiceUnit(unit); err != nil {
+		return err
+	}
+	if _, err := opts.RunFn(ctx, "sudo", "systemctl", "restart", unit); err != nil {
+		return fmt.Errorf("systemctl restart %s: %w", unit, err)
+	}
+	opts.SleepFn(opts.RestartDelay)
+	out, _ := opts.RunFn(ctx, "systemctl", "is-active", unit)
+	if active := strings.TrimSpace(string(out)); active != "active" {
+		return fmt.Errorf("%s is-active=%q after restart", unit, active)
 	}
 	return nil
 }
@@ -576,12 +754,21 @@ type RerunMarker struct {
 	RerunAt time.Time `json:"rerun_at"`
 }
 
+// autoRestartWindow is the per-unit, rolling-hour counter of sentinel-driven
+// auto-restarts (anti restart-loop, DT-8). When NowFn - WindowStart >= 1h the
+// window resets.
+type autoRestartWindow struct {
+	Count       int       `json:"count"`
+	WindowStart time.Time `json:"window_start"`
+}
+
 type rerunState struct {
-	Reruns map[string]RerunMarker `json:"reruns"`
+	Reruns       map[string]RerunMarker       `json:"reruns"`
+	AutoRestarts map[string]autoRestartWindow `json:"auto_restarts,omitempty"`
 }
 
 func loadRerunState(opts WatchdogOptions) (rerunState, error) {
-	state := rerunState{Reruns: map[string]RerunMarker{}}
+	state := rerunState{Reruns: map[string]RerunMarker{}, AutoRestarts: map[string]autoRestartWindow{}}
 	data, err := opts.ReadFileFn(opts.MarkerPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -597,6 +784,9 @@ func loadRerunState(opts WatchdogOptions) (rerunState, error) {
 	}
 	if state.Reruns == nil {
 		state.Reruns = map[string]RerunMarker{}
+	}
+	if state.AutoRestarts == nil {
+		state.AutoRestarts = map[string]autoRestartWindow{}
 	}
 	return state, nil
 }
@@ -635,8 +825,19 @@ func applyWatchdogDefaults(opts *WatchdogOptions) {
 	if opts.MarkerPath == "" {
 		opts.MarkerPath = defaults.MarkerPath
 	}
+	if opts.HooksLogPath == "" {
+		opts.HooksLogPath = defaults.HooksLogPath
+	}
+	if opts.AutoRestartPerHour == 0 {
+		opts.AutoRestartPerHour = defaults.AutoRestartPerHour
+	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaults.RunFn
+	}
+	if opts.RestartFn == nil {
+		opts.RestartFn = func(ctx context.Context, unit string) error {
+			return defaultWatchdogRestart(ctx, *opts, unit)
+		}
 	}
 	if opts.ActivityFn == nil {
 		opts.ActivityFn = defaults.ActivityFn
@@ -840,7 +1041,10 @@ func inferWatchdogRepos(systemd []Status) []string {
 func enrichWatchdogSystemdRepos(ctx context.Context, opts WatchdogOptions, systemd []Status) []Status {
 	out := append([]Status(nil), systemd...)
 	for i := range out {
-		repo, ok := resolveWatchdogRunnerRepo(ctx, opts, out[i])
+		repo, dir, ok := resolveWatchdogRunnerRepo(ctx, opts, out[i])
+		if dir != "" {
+			out[i].WorkingDirectory = dir
+		}
 		if ok {
 			out[i].Repo = repo
 		}
@@ -848,26 +1052,29 @@ func enrichWatchdogSystemdRepos(ctx context.Context, opts WatchdogOptions, syste
 	return out
 }
 
-func resolveWatchdogRunnerRepo(ctx context.Context, opts WatchdogOptions, status Status) (string, bool) {
+func resolveWatchdogRunnerRepo(ctx context.Context, opts WatchdogOptions, status Status) (repo string, dir string, ok bool) {
 	if status.UnitName == "" {
-		return "", false
+		return "", "", false
 	}
 	if err := civm.ValidateServiceUnit(status.UnitName); err != nil {
-		return "", false
+		return "", "", false
 	}
 	out, err := opts.RunFn(ctx, "systemctl", "show", status.UnitName, "--property=WorkingDirectory", "--value")
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
-	dir := strings.TrimSpace(string(out))
+	dir = strings.TrimSpace(string(out))
 	if dir == "" || dir == "-" {
-		return "", false
+		return "", "", false
 	}
 	data, err := opts.ReadFileFn(filepath.Join(dir, ".runner"))
 	if err != nil {
-		return "", false
+		// WorkingDirectory is known (usable for sentinel→unit mapping) even when
+		// the .runner repo cannot be read.
+		return "", dir, false
 	}
-	return repoFromRunnerConfig(data)
+	repo, ok = repoFromRunnerConfig(data)
+	return repo, dir, ok
 }
 
 func repoFromRunnerConfig(data []byte) (string, bool) {

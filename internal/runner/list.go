@@ -17,6 +17,10 @@ type Status struct {
 	ActiveState string `json:"active_state"` // active, inactive, failed
 	SubState    string `json:"sub_state"`    // running, dead, etc
 	Description string `json:"description"`
+	// WorkingDirectory is the runner service WorkingDirectory (systemctl show),
+	// populated by the watchdog enrich step. The hook's WorkRoot lives under it,
+	// so the watchdog maps a broken-runner sentinel to this unit (RF-6/ITEM-10).
+	WorkingDirectory string `json:"working_directory,omitempty"`
 }
 
 // ListOptions control runner listing.
