@@ -166,6 +166,8 @@ func (r Result) Render(w io.Writer) {
 			status := "(dry-run)"
 			if a.Err != nil {
 				status = "erro: " + a.Err.Error()
+			} else if cleanup.IsDeferral(a.Name) {
+				status = "deferido"
 			} else if a.Executed {
 				status = "aplicado"
 			}
