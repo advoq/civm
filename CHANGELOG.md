@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.12.0](https://github.com/advoq/civm/compare/v1.11.3...v1.12.0) (2026-06-02)
+
+
+### Features
+
+* **hook:** log runner WorkRoot in hook record ([#78](https://github.com/advoq/civm/issues/78)) ([ec1286b](https://github.com/advoq/civm/commit/ec1286b25acdf168841908da8672468dcd2c31f4))
+
+
+### Bug Fixes
+
+* **cleanup:** treat safedelete refusal as non-fatal skip ([#76](https://github.com/advoq/civm/issues/76)) ([f65a5ac](https://github.com/advoq/civm/commit/f65a5ac40ca1cd595b2480e25c3ec8d961eeadef))
+
 ## [1.11.3](https://github.com/advoq/civm/compare/v1.11.2...v1.11.3) (2026-06-02)
 
 
