@@ -25,6 +25,13 @@ import (
 // Cleanup returns early without error so the cron/next hook re-runs later.
 const deferredByDockerHeavyLock = "deferred-by-docker-heavy-lock"
 
+// deferredByHostBusy is the no-op Action name emitted when a runner/build job is
+// active: the privileged file cleanup and the aggressive docker/apt prune wait
+// for an idle tick, but dockerPruneSafe still reclaims unused space. It carries
+// no error — a busy host is a benign deferral, not a failure (issue #70, mirrors
+// the deferred-by-docker-heavy-lock contract).
+const deferredByHostBusy = "deferred-by-host-busy"
+
 type deleteCandidate struct {
 	path string
 	size int64
@@ -166,11 +173,18 @@ func Run(ctx context.Context, opts Options) []Action {
 	}
 	if opts.Execute && !opts.SkipIdleGuard {
 		if err := ensureIdle(ctx, opts); err != nil {
-			return []Action{{
-				Name: "host_idle",
-				Path: "(runner/build activity)",
-				Err:  err,
-			}}
+			// Host busy: defer the privileged file cleanup and the aggressive
+			// docker/apt prune to an idle tick (benign, exit 0), but still
+			// reclaim UNUSED docker space now — the disk-pressure consumer on a
+			// perpetually busy box. dockerPruneSafe only removes dangling images
+			// and old unused build cache, never a resource an active build holds
+			// (issue #70). No Err: a busy host is a deferral, not a failure.
+			var out []Action
+			if opts.DockerPrune {
+				out = append(out, dockerPruneSafe(ctx, opts))
+			}
+			out = append(out, Action{Name: deferredByHostBusy, Path: "(runner/build activity)"})
+			return out
 		}
 	}
 	var out []Action
@@ -399,6 +413,32 @@ func dockerPrune(ctx context.Context, opts Options) Action {
 	return a
 }
 
+// dockerPruneSafe reclaims only UNUSED docker space and is safe to run while a
+// build/job is active: `docker image prune -f` removes dangling (untagged,
+// unreferenced) images, and `docker builder prune -f --filter until=24h` removes
+// build cache not used in the last 24h (BuildKit's `until` is last-used based);
+// an active build's cache graph is "in use" and excluded regardless. Neither can
+// remove a resource a running container or build holds, so it needs no idle
+// guard (issue #70). Called only from the host-busy branch of Run, which is
+// reached only when opts.Execute is true (ensureIdle is a no-op otherwise), so
+// there is no dry-run path here — the idle-path dockerPrune handles dry-run.
+func dockerPruneSafe(ctx context.Context, opts Options) Action {
+	a := Action{Name: "docker_prune_safe", Path: "(docker unused: dangling images + old build cache)"}
+	images, err := opts.RunFn(ctx, "docker", "image", "prune", "-f")
+	if err != nil {
+		a.Err = err
+		return a
+	}
+	cache, err := opts.RunFn(ctx, "docker", "builder", "prune", "-f", "--filter", "until=24h")
+	if err != nil {
+		a.Err = err
+		return a
+	}
+	a.BytesFreed = parseTotalReclaimed(string(images)) + parseTotalReclaimed(string(cache))
+	a.Executed = true
+	return a
+}
+
 func aptClean(ctx context.Context, opts Options) Action {
 	a := Action{Name: "apt_cache", Path: "/var/cache/apt"}
 	if !opts.Execute {
@@ -464,17 +504,20 @@ func parseReclaimable(s string) int64 {
 	return total
 }
 
-// parseTotalReclaimed parses "Total reclaimed space: 1.234GB" line.
+// parseTotalReclaimed parses the reclaimed-space summary line emitted by docker
+// prune commands. `docker image/system prune` print "Total reclaimed space:
+// 1.234GB"; `docker builder prune` prints "Total:  1.234GB". Both are handled.
 func parseTotalReclaimed(s string) int64 {
 	for _, line := range strings.Split(s, "\n") {
-		if !strings.Contains(line, "reclaimed space:") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.Contains(trimmed, "reclaimed space:") && !strings.HasPrefix(trimmed, "Total:") {
 			continue
 		}
-		idx := strings.Index(line, ":")
+		idx := strings.LastIndex(trimmed, ":")
 		if idx == -1 {
 			continue
 		}
-		return parseHumanBytes(strings.TrimSpace(line[idx+1:]))
+		return parseHumanBytes(strings.TrimSpace(trimmed[idx+1:]))
 	}
 	return 0
 }
