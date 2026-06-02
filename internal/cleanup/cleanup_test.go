@@ -629,7 +629,13 @@ func TestRun_WalkError(t *testing.T) {
 	}
 }
 
-func TestRun_ExecuteBlocksWhenRunnerWorkerActive(t *testing.T) {
+// TestRun_ExecuteBusyReclaimsUnusedDockerAndDefersPrivilegedCleanup is the
+// positive replacement for the old "blocks everything when busy" test (issue
+// #70). It asserts the PURPOSE, not the happy path: while a Runner.Worker is
+// active, the privileged file cleanup and the aggressive system prune/apt MUST
+// NOT run, but the unused-only docker prune MUST run (it is safe by
+// construction), and the host-busy outcome MUST NOT be an error.
+func TestRun_ExecuteBusyReclaimsUnusedDockerAndDefersPrivilegedCleanup(t *testing.T) {
 	t.Parallel()
 	opts := testExecuteOptions()
 	opts.WorkDir = "work"
@@ -639,21 +645,54 @@ func TestRun_ExecuteBlocksWhenRunnerWorkerActive(t *testing.T) {
 	opts.ActivityFn = func(context.Context) ([]Activity, error) {
 		return []Activity{{PID: 1234, Command: "/home/emdev/actions-runner/bin/Runner.Worker run"}}, nil
 	}
-	calls := 0
-	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
-		calls++
+	var ranImagePrune, ranBuilderPrune, sawDangerous bool
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		joined := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "image prune"):
+			ranImagePrune = true
+			return []byte("Total reclaimed space: 1GB\n"), nil
+		case strings.Contains(joined, "builder prune"):
+			ranBuilderPrune = true
+			return []byte("Total:  2GB\n"), nil
+		case strings.Contains(joined, "system prune") || name == "apt-get":
+			sawDangerous = true
+		}
 		return nil, nil
 	}
+	rec := &safeDeleteRecorder{}
+	opts.SafeDeleteFn = rec.fn
 
 	actions := Run(context.Background(), opts)
-	if len(actions) != 1 || actions[0].Name != "host_idle" {
-		t.Fatalf("actions = %+v, want host_idle guard only", actions)
+
+	if len(rec.targets) != 0 {
+		t.Fatalf("privileged file delete ran while host busy: %v", rec.targets)
 	}
-	if actions[0].Err == nil || !strings.Contains(actions[0].Err.Error(), "host nao esta ocioso") {
-		t.Fatalf("guard err = %v", actions[0].Err)
+	if sawDangerous {
+		t.Fatalf("aggressive system prune / apt ran while host busy")
 	}
-	if calls != 0 {
-		t.Fatalf("RunFn calls = %d, want 0", calls)
+	if !ranImagePrune || !ranBuilderPrune {
+		t.Fatalf("safe docker prune did not run when busy: image=%v builder=%v", ranImagePrune, ranBuilderPrune)
+	}
+	for _, a := range actions {
+		if a.Err != nil {
+			t.Fatalf("busy host surfaced an error action (should be a benign deferral): %+v", a)
+		}
+	}
+	var safe, deferred *Action
+	for i := range actions {
+		switch actions[i].Name {
+		case "docker_prune_safe":
+			safe = &actions[i]
+		case deferredByHostBusy:
+			deferred = &actions[i]
+		}
+	}
+	if safe == nil || !safe.Executed || safe.BytesFreed != 3*(1<<30) {
+		t.Fatalf("docker_prune_safe missing/not executed/wrong bytes: %+v", safe)
+	}
+	if deferred == nil {
+		t.Fatalf("expected %q deferral action, got %+v", deferredByHostBusy, actions)
 	}
 }
 

@@ -75,7 +75,13 @@ func TestCheck_StatfsError(t *testing.T) {
 	}
 }
 
-func TestCheck_ExecuteFailsClosedWhenCleanupSeesActiveJob(t *testing.T) {
+// TestCheck_ExecuteBusyReclaimsUnusedDockerAndDefersRest (issue #70): above the
+// threshold with an active Runner.Worker, the watchdog must NOT fail-closed with
+// exit 2. It reclaims unused docker space (safe by construction) and defers the
+// privileged file cleanup + aggressive system prune to an idle tick — a benign
+// deferral, exit 0. (Replaces the prior test that asserted DecisionError/exit 2
+// and that RunFn must never be called — the opposite of the desired purpose.)
+func TestCheck_ExecuteBusyReclaimsUnusedDockerAndDefersRest(t *testing.T) {
 	t.Parallel()
 	o := DefaultOptions()
 	o.StatfsFn = func(string) (uint64, uint64, error) {
@@ -86,16 +92,65 @@ func TestCheck_ExecuteFailsClosedWhenCleanupSeesActiveJob(t *testing.T) {
 	o.ActivityFn = func(context.Context) ([]cleanup.Activity, error) {
 		return []cleanup.Activity{{PID: 4321, Command: "/home/emdev/actions-runner/bin/Runner.Worker run"}}, nil
 	}
-	o.RunFn = func(context.Context, string, ...string) ([]byte, error) {
-		t.Fatalf("RunFn nao deveria ser chamado quando job ativo bloqueia cleanup")
+	var ranSafePrune, sawSystemPrune bool
+	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		joined := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "image prune"):
+			ranSafePrune = true
+			return []byte("Total reclaimed space: 4GB\n"), nil
+		case strings.Contains(joined, "builder prune"):
+			return []byte("Total:  1GB\n"), nil
+		case strings.Contains(joined, "system prune"):
+			sawSystemPrune = true
+		}
+		return nil, nil
+	}
+	r := Check(context.Background(), o)
+	if r.Decision != DecisionCleanupTriggered {
+		t.Fatalf("Decision = %v, want CleanupTriggered (busy is a benign deferral)", r.Decision)
+	}
+	if r.ExitCode() != 0 {
+		t.Fatalf("Exit = %d, want 0", r.ExitCode())
+	}
+	if r.Err != nil {
+		t.Fatalf("Err = %v, want nil (host-busy is not a failure)", r.Err)
+	}
+	if !ranSafePrune {
+		t.Fatalf("safe docker prune did not run above threshold while busy")
+	}
+	if sawSystemPrune {
+		t.Fatalf("aggressive system prune ran while host busy")
+	}
+}
+
+// TestCheck_ExecuteBusyDockerPruneErrorSurfacesExit2 pairs the benign-deferral
+// test above with its negative: a host-busy deferral is exit 0, but a REAL
+// failure of the safe docker prune is still a genuine error -> exit 2. This
+// proves exit-2 is reserved for real faults, not for the (benign) busy state.
+func TestCheck_ExecuteBusyDockerPruneErrorSurfacesExit2(t *testing.T) {
+	t.Parallel()
+	o := DefaultOptions()
+	o.StatfsFn = func(string) (uint64, uint64, error) {
+		return 100 * (1 << 30), 5 * (1 << 30), nil // 95% used
+	}
+	o.ThresholdPct = 80
+	o.Execute = true
+	o.ActivityFn = func(context.Context) ([]cleanup.Activity, error) {
+		return []cleanup.Activity{{PID: 4321, Command: "/home/emdev/actions-runner/bin/Runner.Worker run"}}, nil
+	}
+	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if strings.Contains(name+" "+strings.Join(args, " "), "image prune") {
+			return nil, errors.New("docker daemon unreachable")
+		}
 		return nil, nil
 	}
 	r := Check(context.Background(), o)
 	if r.Decision != DecisionError {
-		t.Fatalf("Decision = %v, want error", r.Decision)
+		t.Fatalf("Decision = %v, want Error (real prune failure)", r.Decision)
 	}
-	if r.Err == nil || !strings.Contains(r.Err.Error(), "host nao esta ocioso") {
-		t.Fatalf("Err = %v", r.Err)
+	if r.ExitCode() != 2 {
+		t.Fatalf("Exit = %d, want 2", r.ExitCode())
 	}
 }
 
