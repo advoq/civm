@@ -41,6 +41,13 @@ const (
 	DefaultReverseMaxAgeHours         = 2
 	DefaultRestartVerifySeconds       = 3
 	DefaultUpgradeVerifySeconds       = 5
+	// DefaultRunnerAutoRestartPerHour caps watchdog auto-restarts per runner
+	// unit per rolling hour (anti restart-loop, RF-6 / ITEM-10 / DT-8).
+	DefaultRunnerAutoRestartPerHour = 3
+	// DefaultHooksLogPath is the shared civm hook event log (one JSONL record
+	// per job-started/job-completed). The runner watchdog reads its tail to
+	// detect a broken-runner sentinel.
+	DefaultHooksLogPath = "/var/log/civm/hooks.jsonl"
 
 	// Per-cache size budgets enforced by hook routine cleanup (job-completed).
 	// Excedente é removido por mtime ascendente; arquivos com mtime mais novo
