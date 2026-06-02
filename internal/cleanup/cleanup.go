@@ -32,6 +32,13 @@ const deferredByDockerHeavyLock = "deferred-by-docker-heavy-lock"
 // the deferred-by-docker-heavy-lock contract).
 const deferredByHostBusy = "deferred-by-host-busy"
 
+// IsDeferral reports whether an Action name marks a benign deferral (host busy
+// or a docker-heavy build holding the lock) rather than work that ran. Render
+// surfaces these as "deferido", not "(dry-run)"/"skip", during --execute.
+func IsDeferral(name string) bool {
+	return strings.HasPrefix(name, "deferred-by-")
+}
+
 type deleteCandidate struct {
 	path string
 	size int64
@@ -577,6 +584,8 @@ func RenderTable(actions []Action, opts Options, w io.Writer) {
 		status := "ok"
 		if a.Err != nil {
 			status = "erro: " + a.Err.Error()
+		} else if IsDeferral(a.Name) {
+			status = "deferido"
 		} else if !a.Executed && opts.Execute {
 			status = "skip"
 		} else if !opts.Execute {

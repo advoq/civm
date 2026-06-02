@@ -600,6 +600,31 @@ func TestRenderTable_Error(t *testing.T) {
 	}
 }
 
+func TestRenderTable_DeferralShowsDeferido(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	opts := testExecuteOptions()
+	actions := []Action{{Name: deferredByHostBusy, Path: "(runner/build activity)"}}
+	RenderTable(actions, opts, &buf)
+	out := buf.String()
+	if !strings.Contains(out, "deferido") {
+		t.Fatalf("RenderTable missing 'deferido' for a deferral action in execute mode:\n%s", out)
+	}
+	if strings.Contains(out, "skip") || strings.Contains(out, "(dry-run)") {
+		t.Fatalf("deferral action mislabeled as skip/dry-run in execute mode:\n%s", out)
+	}
+}
+
+func TestIsDeferral(t *testing.T) {
+	t.Parallel()
+	if !IsDeferral(deferredByHostBusy) || !IsDeferral(deferredByDockerHeavyLock) {
+		t.Fatalf("deferral action names must be recognized")
+	}
+	if IsDeferral("docker_prune_safe") || IsDeferral("work_old") {
+		t.Fatalf("real work actions must not be treated as deferrals")
+	}
+}
+
 func TestTruncatePath(t *testing.T) {
 	t.Parallel()
 	if got := truncatePath("/a/b", 10); got != "/a/b" {
