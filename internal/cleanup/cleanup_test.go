@@ -313,6 +313,39 @@ func TestScanAndMaybeDelete_AccumulatesFirstErrorAndContinues(t *testing.T) {
 	}
 }
 
+func TestScanAndMaybeDelete_RefusalIsNonFatalSkip(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-30 * 24 * time.Hour)
+	// Two old top-level trees; /b is owned by another uid so safedelete REFUSES
+	// (ErrUnsafePath, never sudo). The refusal must be a non-fatal skip — the
+	// sweep frees /a and the action does NOT carry an Err (issue #70 family:
+	// a stray cross-user /tmp file must not turn disk hygiene into a FAILED run).
+	mfs := fstest.MapFS{
+		"work/a":       {Mode: fs.ModeDir | 0755, ModTime: old},
+		"work/a/x.txt": {Data: []byte("aaaaa"), ModTime: old},
+		"work/b":       {Mode: fs.ModeDir | 0755, ModTime: old},
+		"work/b/y.txt": {Data: []byte("bbbbb"), ModTime: old},
+	}
+	opts := testExecuteOptions()
+	opts.Now = now
+	opts.WalkFn = walkFS(mfs)
+	opts.SafeDeleteFn = func(_ context.Context, path string) safedelete.Result {
+		if strings.HasSuffix(path, "/b") {
+			return safedelete.Result{Err: safedelete.ErrUnsafePath}
+		}
+		return safedelete.Result{}
+	}
+
+	a := scanAndMaybeDelete(context.Background(), opts, "work_old", "work", 14*24*time.Hour)
+	if a.Err != nil {
+		t.Fatalf("a safedelete refusal (ErrUnsafePath) must be a non-fatal skip, got Err=%v", a.Err)
+	}
+	if a.BytesFreed != 5 {
+		t.Fatalf("BytesFreed = %d, want 5 (deletable tree freed; refused tree skipped)", a.BytesFreed)
+	}
+}
+
 func TestCleanupChildGuardScopesEscalation(t *testing.T) {
 	t.Parallel()
 	// The guard mirrors validateCleanupRoot on the PARENT (DT-v2-9): it rejects

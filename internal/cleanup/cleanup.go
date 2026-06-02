@@ -4,6 +4,7 @@ package cleanup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -324,6 +325,17 @@ func scanAndMaybeDelete(ctx context.Context, opts Options, name, root string, th
 		// candidate never wedges the whole sweep (DT-v2-9).
 		res := opts.SafeDeleteFn(ctx, candidate.path)
 		if res.Err != nil {
+			// A safedelete REFUSAL (ErrUnsafePath: cross-user owner, path
+			// escaping the validated tree, etc.) is the guard correctly
+			// declining — skip this candidate and keep sweeping, but do NOT
+			// fail the action. Otherwise a stray cross-user file (e.g. a
+			// uid-1000 leftover in /tmp swept by the root disk-watchdog) turns
+			// routine disk hygiene into a FAILED service. Only a GENUINE delete
+			// failure (a root-owned _work leftover whose escalation itself
+			// failed — the broken-runner sentinel) stays fatal (issue #70 family).
+			if errors.Is(res.Err, safedelete.ErrUnsafePath) {
+				continue
+			}
 			if a.Err == nil {
 				a.Err = res.Err
 			}
