@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.11.3](https://github.com/advoq/civm/compare/v1.11.2...v1.11.3) (2026-06-02)
+
+
+### Bug Fixes
+
+* **cleanup:** reclaim unused docker space on busy host ([#71](https://github.com/advoq/civm/issues/71)) ([d28a067](https://github.com/advoq/civm/commit/d28a067c0d4098a95d8f6a1b2ee4d77c476fc505))
+* **cleanup:** render benign deferrals as deferido ([#73](https://github.com/advoq/civm/issues/73)) ([09428fc](https://github.com/advoq/civm/commit/09428fcd9a9493c7b11e5d45f4da85c1c83652ae))
+
 ## [1.11.2](https://github.com/advoq/civm/compare/v1.11.1...v1.11.2) (2026-06-01)
 
 
