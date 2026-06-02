@@ -16,6 +16,30 @@ import (
 	"github.com/advoq/civm/internal/safedelete"
 )
 
+func TestAppendLogIncludesWorkRootIdentifier(t *testing.T) {
+	t.Parallel()
+	logPath := filepath.Join(t.TempDir(), "hooks.jsonl")
+	opts := Options{Execute: true, LogPath: logPath, MkdirAllFn: os.MkdirAll}
+	res := Result{
+		Event:    EventJobCompleted,
+		Decision: DecisionError,
+		WorkRoot: "/home/emdev/actions-runner-advoq-org/_work",
+		Actions:  []Action{{Name: "work_root", Error: "wrapper rm failed: boom"}},
+	}
+	if err := appendLog(opts, res); err != nil {
+		t.Fatalf("appendLog: %v", err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	// The shared hooks.jsonl must carry the runner identity so the watchdog can
+	// map a broken-runner sentinel to the right unit (RF-6 / ITEM-10 #74).
+	if !strings.Contains(string(data), `"work_root":"/home/emdev/actions-runner-advoq-org/_work"`) {
+		t.Fatalf("hook record missing work_root runner identifier:\n%s", data)
+	}
+}
+
 func TestJobCompletedCleansWorkspaceButPreservesHotCaches(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	// DefaultOptionsFromEnv lê RUNNER_TEMP/GITHUB_WORKSPACE/etc. do ambiente;

@@ -56,8 +56,12 @@ type Result struct {
 	Repository  string   `json:"repository,omitempty"`
 	RunID       string   `json:"run_id,omitempty"`
 	DiskUsedPct int      `json:"disk_used_pct"`
-	Actions     []Action `json:"actions,omitempty"`
-	Error       string   `json:"error,omitempty"`
+	// WorkRoot is the runner's _work directory; it identifies WHICH runner
+	// emitted this record on the shared hooks.jsonl, so the runner watchdog can
+	// map a broken-runner sentinel to the right systemd unit (RF-6 / ITEM-10).
+	WorkRoot string   `json:"work_root,omitempty"`
+	Actions  []Action `json:"actions,omitempty"`
+	Error    string   `json:"error,omitempty"`
 }
 
 type Options struct {
@@ -100,7 +104,7 @@ func DefaultOptionsFromEnv(event Event) Options {
 		GitHubWorkspace: os.Getenv("GITHUB_WORKSPACE"),
 		Repository:      os.Getenv("GITHUB_REPOSITORY"),
 		RunID:           os.Getenv("GITHUB_RUN_ID"),
-		LogPath:         "/var/log/civm/hooks.jsonl",
+		LogPath:         civm.DefaultHooksLogPath,
 		Now:             time.Now(),
 		RunFn:           defaultRun,
 		RemoveAllFn:     os.RemoveAll,
@@ -144,7 +148,7 @@ func workChildGuard(path string) error {
 
 func Run(ctx context.Context, opts Options) Result {
 	applyDefaults(&opts)
-	res := Result{Event: opts.Event, Repository: opts.Repository, RunID: opts.RunID, Decision: DecisionOK, ExitCode: 0}
+	res := Result{Event: opts.Event, Repository: opts.Repository, RunID: opts.RunID, WorkRoot: opts.WorkRoot, Decision: DecisionOK, ExitCode: 0}
 	usedPct, err := diskUsedPct(opts)
 	if err != nil {
 		return finish(opts, errorResult(res, err))
@@ -618,6 +622,7 @@ func appendLog(opts Options, res Result) error {
 		slog.Int("disk_used_pct", res.DiskUsedPct),
 		slog.String("repository", res.Repository),
 		slog.String("run_id", res.RunID),
+		slog.String("work_root", res.WorkRoot),
 		slog.String("error", res.Error),
 		slog.Any("actions", res.Actions),
 	)
