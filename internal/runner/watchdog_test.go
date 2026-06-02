@@ -339,6 +339,61 @@ func TestDetectBrokenRunnerDryRunCandidateOnly(t *testing.T) {
 	}
 }
 
+func TestUnitForWorkRootRejectsPrefixCollision(t *testing.T) {
+	t.Parallel()
+	systemd := []Status{
+		{UnitName: "actions.runner.bare.civm-bare.service", WorkingDirectory: "/home/emdev/actions-runner"},
+		{UnitName: "actions.runner.advoq.civm-advoq.service", WorkingDirectory: "/home/emdev/actions-runner-advoq"},
+	}
+	if got := unitForWorkRoot("/home/emdev/actions-runner-advoq/_work", systemd); got != "actions.runner.advoq.civm-advoq.service" {
+		t.Fatalf("got %q, want the -advoq unit (no prefix collision with bare actions-runner)", got)
+	}
+	if got := unitForWorkRoot("/home/emdev/actions-runner/_work", systemd); got != "actions.runner.bare.civm-bare.service" {
+		t.Fatalf("got %q, want the bare unit", got)
+	}
+	if got := unitForWorkRoot("/home/emdev/actions-runner-ghost/_work/", systemd); got != "" {
+		t.Fatalf("got %q, want '' for an unowned work_root", got)
+	}
+}
+
+func TestDetectBrokenRunnerMarkerWriteFailureFailsClosed(t *testing.T) {
+	t.Parallel()
+	now := testWatchdogNow
+	io := newDetectIO()
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now, "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	opts := io.opts(now)
+	// Persistent marker-write failure (correlated with the disk fault that wedges
+	// the runner). The cap must hold: NO restart without persisting the slot.
+	opts.WriteFileFn = func(string, []byte, os.FileMode) error { return errors.New("disk full") }
+	for i := 0; i < 6; i++ {
+		var report WatchdogReport
+		detectBrokenRunner(context.Background(), opts, brokenRunnerSystemd(), &report)
+		if report.Exit != 2 {
+			t.Fatalf("tick %d: Exit = %d, want 2 (marker-write-failed fails closed)", i, report.Exit)
+		}
+	}
+	if len(io.restarted) != 0 {
+		t.Fatalf("restarted %d time(s) with unwritable cap state; want 0 (fail-closed)", len(io.restarted))
+	}
+}
+
+func TestDetectBrokenRunnerDedupesSameSentinelAcrossTicks(t *testing.T) {
+	t.Parallel()
+	now := testWatchdogNow
+	io := newDetectIO()
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now.Add(-2*time.Minute), "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	opts := io.opts(now)
+	// The same sentinel line persists in the log across ticks; it must restart
+	// the runner exactly ONCE (dedup), not once per tick up to the cap.
+	for i := 0; i < 4; i++ {
+		var report WatchdogReport
+		detectBrokenRunner(context.Background(), opts, brokenRunnerSystemd(), &report)
+	}
+	if len(io.restarted) != 1 {
+		t.Fatalf("restarted %d times for one persistent sentinel; want exactly 1 (dedup)", len(io.restarted))
+	}
+}
+
 func TestWatchdogRepairsHooksWhenIdle(t *testing.T) {
 	t.Parallel()
 	opts := baseWatchdogOptions(t)

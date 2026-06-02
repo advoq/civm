@@ -380,12 +380,14 @@ func detectBrokenRunner(ctx context.Context, opts WatchdogOptions, systemd []Sta
 	if err != nil || len(strings.TrimSpace(string(data))) == 0 {
 		return
 	}
-	cutoff := opts.NowFn().Add(-time.Hour)
+	now := opts.NowFn()
+	cutoff := now.Add(-time.Hour)
 	lines := strings.Split(string(data), "\n")
 	if len(lines) > 500 {
 		lines = lines[len(lines)-500:]
 	}
-	brokenDirs := map[string]bool{}
+	// Newest in-window sentinel timestamp per work_root.
+	sentinelAt := map[string]time.Time{}
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -395,28 +397,36 @@ func detectBrokenRunner(ctx context.Context, opts WatchdogOptions, systemd []Sta
 		if json.Unmarshal([]byte(line), &rec) != nil {
 			continue // skip malformed/truncated lines
 		}
-		if rec.WorkRoot == "" {
+		if rec.WorkRoot == "" || !hookRecordIsBrokenSentinel(rec) {
 			continue
 		}
-		if !rec.Time.IsZero() && rec.Time.Before(cutoff) {
+		ts := rec.Time
+		if ts.IsZero() {
+			ts = now
+		}
+		if ts.Before(cutoff) {
 			continue // stale sentinel
 		}
-		if hookRecordIsBrokenSentinel(rec) {
-			brokenDirs[rec.WorkRoot] = true
+		if ts.After(sentinelAt[rec.WorkRoot]) {
+			sentinelAt[rec.WorkRoot] = ts
 		}
 	}
-	if len(brokenDirs) == 0 {
+	if len(sentinelAt) == 0 {
 		return
 	}
-	units := map[string]bool{}
-	for workRoot := range brokenDirs {
-		if unit := unitForWorkRoot(workRoot, systemd); unit != "" {
-			units[unit] = true
-		} else {
+	// Map work_root -> unit deterministically, keeping the newest sentinel time.
+	unitSentinel := map[string]time.Time{}
+	for workRoot, ts := range sentinelAt {
+		unit := unitForWorkRoot(workRoot, systemd)
+		if unit == "" {
 			report.add(WatchdogEvent{Event: "runner-auto-restart-skipped", Severity: "warning", Reason: "no-unit-for-work-root", Detail: workRoot})
+			continue
+		}
+		if ts.After(unitSentinel[unit]) {
+			unitSentinel[unit] = ts
 		}
 	}
-	if len(units) == 0 {
+	if len(unitSentinel) == 0 {
 		return
 	}
 	state, err := loadRerunState(opts)
@@ -424,43 +434,61 @@ func detectBrokenRunner(ctx context.Context, opts WatchdogOptions, systemd []Sta
 		report.add(WatchdogEvent{Event: "runner-auto-restart-skipped", Severity: "warning", Reason: "marker-read-failed", Detail: err.Error()})
 		return
 	}
-	now := opts.NowFn()
-	unitNames := make([]string, 0, len(units))
-	for u := range units {
-		unitNames = append(unitNames, u)
+	units := make([]string, 0, len(unitSentinel))
+	for u := range unitSentinel {
+		units = append(units, u)
 	}
-	sort.Strings(unitNames)
-	mutated := false
-	for _, unit := range unitNames {
+	sort.Strings(units)
+
+	var toRestart []string
+	for _, unit := range units {
+		ts := unitSentinel[unit]
 		w := state.AutoRestarts[unit]
 		if w.WindowStart.IsZero() || now.Sub(w.WindowStart) >= time.Hour {
-			w = autoRestartWindow{Count: 0, WindowStart: now}
+			// Reset the hourly Count window but KEEP the dedup cursor.
+			w = autoRestartWindow{WindowStart: now, LastActed: w.LastActed}
+		}
+		// F2 dedup: never act twice on the same (or an older) sentinel. The line
+		// stays in hooks.jsonl after we restart, so without this a single
+		// already-resolved incident would restart a healthy runner every tick up
+		// to the cap.
+		if !ts.After(w.LastActed) {
+			continue
 		}
 		if w.Count >= opts.AutoRestartPerHour {
 			report.add(WatchdogEvent{Event: "runner-auto-restart-skipped", Severity: "warning", Unit: unit, Reason: "rate-cap-reached", Detail: fmt.Sprintf("%d/%d this hour", w.Count, opts.AutoRestartPerHour)})
 			continue
 		}
-		event := WatchdogEvent{Event: "runner-auto-restarted", Severity: "warning", Unit: unit, Reason: "broken-runner-sentinel", Executed: opts.Execute}
 		if !opts.Execute {
-			report.add(event) // dry-run: surface the candidate without acting
+			report.add(WatchdogEvent{Event: "runner-auto-restarted", Severity: "warning", Unit: unit, Reason: "broken-runner-sentinel", Executed: false})
 			continue
 		}
+		// Reserve the slot in memory; it is PERSISTED before any restart below.
+		w.Count++
+		w.LastActed = ts
+		state.AutoRestarts[unit] = w
+		toRestart = append(toRestart, unit)
+	}
+	if len(toRestart) == 0 {
+		return
+	}
+	// F1 fail-closed: persist the reserved cap/dedup state BEFORE restarting. If
+	// the marker cannot be written, abort without restarting — a missed recovery
+	// is safer than an uncapped restart loop (a write failure is correlated with
+	// the disk/permission fault that wedged the runner in the first place).
+	if err := writeRerunState(opts, state); err != nil {
+		report.add(WatchdogEvent{Event: "runner-auto-restart-skipped", Severity: "critical", Reason: "marker-write-failed", Detail: err.Error()})
+		report.Exit = maxExit(report.Exit, 2)
+		return
+	}
+	for _, unit := range toRestart {
+		event := WatchdogEvent{Event: "runner-auto-restarted", Severity: "warning", Unit: unit, Reason: "broken-runner-sentinel", Executed: true}
 		if err := opts.RestartFn(ctx, unit); err != nil {
 			event.Severity = "critical"
 			event.Detail = err.Error()
-			report.add(event)
 			report.Exit = maxExit(report.Exit, 2)
-			continue
 		}
-		w.Count++
-		state.AutoRestarts[unit] = w
-		mutated = true
 		report.add(event)
-	}
-	if mutated {
-		if err := writeRerunState(opts, state); err != nil {
-			report.add(WatchdogEvent{Event: "runner-auto-restart-skipped", Severity: "warning", Reason: "marker-write-failed", Detail: err.Error()})
-		}
 	}
 }
 
@@ -756,10 +784,14 @@ type RerunMarker struct {
 
 // autoRestartWindow is the per-unit, rolling-hour counter of sentinel-driven
 // auto-restarts (anti restart-loop, DT-8). When NowFn - WindowStart >= 1h the
-// window resets.
+// Count window resets. LastActed is the timestamp of the newest sentinel this
+// unit was already restarted for; it persists across windows so a single
+// historical sentinel line (which stays in hooks.jsonl after we act) never
+// re-triggers a restart of an already-recovered runner (dedup, F2).
 type autoRestartWindow struct {
 	Count       int       `json:"count"`
 	WindowStart time.Time `json:"window_start"`
+	LastActed   time.Time `json:"last_acted,omitempty"`
 }
 
 type rerunState struct {
