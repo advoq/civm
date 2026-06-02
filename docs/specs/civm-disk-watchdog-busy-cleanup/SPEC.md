@@ -86,6 +86,22 @@ segurando o lock) permanece como defer total benigno (exit 0), inalterado.
 - `diskwatchdog`: erro real (statfs/threshold) -> `DecisionError`, exit 2
   (inalterado).
 
+## Adendo — recusa do safedelete não é fatal (idle path)
+
+Mesmo padrão "recusa segura ≠ falha fatal", agora no caminho de ocioso. Quando o
+disk-watchdog (root, uid 0) limpa `/tmp`/`_work` e encontra um arquivo de OUTRO
+uid (ex.: um leftover uid-1000 de CI em `/tmp`), o `safedelete` recusa com
+`ErrUnsafePath` (sem nunca chamar sudo). Antes, essa recusa virava `a.Err` →
+`DecisionError` → exit 2 → serviço FAILED a cada janela ociosa com um arquivo
+cross-user antigo.
+
+Agora `scanAndMaybeDelete` trata `errors.Is(err, safedelete.ErrUnsafePath)` como
+**skip não-fatal**: pula o candidato, libera o resto, e o watchdog sai 0. Apenas
+falha GENUÍNA permanece fatal — incluindo a escalação `_work` falha (a sentinela
+de runner quebrado do ITEM-10), que NÃO é `ErrUnsafePath` e segue fatal. O fix
+reduz deleção (pula mais), nunca aumenta. Teste:
+`TestScanAndMaybeDelete_RefusalIsNonFatalSkip`.
+
 ## Rollback trigger
 
 Se um build ativo passar a falhar por imagem/cache removido pelo prune seguro,
