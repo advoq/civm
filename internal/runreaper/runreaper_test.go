@@ -265,3 +265,47 @@ func TestRenderHumanIncludesCounts(t *testing.T) {
 		t.Errorf("render output missing expected lines:\n%s", out)
 	}
 }
+
+func TestCancelRunPrefersForceCancel(t *testing.T) {
+	var calls []string
+	runFn := func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		return nil, nil
+	}
+	if err := cancelRun(context.Background(), "advoq/advoq", 42, runFn); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(calls) != 1 || !strings.Contains(calls[0], "force-cancel") {
+		t.Fatalf("expected a single force-cancel call, got %v", calls)
+	}
+}
+
+func TestCancelRunFallsBackToPlainCancel(t *testing.T) {
+	var calls []string
+	runFn := func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		calls = append(calls, joined)
+		if strings.Contains(joined, "force-cancel") {
+			return nil, fmt.Errorf("422 force-cancel not yet allowed")
+		}
+		return nil, nil
+	}
+	if err := cancelRun(context.Background(), "advoq/advoq", 42, runFn); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("expected force-cancel then plain cancel, got %v", calls)
+	}
+	if strings.Contains(calls[1], "force-cancel") || !strings.Contains(calls[1], "/cancel") {
+		t.Errorf("second call should be the plain /cancel, got %q", calls[1])
+	}
+}
+
+func TestCancelRunBothFail(t *testing.T) {
+	runFn := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, fmt.Errorf("network down")
+	}
+	if err := cancelRun(context.Background(), "advoq/advoq", 42, runFn); err == nil {
+		t.Fatal("expected error when both force-cancel and cancel fail")
+	}
+}

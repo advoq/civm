@@ -273,10 +273,23 @@ func parseActiveRuns(out []byte, repo string) ([]Run, error) {
 	return runs, nil
 }
 
+// cancelRun stops a workflow run. It tries force-cancel FIRST: a plain
+// POST .../cancel is accepted (202) but NOT applied to a run stuck queued
+// waiting for a busy self-hosted runner — GitHub only delivers that
+// cancellation when the runner finally picks the job, so closed-PR runs linger
+// in the queue indefinitely. POST .../force-cancel dislodges them immediately.
+// GitHub may reject force-cancel on a run that has not yet been regular-cancelled
+// (or too soon after); in that case fall back to the plain cancel so the next
+// reaper tick can force-cancel it. Returns nil if either call is accepted.
 func cancelRun(ctx context.Context, repo string, runID int64, runFn func(context.Context, string, ...string) ([]byte, error)) error {
-	endpoint := fmt.Sprintf("/repos/%s/actions/runs/%s/cancel", repo, strconv.FormatInt(runID, 10))
-	if _, err := runFn(ctx, "gh", "api", "-X", "POST", endpoint, "--silent"); err != nil {
-		return fmt.Errorf("gh api cancel: %w", err)
+	id := strconv.FormatInt(runID, 10)
+	force := fmt.Sprintf("/repos/%s/actions/runs/%s/force-cancel", repo, id)
+	if _, err := runFn(ctx, "gh", "api", "-X", "POST", force, "--silent"); err == nil {
+		return nil
+	}
+	normal := fmt.Sprintf("/repos/%s/actions/runs/%s/cancel", repo, id)
+	if _, err := runFn(ctx, "gh", "api", "-X", "POST", normal, "--silent"); err != nil {
+		return fmt.Errorf("gh api cancel/force-cancel run %s: %w", id, err)
 	}
 	return nil
 }
