@@ -35,7 +35,7 @@ mesmas versões de Go/Node/Python/Docker/gh) com mais hardware (4+ cores,
 3. Ler `CODEX.md` (automação, DEFERRED, pause rules).
 4. Ler `MEMORY.md` de baixo para cima (contexto temporal append-only).
 
-### Sync rule (invariante #5 portado de compexhub)
+### Sync rule (invariante #5)
 
 `README.md`, `AGENTS.md`, `CODEX.md` e `rules/*.md` são documentos
 autoritativos. Mudança em um requer mudança nos outros no mesmo commit.

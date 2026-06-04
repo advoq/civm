@@ -8,7 +8,7 @@ paths:
 
 # SSDV3 rules
 
-SSDV3 (Spec-Driven Development V3) é a metodologia adotada pelo compexhub (cf. `docs/`). Pipeline em 3 passos: **PRD → SPEC → IMPL**.
+SSDV3 (Spec-Driven Development V3) é a metodologia de spec do `civm` (cf. `docs/`). Pipeline em 3 passos: **PRD → SPEC → IMPL**.
 
 ## Obrigatório
 

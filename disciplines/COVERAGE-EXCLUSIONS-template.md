@@ -1,7 +1,8 @@
 # COVERAGE-EXCLUSIONS — template portátil
 
-> Template importado de compexhub. Referências a `compexhubctl` e paths do
-> peer de origem são exemplos, não comandos ativos do `civm`.
+> Template portátil mantido pelo `civm`. Referências a `compexhubctl` e paths
+> de exemplo são ilustrações genéricas para um peer repo, não comandos ativos
+> do `civm`.
 
 > **Append-only.** Exclusões explícitas do invariante #10 (coverage ≥98%).
 >

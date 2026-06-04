@@ -268,5 +268,4 @@ relatório inclui `metrics.runs_considered`, `metrics.reruns_triggered` e
 ## Histórico
 
 - **2026-05-10** — bootstrap inicial. Estrutura: 4 runbooks + 3
-  templates + 4 disciplines + 5 rules + próprio CI. Repo extraído de
-  compexhub conforme `docs/proposals/CI-VM-EXTRACTION.md`.
+  templates + 4 disciplines + 5 rules + próprio CI.

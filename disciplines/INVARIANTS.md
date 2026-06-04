@@ -1,9 +1,9 @@
 # Invariantes portáveis
 
-> Template importado de compexhub. Referências a `compexhubctl`, paths de
-> `apps/web` e `services/api` são exemplos do peer de origem, não comandos
-> ativos do `civm`. No `civm`, o gate operacional atual fica em
-> `.github/workflows/ci.yml` e `rules/testing.md`.
+> Template portátil mantido pelo `civm`. Referências a `compexhubctl`, paths de
+> `apps/web` e `services/api` são exemplos genéricos de instanciação num peer
+> repo, não comandos ativos do `civm`. No `civm`, o gate operacional atual fica
+> em `.github/workflows/ci.yml` e `rules/testing.md`.
 
 As 13 invariantes deste repositório são **testáveis em CI** e **falham bloqueando merge** se violadas. Cada invariante é definida em `tools/compexhubctl/internal/invariants/` e orquestrada por `tools/compexhubctl/cmd/checkinvariants/` (Go).
 
