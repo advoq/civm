@@ -1,158 +1,102 @@
-# Invariantes portáveis
+# Invariantes do civm
 
-> Template portátil mantido pelo `civm`. Referências a `compexhubctl`, paths de
-> `apps/web` e `services/api` são exemplos genéricos de instanciação num peer
-> repo, não comandos ativos do `civm`. No `civm`, o gate operacional atual fica
-> em `.github/workflows/ci.yml` e `rules/testing.md`.
+> Documento civm-native. As invariantes abaixo são os **gates reais** do
+> repositório `civm` (repo Go de infra para runner self-hosted). O enforcement
+> vive em `.github/workflows/ci.yml`, nas regras de `rules/*.md` e em testes
+> `*_test.go` — não em nenhum binário `checkinvariants` nem em `apps/web`.
+> Um peer repo que adote esta metodologia substitui a tabela pelos próprios
+> gates.
 
-As 13 invariantes deste repositório são **testáveis em CI** e **falham bloqueando merge** se violadas. Cada invariante é definida em `tools/compexhubctl/internal/invariants/` e orquestrada por `tools/compexhubctl/cmd/checkinvariants/` (Go).
+As invariantes do `civm` são **testáveis em CI** e **bloqueiam merge** quando
+violadas. O gate agregado é o job `CI` em `.github/workflows/ci.yml`, que exige
+sucesso de `validate-templates`, `build-civmctl` e `self-hosted-smoke` (com a
+lógica docs-only/full em `tools/ci/detect-changes.mjs`).
 
-Toda exceção exige ADR + waiver com expiry (data limite + condição de remoção).
+Não há binário dedicado de invariantes: cada linha aponta para o job, step ou
+teste Go que a faz cumprir. Toda exceção exige justificativa rastreável (entrada
+em `rules/*.md`, comentário no código, ou `[sync-skip-justified]` no commit).
 
-| # | Nome | Rationale | Check (CI) | Onde dispara |
-|---|------|-----------|------------|--------------|
-| 1 | Sem secrets hardcoded | Vazamento via git push é irreversível. Atacante com diff history extrai keys mesmo após commit-revert. | `gitleaks dir --no-git --redact` em CI + `gitleaks git --pre-commit --staged` em pre-commit | pre-commit, pre-push, CI job `invariants` |
-| 2 | Sem `console.log` em produção | Quebra observabilidade (sem nível, sem contexto, polui prod logs). Use telemetria adequada. | `compexhubctl check-invariants 2` — grep `console.log/warn/error/debug` em `apps/web/src/**` excluindo `*.test.*`/`*.spec.*` | pre-commit (lint-staged), CI |
-| 3 | PII scrubbing em logs Go | LGPD + GDPR + ataque de exposição via log files. PII raw em logs compromete o usuário sem ele saber. | `compexhubctl check-invariants 3` — grep `slog.String("(cpf\|email\|phone\|password\|token)"\|...)` sem `MaskPII()` wrapper | CI |
-| 4 | Conventional Commits | Histórico legível, automated changelog, scope whitelist evita "fix: things". | `commitlint` em commit-msg hook + scope-enum em `commitlint.config.js` | commit-msg hook |
-| 5 | Sync rule (CLAUDE ≡ AGENTS ≡ rules) | Documentação de agente fica desincronizada → agentes seguem regras conflitantes → bugs sutis. | `compexhubctl check-sync` — staged-diff (pre-commit) ou HEAD-diff (CI). Skip via `[sync-skip-justified]` no body. | pre-commit, pre-push, CI |
-| 6 | Rollback trigger presente em commits não-triviais | Decisão sem condição de reversão é Sistema 1 (Kahneman #2). Skin-in-the-game para PR. | `commit-msg` hook checa `Rollback trigger:` em body para `feat\|fix\|refactor\|perf` | commit-msg |
-| 7 | OpenAPI válido | Contracts são source-of-truth. Spec inválida = TS gen falha + Go stubs erram = drift silencioso. | `spectral lint contracts/*.yaml services/api/openapi/*.yaml` | pre-commit (se OpenAPI staged), CI |
-| 8 | TODO com owner+date | TODO genérico apodrece. Owner+date força decisão "agora ou em 2026-08-01". | `compexhubctl check-invariants 8` — grep `TODO\|FIXME` sem `(@user, YYYY-MM-DD)` em `apps/web/src/**`, `services/api/**`, `packages/**` (excluindo tests) | CI |
-| 9 | Web não bypassa @compexhub/api-client | Drift de tipos entre web e API. Manter `@compexhub/api-client` como única ponte. BFF (`apps/web/src/app/api/**`) está isento. | `compexhubctl check-invariants 9` — grep `fetch('/api/v1/...')` ou `axios` para `/api/v1/` em `apps/web/src/**` (excluindo `app/api/`) | CI |
-| 10 | Coverage ≥98% em produção | 80% virava teto, não chão. 100% mandatório (≥98% em CI com 2% buffer para boilerplate). Decisão do usuário 2026-04-28. | `compexhubctl check-invariants 10` — exige `docs/COVERAGE-EXCLUSIONS.md`; se reports existirem, valida `apps/web/coverage/coverage-summary.json` contra 98%. `services/api/cover.out` ainda é presença diagnosticada, sem parser Go ativo. | CI (gate, ainda com stub quando reports não existem). Localmente: `go run ./tools/compexhubctl check-invariants 10`. |
-| 11 | Self-containment textual | Documentação não menciona projetos paralelos do autor. Decisão, lista de termos bloqueados e exceções legítimas em `docs/decisions/ADR-007-repo-self-containment.md`. | `compexhubctl check-invariants 11` — regex compilada em `tools/compexhubctl/internal/invariants/external_refs.go` aplicada a `.md`/`.yaml`/`.yml`. Sanitiza linha contra padrões legítimos (nome do autor, email, GitHub handle, module Go) antes da regex bloqueada. Exclui `MEMORY.md` e este arquivo + ADR-007 por meta-referência. | CI (gate). Localmente: `go run ./tools/compexhubctl check-invariants 11`. |
-| 12 | Per-product isolation (apps/X ⊥ apps/Y) | Mudança em produto X **NÃO PODE** quebrar produto Y. CLAUDE.md §"Boundary discipline" proíbe `internal/apps/X/` importar `internal/apps/Y/`. Coordenação só via `internal/platform/`. Constraint declarada pelo usuário em 2026-04-30 — base do plano de reorg multi-produto. | `compexhubctl check-invariants 12` — varre arquivos `.go` em `services/api/internal/apps/<X>/` procurando imports `internal/apps/<other>/` onde `other != X`. Zero overhead (string scan, sem `go list`). | CI (gate). Localmente: `go run ./tools/compexhubctl check-invariants 12`. |
-| 13 | NEXT_PUBLIC_E2E_AUTH_BYPASS=true proibido em arquivos de produção | Esta env var desabilita o auth gate do middleware Next.js (apps/web/src/middleware.ts) — usado **apenas** em playwright. Se chegar a produção, atacante bypassa signin completamente. Adicionada na Z7 do plano de production readiness (2026-04-30). | `compexhubctl check-invariants 13` — varre `.env*`, `vercel.json`, `Dockerfile*`, `fly.toml` procurando literal `NEXT_PUBLIC_E2E_AUTH_BYPASS=true`. Excecoes: `.env.example`, `.env.test`, `apps/web/tests/e2e/`. | CI (gate). Localmente: `go run ./tools/compexhubctl check-invariants 13`. |
+| # | Invariante | Por quê | Como é enforçada no civm | Quando |
+|---|------------|---------|--------------------------|--------|
+| 1 | Sem secrets hardcoded | Vazamento via `git push` é irreversível: atacante extrai a key do histórico mesmo após revert. | Step "Secret pattern scan" do job `build-civmctl`: `grep -RInE` por tokens `ghp_`/`github_pat_`/`sk-proj-`/`AKIA…` e por blocos `-----BEGIN … PRIVATE KEY-----`. `gosec` (via `golangci-lint`) reforça. | CI (`build-civmctl`) |
+| 2 | `go vet` limpo | Vet pega bugs estáticos (printf mismatch, locks copiados, shadowing perigoso) antes do runtime. | Step "go vet" (`go vet ./...`) do job `build-civmctl`. Reproduzível local com `go vet ./...`. | CI (`build-civmctl`) |
+| 3 | `golangci-lint` limpo | Lint estrutural: `errcheck`, `staticcheck`, `gosec`, `gocritic`, `errorlint`, `misspell`, etc. (config em `.golangci.yml`). Erro silencioso ignorado é bug em produção. | Step "golangci-lint" do job `build-civmctl` (`golangci-lint run ./...`, versão pinada). | CI (`build-civmctl`) |
+| 4 | Sem vulnerabilidades conhecidas (govulncheck) | Dep com CVE conhecida em runner compartilhado expõe todos os peers. | Step "govulncheck" do job `build-civmctl` (`govulncheck ./...`, versão pinada). | CI (`build-civmctl`) |
+| 5 | `go test -race` verde | Data race em código concorrente (watchdogs, locks, runner restart) é não-determinístico em produção; só o detector pega cedo. | Step "go test (race + cover)" do job `build-civmctl` (`go test -race -count=1 -coverprofile=coverage.out ./...`). | CI (`build-civmctl`) |
+| 6 | Cobertura ≥80% por package em `internal/**` | Threshold sem parser real vira no-op. Bug em código não-coberto é detectado em produção, não em CI. `rules/testing.md` §"Coverage mínimo atual". | Step "Coverage threshold" do job `build-civmctl`: itera `go list ./internal/...` e falha se qualquer package ficar `< 80%`. Local: `go test -count=1 -cover ./internal/...`. | CI (`build-civmctl`) |
+| 7 | Binário `civmctl` < 10MB stripped (RNF-3) | Zero-effort: o binário é baixado/instalado na VM; bloat indica dep indevida ou debug embarcado. | Step "go build" do job `build-civmctl`: compila `-ldflags='-s -w'` e falha se `size > 10485760`. | CI (`build-civmctl`) |
+| 8 | Comandos read-only não mutam (smoke) | `civmctl --help`, `version-pins`, `health`, `cleanup --dry-run` precisam ser seguros para rodar em qualquer estado sem efeito colateral. | Step "Smoke tests (read-only commands)" do job `build-civmctl` + job `self-hosted-smoke` (parity, `version-pins`, `health --json`, `drift`, `billing-status`). | CI (`build-civmctl`, `self-hosted-smoke`) |
+| 9 | Capacidade destrutiva validada pelo propósito (não pela existência) | Existe ≠ funciona: `safedelete` removia leftovers root-owned do `_work`; #59 shipou teste que afirmava o **oposto** (recusa). Teste hermético pode codificar a premissa errada e passar (disciplina Kahneman #13). | Step "Privileged cleanup escalation" do `self-hosted-smoke`: `go test -tags=integration -run TestIntegration ./internal/safedelete/` contra fixture root-owned real. Self-skip sem sudo NOPASSWD (no-op em fork). | CI (`self-hosted-smoke`) |
+| 10 | Paridade com `ubuntu-latest` | A VM existe para reproduzir `ubuntu-latest` com mais hardware; drift de versão (Go/Node/Docker/gh) quebra a promessa "roda igual". | Step "Tool parity check" do `self-hosted-smoke` (`go/node/docker/gh/git/jq --version` + `civmctl parity`). | CI (`self-hosted-smoke`) |
+| 11 | Templates e systemd válidos | Template `.yml.template` ou unit systemd quebrado só falha quando um peer copia — tarde demais. | Job `validate-templates`: YAML lint em `templates/*.yml.template` + `ci.yml`, presença não-vazia das units `deploy/systemd/*`. | CI (`validate-templates`) |
+| 12 | Links locais nos docs não quebram | Doc referenciando arquivo inexistente apodrece a documentação operacional. | Step "Markdown links basico" do `validate-templates`: resolve cada link relativo em `README/AGENTS/CODEX/runbooks/disciplines/rules/templates` e falha se faltar alvo. | CI (`validate-templates`) |
+| 13 | Marcadores COMMUNICATION-STYLE íntegros | `templates/COMMUNICATION-STYLE.md` é fonte sincronizada em `AGENTS.md`/`CODEX.md`; perder os marcadores `BEGIN/END` desincroniza o bloco. | Step "Communication style template integrity" do `validate-templates`. | CI (`validate-templates`) |
+| 14 | Sync rule (README ≡ AGENTS ≡ CODEX ≡ rules) | Docs autoritativos desincronizados → agentes seguem regras conflitantes. `AGENTS.md` §"Sync rule (invariante #5)". | Regra operacional revisada por humano (não há `pr-governance.yml` ativo ainda — ver `rules/governance.md`). Skip explícito via `[sync-skip-justified]` no commit body. | PR review |
+| 15 | Conventional Commits + Rollback trigger | Histórico legível alimenta release-please; commit não-trivial sem condição de reversão é Sistema 1 (Kahneman #2). `AGENTS.md` §"Commits". | Regra operacional: título em inglês ≤72 chars; `feat/fix/refactor/perf` exigem `Rollback trigger:` no body. release-please valida o formato no merge. | PR review / merge |
+| 16 | PII scrubbing em logs (`slog`) | LGPD/GDPR + exposição via log files. `rules/observability.md` + `rules/security.md`. | Regra de código revisada em PR: nunca logar email/cpf/phone/password/token raw; `slog` estruturado, nunca `fmt.Println`/`log.Printf` em produção. | PR review |
+| 17 | Scripts Windows sem clamp Int32 `[math]::Max(0, …)` | Um `0` literal é Int32; fixa overload `Max(int,int)` e estoura em bytes > ~2 GiB. Esse bug travou todo reclaim do VHDX dinâmico até wedgear o runner. | Teste Go `internal/hostdisk/ps1_safety_test.go`: regex `\[math\]::(Max|Min)\(\s*0\s*,` varre `deploy/windows/*.ps1`. Roda em `go test -race ./...`. | CI (`build-civmctl`) |
 
 ## Como rodar localmente
 
+Não há subcomando de invariantes. Os gates de código reproduzem-se com as
+mesmas ferramentas do CI:
+
 ```bash
-go run ./tools/compexhubctl check-invariants        # roda todos
-go run ./tools/compexhubctl check-invariants 1 3 6  # roda apenas os listados
+export GOTOOLCHAIN=auto
 
-go run ./tools/compexhubctl check-sync              # invariante #5 contra HEAD
-go run ./tools/compexhubctl check-sync --staged     # invariante #5 contra staged
+go vet ./...                                   # invariante #2
+golangci-lint run ./...                        # invariante #3 (gosec inclui #1)
+govulncheck ./...                              # invariante #4
+go test -race -count=1 ./...                   # invariantes #5, #17
+go test -count=1 -cover ./internal/...         # invariante #6 (≥80% por package)
+go build -ldflags='-s -w' -o /tmp/civmctl ./cmd/civmctl && \
+  stat -c%s /tmp/civmctl                       # invariante #7 (<10MB)
+
+# invariante #9 (só na VM com sudo NOPASSWD para o wrapper):
+go test -tags=integration -run TestIntegration ./internal/safedelete/
+
+# invariante #10 (paridade), na VM:
+civmctl parity
 ```
 
-`npm run check:invariants` é o atalho.
+Os gates de documentação/governança (#11–#16) são revistos no PR ou pelos jobs
+`validate-templates`/`self-hosted-smoke`; o passo "Markdown links basico" e o
+de integridade do COMMUNICATION-STYLE rodam exatamente como em `ci.yml`.
 
-## Inline waiver
+## Como adicionar exceção
 
-Para casos pontuais, use comentário inline `// invariant-waive:#N -- <razão>`:
+Não há mecanismo de waiver inline com binário próprio. As exceções aceitas hoje:
 
-```ts
-// invariant-waive:#2 -- inline script para dev-only localhost preview
-console.warn("Cache clear failed", err);
-```
+1. **Lint:** justificativa no `.golangci.yml` (ex.: as exclusões `gosec` G204/G304/G115 já documentadas inline com rationale) ou comentário `//nolint:<linter> // <razão>` adjacente.
+2. **Cobertura:** preferir teste focado a exclusão. Se um peer copiar este padrão e precisar excluir, documentar em `disciplines/COVERAGE-EXCLUSIONS-template.md` (ver lá). No próprio `civm`, abaixo de 80% em package interno **bloqueia** — sem override silencioso.
+3. **Sync rule:** `[sync-skip-justified]` no commit body com a razão.
+4. **Smoke billing-aware:** falha por quota/billing de serviço externo pode virar warning amarelo (não bloqueia) — ver "Exceções de skip em CI" abaixo.
 
-O script de check ignora a linha. Razão é **obrigatória** após `--`. Auditável via `grep invariant-waive .`.
-
-Casos típicos:
-
-- `#2` em scripts inline injetados no HTML (template literals que viram código browser-side em dev).
-- `#3` se PII tem que aparecer em audit log explícito (raríssimo; abrir ADR antes).
-- `#8` em comentários históricos de migrations já mergeadas.
-
-## Como adicionar exceção (waiver)
-
-1. Abrir ADR em `docs/decisions/ADR-NNN-waiver-invariant-X.md`.
-2. Documentar:
-   - Qual invariante e por quê o waiver é necessário (caso real, não conveniência)
-   - Escopo (paths específicos, datas)
-   - **Expiry** numérico/observável: data limite OU condição de remoção
-   - Quem aprovou
-3. Adicionar config no checker Go (`tools/compexhubctl/internal/invariants/` ou `cmd/checkinvariants/`).
-4. Append em `docs/META-AUDIT.md`.
-5. Auditar trimestralmente (`docs/runbooks/REVIEW-ADR.md`).
-
-Se waiver expirar e não for removido: **CI volta a bloquear**. Não há override silencioso.
-
-## Mecanismo de exclusões de coverage (#10)
-
-Quando código de produção genuinamente não pode ser coberto 100%, registra-se exclusão **explícita** em `docs/COVERAGE-EXCLUSIONS.md` (append-only). Categorias aceitas:
-
-- **Boilerplate de bootstrap** (Go `cmd/<binary>/main.go`, Next.js `instrumentation.ts`).
-- **Defensive panics em paths impossíveis** (errors `panic` que indicam programmer error, não user input).
-- **Generated code** (`*.gen.go`, `packages/api-client/src/generated/`, sqlc output) — fora do escopo, não rebaixa coverage.
-- **Migration SQL** — testado em integration tests, não em unit (fora).
-
-Inline markers (granular dentro de função):
-
-- **Go:** `// nocov:start` / `// nocov:end` — comentário adjacente explicando.
-- **TS:** `/* c8 ignore start */` / `/* c8 ignore end */` — comentário adjacente.
-
-Cada inline marker é **auditável** via grep CI; deve ter razão visível.
-
-## Adicionando uma 11ª invariante
-
-Toda invariante nova:
-
-1. ADR explicando rationale + check method + falso-positivo esperado.
-2. Implementação no `compexhubctl` (`tools/compexhubctl/internal/invariants/` ou novo subpacote).
-3. Run em CI por **30 dias em modo warn** (loga mas não bloqueia) antes de promover a `error`.
-4. Métricas: contagem de violações capturadas, falsos-positivos.
-5. Após 30d, decisão: promover, manter warn, ou remover.
+Toda exceção é **auditável** por grep (`grep -rn nolint .`, `git log --grep`).
 
 ## Exceções de skip em CI
 
-Diferente de invariantes (que são gates de qualidade do código), há
-condições operacionais em que um step de CI pode falhar por motivo
-**fora do controle do PR** — tipicamente quota/billing exhausted em
-serviço externo. Para esses, o repo usa a composite action em
-`.github/actions/billing-aware-step/action.yml` que converte falha em
-"warning amarelo" (não bloqueia merge) somente quando a saída do step
-contém marcadores inequívocos de billing/quota.
+Diferente dos gates de qualidade do código, há condições operacionais em que um
+step pode falhar por motivo **fora do controle do PR** — tipicamente
+billing/quota esgotada em serviço externo (GitHub Actions billing). Para esses,
+o `civm` usa detecção heurística zero-PAT em `civmctl billing-status` e o smoke
+do `self-hosted-smoke` aceita exit code não-zero desses steps (`|| true`) em vez
+de bloquear merge por causa de billing.
 
 ### Markers reconhecidos (case-insensitive)
 
-- `payment required` ou `http 402`
-- `quota exceeded`, `quota_exceeded`
-- `insufficient quota`, `insufficient credits`, `insufficient balance`
-- `billing failure`, `billing error`, `billing disabled`, `billing inactive`
-- `exceeded usage` ou `exceeded limit` (combinado com `plan|tier|quota`)
-- `rate limit` combinado com `plan`
-- `out of quota`, `out of credits`
-
-Lista append-only — adições documentadas no PR que adiciona o marker.
-
-### Steps protegidos hoje
-
-- `integration` job, steps "Apply public migrations" e "Run integration
-  tests" — Neon serverless pode hit quota em preview branches.
+`civmctl billing-status` classifica como `blocked` quando a saída contém, entre
+outros: `payment required`/`http 402`, `quota exceeded`, `insufficient quota`,
+`insufficient credits`, `billing disabled`, `out of credits`. Lista append-only
+na implementação (`internal/billing/`); adições documentadas no PR que as
+introduz.
 
 ### Steps NÃO protegidos (e por quê)
 
-- `lint`, `test`, `build`, `contracts-check`, `invariants`: deterministic;
-  qualquer falha aqui é bug real. Não há vetor billing.
-- Auth/AI provider keys não são usadas em CI (somente runtime), então
-  jobs de build não tocam APIs pagas.
+- `go vet`, `golangci-lint`, `govulncheck`, `go test`, coverage, build, validate-templates: determinísticos. Qualquer falha aqui é bug real — não há vetor billing.
 
-### Como adicionar marker novo
-
-1. Detectar a ocorrência: ler o log da run que falhou erroneamente.
-2. PR amend na regex em `.github/actions/billing-aware-step/action.yml`
-   (append-only — não remover marker existente).
-3. Atualizar a lista acima neste arquivo no mesmo PR.
-4. Testar via `.github/workflows/test-billing-aware.yml`
-   (workflow_dispatch — não roda em push/PR).
-
-### Tradeoff documentado
-
-GitHub Actions não expõe `conclusion: skipped` mid-run. O melhor que a
-action consegue é "exit 0 + ::warning::" — a check do PR fica amarela
-em vez de vermelha. Para ter status "skipped" verdadeiro (cinza), seria
-preciso preempar o step via `if:` antes dele rodar — só funciona quando
-sabemos a priori que vai falhar (ex.: secret ausente, padrão usado no
-job `integration` desde sempre via `steps.db.outputs.skip`).
-
-## Histórico de invariantes promovidas/removidas
+## Histórico
 
 (append-only)
 
-- 2026-04-28: Invariantes 1–9 declaradas em ADR-000 (formato) + CHARTER §"Tier-3 Infra". Status: warn em M0 (sem CI ainda); error em M1 (com Husky + CI ativos).
-- 2026-05-05: Documento alinhado ao gate atual 1–13 e ao `compexhubctl check-invariants`; #10 segue com parser web ativo e parser Go pendente.
-- 2026-04-28 (rev2): Invariante 10 (coverage ≥98%) adicionada após decisão do usuário "cobrir tudo 100% com os testes". Status: declarada em M2; checker Go valida `apps/web/coverage/coverage-summary.json` quando presente e reporta "implementation pending" quando reports não existem. Parser Go para `services/api/cover.out` ainda precisa ser promovido antes de transformar #10 em gate completo.
-- 2026-04-29: Invariante 11 (self-containment textual) adicionada via ADR-007. Doc autocontida — sem menção a projetos paralelos do autor. Exceções legítimas (nome, email, GitHub handle, module Go) preservadas por contexto. `MEMORY.md` excluído por convenção (append-only). Status: ativa em CI a partir desta entry.
-- 2026-04-30: Invariante 12 (per-product isolation) adicionada como base do plano de reorg multi-produto. Status: ativa em CI a partir desta entry.
-- 2026-04-30: Invariante 13 (NEXT_PUBLIC_E2E_AUTH_BYPASS=true proibido em prod files) adicionada na fase Z7 do plano de production readiness. Z6 wireou `.env.production.example` com `BYPASS=false`; Z7 enforce que esse valor nunca derive para `true` em arquivos production-bound. Status: ativa em CI a partir desta entry.
+- 2026-06-04: Documento reescrito como civm-native. Substituída a tabela de 13 invariantes de frontend (importada de um peer descontinuado: `apps/web`, `console.log`, `NEXT_PUBLIC_E2E_AUTH_BYPASS`, `@<peer>/api-client`, `tools/<peer>ctl/cmd/checkinvariants`) pelos gates reais do `civm` extraídos de `.github/workflows/ci.yml` + `rules/*.md` + testes Go. O `civm` é repo Go de infra: não tem frontend, multi-tenant nem binário de invariantes; o enforcement é CI workflow + `go test -race` + gate de cobertura ≥80% em `internal/**` + lints.

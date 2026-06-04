@@ -1,10 +1,12 @@
 # SSDV3 — Spec-Driven Development: Prompts Base
 
-> **Template de metodologia portátil mantido pelo `civm`.** O stack alvo abaixo é um exemplo genérico de produto peer (modular monolith) para ilustrar os prompts — substitua pelo stack do seu repo. Stack de exemplo: modular monolith em `services/api/internal/platform/{auth,tenancy,rbac,...}` + `services/api/internal/apps/<produto>/`. Stack atual: Go 1.26 · chi/v5 · pgx/v5 (M3+) · sqlc (M3+) · goose (M3+) · Next.js 16 · React 19 · StyleX · Zustand · Serwist · PostgreSQL 18 schema-per-tenant (Neon serverless preview + production) · Redis 8 (M5) · OTel/Tempo/Prometheus/Loki (M5). Prompts referenciam genericamente `ms-auth`/`ms-core`/etc. — substitua mentalmente por `internal/platform/<área>/`. A metodologia (PRD → SPEC → IMPL) é o que importa.
+> **Template de metodologia portátil mantido pelo `civm`.** A metodologia (PRD → SPEC → IMPL) é o que importa e é independente de stack. O `civm` em si é um repo **Go de infra** (Go 1.26 stdlib-first, `cmd/civmctl/` + `internal/**`, sem frontend e sem multi-tenant) — para mudanças no próprio `civm`, leia `.github/workflows/ci.yml`, `rules/*.md`, `AGENTS.md` e os packages relevantes em `internal/**`.
+>
+> Os prompts abaixo trazem, para ilustrar, um **stack de exemplo de produto web modular** (modular monolith Go + Next.js + PostgreSQL schema-per-tenant + Redis). Esse stack é **genérico/ilustrativo** — substitua mentalmente pelos serviços, contratos e camadas do seu repo. Referências a `ms-auth`/`ms-core`/`services/...`/frontend são placeholders do exemplo, não componentes do `civm`.
 
 Metodologia em 3 passos: **PRD → SPEC → IMPL**
 
-Versão revisada para um stack de exemplo: Go 1.26 · chi/v5 · pgx v5 · go-redis v9 · Next.js 16 · React 19 · StyleX · FSD · PostgreSQL 18 schema-per-tenant · Redis 8.6 · PgBouncer · Nginx · Docker
+Stack de exemplo usado nos prompts (ilustrativo): Go · chi/v5 · pgx v5 · go-redis v9 · Next.js · React · PostgreSQL schema-per-tenant · Redis · Docker. Troque pelo stack real do seu repo.
 
 Objetivo desta versão:
 
@@ -78,9 +80,11 @@ O objetivo não é teorizar no documento, mas forçar cada etapa crítica a resp
 - qual evidência mínima autoriza avançar
 - qual condição objetiva exige abortar, voltar um passo ou fazer rollback
 
-## Política Day-0 do compexhub
+## Política Day-0 (produto sem produção viva — opcional)
 
-O compexhub ainda não possui produção viva com dados legados obrigatórios. Portanto, toda mudança deve ser especificada e implementada como solução principal e única, no formato correto final para Day-0.
+> Aplica-se a um produto-exemplo que ainda **não** tem produção viva com dados legados obrigatórios. Não se aplica ao `civm`, que já roda em produção (runner self-hosted) — para o `civm`, qualquer mudança em comportamento operacional segue rollback trigger numérico e teste, não a política Day-0.
+
+Quando o produto ainda não possui produção viva com dados legados obrigatórios, toda mudança deve ser especificada e implementada como solução principal e única, no formato correto final para Day-0.
 
 Por padrão, é proibido criar workaround, shim, dual-reader, dual-write, camada de compatibilidade com formato antigo, backfill para produção inexistente, migration incremental corretiva desnecessária ou código morto.
 
@@ -144,7 +148,7 @@ Antes de escrever o PRD final, siga estas fases:
 #### Fase 2 — Convergência
 
 - Escolha uma opção principal
-- Explique por que ela é a recomendada no contexto do compexhub
+- Explique por que ela é a recomendada no contexto do seu repo
 - Liste alternativas descartadas e por quê
 - Registre lacunas de contexto que permaneceram abertas
 
@@ -156,12 +160,14 @@ Antes de escrever o PRD final, siga estas fases:
 
 ### Pesquisa obrigatória antes de gerar o PRD
 
-#### 1. Codebase compexhub — contexto interno
+#### 1. Codebase do seu repo — contexto interno
 
-- Leia `.claude/rules/` (backend.md, frontend.md, security.md, testing.md, infra.md, coding.md)
-- Leia `CLAUDE.md` (root) para topologia de serviços, multi-tenancy flow, auth modes, env vars
-- Identifique o(s) serviço(s) alvo em `services/ms-{name}/` e leia `cmd/api/main.go`, routes, handlers, services, repository e models existentes
-- Mapeie o schema PostgreSQL atual: migrações em `services/ms-{name}/migrations/` e schema tenant vs. `public`
+> No `civm`: leia `rules/*.md`, `AGENTS.md`/`README.md`/`CODEX.md`, `.github/workflows/ci.yml` e os packages em `internal/**` (+ `cmd/civmctl/`) tocados pela mudança. Não há serviços HTTP, schema PostgreSQL nem frontend — pule os itens de exemplo abaixo que não se aplicam.
+
+- Leia as regras do repo (no exemplo: `rules/` backend.md, frontend.md, security.md, testing.md, infra.md, coding.md)
+- Leia o doc de instruções na raiz para topologia de serviços, multi-tenancy flow, auth modes, env vars (quando existirem)
+- Identifique o(s) serviço(s)/package(s) alvo e leia o entry point, routes, handlers, services, repository e models existentes
+- Mapeie o schema atual: migrações e schema tenant vs. global (se o repo tiver banco)
 - Identifique tabelas, índices, constraints e relações que tocam nessa feature
 - Verifique Redis keys, Pub/Sub channels, locks, cache patterns e invalidação relacionados
 - Leia `docs/config-reference.json` para env vars existentes e categorias disponíveis
@@ -226,7 +232,7 @@ Pesquise e valide contra a documentação oficial das tecnologias realmente envo
 - Prefira reaproveitar tabelas, env vars, canais Redis, middlewares, componentes e contratos existentes
 - Não proponha novos endpoints, tabelas, eventos ou env vars sem justificar por que os existentes não atendem
 - Aponte breaking changes, estratégia de rollout, rollback e backfill quando aplicável
-- Aplique a política Day-0 do compexhub: proponha a solução correta principal, sem compatibilidade legada, shims, workarounds ou backfills para produção inexistente
+- Quando o produto não tiver produção viva, aplique a política Day-0: proponha a solução correta principal, sem compatibilidade legada, shims, workarounds ou backfills para produção inexistente
 - Se sugerir backfill, migration incremental, dual path ou compatibilidade, declare a exceção Day-0 com motivo objetivo; caso contrário, consolide a modelagem/migration/contrato no desenho final
 - Em **Alternativas descartadas**, descarte explicitamente soluções de compatibilidade quando elas só existirem para preservar versão antiga sem produção viva
 - Liste os documentos que precisarão ser atualizados no mesmo commit quando houver impacto estrutural
@@ -240,11 +246,11 @@ Gere o arquivo `docs/{feature-slug}/PRD.md` com **EXATAMENTE** esta estrutura:
 #### Resumo
 
 - O que é, por que existe, qual problema resolve
-- Valor de negócio para escritórios de advocacia no contexto do compexhub
+- Valor de negócio no contexto do produto
 
 #### Contexto técnico
 
-- Serviço(s) envolvidos e papel de cada um na topologia do compexhub
+- Serviço(s)/package(s) envolvidos e papel de cada um na topologia do repo
 - Estado atual: tabelas, endpoints, componentes, caches e fluxos já existentes que serão reutilizados ou estendidos
 - Tenant scope: tenant-scoped (`{slug}_{service}`) ou global (`public`)
 - Dependências entre serviços (HTTP interno, Redis Pub/Sub, cache)
@@ -913,7 +919,9 @@ Só avance se:
 
 ---
 
-## Referência rápida — Stack compexhub
+## Referência rápida — Stack de exemplo (ilustrativo)
+
+> Stack do produto-exemplo usado nos prompts. **Não é o stack do `civm`** (Go stdlib-first, sem frontend/DB). Troque pela tabela do seu repo.
 
 | Camada          | Tecnologia                            | Versão           |
 | --------------- | ------------------------------------- | ---------------- |
