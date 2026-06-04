@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.14.1](https://github.com/advoq/civm/compare/v1.14.0...v1.14.1) (2026-06-04)
+
+
+### Documentation
+
+* **templates:** drop redundant self-contained boilerplate ([bb2dd93](https://github.com/advoq/civm/commit/bb2dd931ada80f5cadde9b4bb482a97f4bf9ff9f))
+* **templates:** drop redundant self-contained boilerplate ([e89c366](https://github.com/advoq/civm/commit/e89c36661a2d975236ea96b42122570c9ad37815))
+
 ## [1.14.0](https://github.com/advoq/civm/compare/v1.13.1...v1.14.0) (2026-06-04)
 
 
