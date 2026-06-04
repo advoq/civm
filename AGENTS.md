@@ -199,6 +199,7 @@ commit, push, rollback ou alteração automática em peer repo.
 - `runbooks/PEER-ADOPTION-CHECKLIST.md` — adoção manual em peer repo
 - `templates/CIVM-USAGE.md` — fonte para `docs/CIVM.md` nos peer repos
 - `disciplines/KAHNEMAN-DISCIPLINES.md` — 12 disciplinas Sistema 1 vs 2
+- `disciplines/COGNITIVE-HYGIENE.md` — higiene cognitiva & comunicação intencional (ouro portado do advoq)
 - `disciplines/INVARIANTS.md` — catálogo de invariantes portáveis
 
 <!-- COMMUNICATION-STYLE:BEGIN -->
