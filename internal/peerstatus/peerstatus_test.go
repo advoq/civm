@@ -240,7 +240,7 @@ func TestStatusSeverity(t *testing.T) {
 func TestCollectFleetSummaryAndRenderJSON(t *testing.T) {
 	t.Parallel()
 	opts := DefaultFleetOptions()
-	opts.Repos = []string{"advoq/civm", "emersonbusson/compexhub", "emersonbusson/vitae"}
+	opts.Repos = []string{"advoq/civm", "advoq/advoq", "emersonbusson/vitae"}
 	opts.RunFn = fleetRunFn(t)
 
 	report, err := CollectFleet(context.Background(), opts)
@@ -266,8 +266,8 @@ func TestCollectFleetSummaryAndRenderJSON(t *testing.T) {
 	if severities["advoq/civm"] != SeverityOK {
 		t.Fatalf("advoq/civm severity = %s", severities["advoq/civm"])
 	}
-	if severities["emersonbusson/compexhub"] != SeverityWarn {
-		t.Fatalf("compexhub severity = %s", severities["emersonbusson/compexhub"])
+	if severities["advoq/advoq"] != SeverityWarn {
+		t.Fatalf("advoq/advoq severity = %s", severities["advoq/advoq"])
 	}
 	if severities["emersonbusson/vitae"] != SeverityCritical {
 		t.Fatalf("vitae severity = %s", severities["emersonbusson/vitae"])
@@ -305,7 +305,7 @@ func TestRenderFleetHuman(t *testing.T) {
 			},
 			{
 				Status: Status{
-					Repo: "emersonbusson/compexhub", WorkflowFile: "ci.yml",
+					Repo: "advoq/advoq", WorkflowFile: "ci.yml",
 					BillingStatus: "unknown", RunnersOnline: 0, RunnersTotal: 1,
 				},
 				Severity: SeverityWarn,
@@ -315,7 +315,7 @@ func TestRenderFleetHuman(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	report.Render(&buf)
-	for _, want := range []string{"read-only", "ok=1 warn=1 critical=0", "advoq/civm", "emersonbusson/compexhub", "WARN"} {
+	for _, want := range []string{"read-only", "ok=1 warn=1 critical=0", "advoq/civm", "advoq/advoq", "WARN"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Fatalf("Render omitted %q:\n%s", want, buf.String())
 		}
@@ -435,19 +435,19 @@ func fleetRunFn(t *testing.T) func(context.Context, string, ...string) ([]byte, 
 		switch {
 		case strings.Contains(key, "/repos/advoq/civm/actions/runners"):
 			return []byte(`{"runners":[{"name":"civm-self","status":"online"}]}`), nil
-		case strings.Contains(key, "/repos/emersonbusson/compexhub/actions/runners"):
-			return []byte(`{"runners":[{"name":"civm-compexhub","status":"online"}]}`), nil
+		case strings.Contains(key, "/repos/advoq/advoq/actions/runners"):
+			return []byte(`{"runners":[{"name":"civm-advoq","status":"online"}]}`), nil
 		case strings.Contains(key, "/repos/emersonbusson/vitae/actions/runners"):
 			return []byte(`{"runners":[]}`), nil
 		case strings.Contains(key, "--repo advoq/civm") && strings.Contains(key, "startedAt"):
 			return healthyBillingRuns(), nil
-		case strings.Contains(key, "--repo emersonbusson/compexhub") && strings.Contains(key, "startedAt"):
+		case strings.Contains(key, "--repo advoq/advoq") && strings.Contains(key, "startedAt"):
 			return blockedBillingRuns(), nil
 		case strings.Contains(key, "--repo emersonbusson/vitae") && strings.Contains(key, "startedAt"):
 			return blockedBillingRuns(), nil
 		case strings.Contains(key, "--repo advoq/civm") && strings.Contains(key, "createdAt"):
 			return lastRun(101, "success"), nil
-		case strings.Contains(key, "--repo emersonbusson/compexhub") && strings.Contains(key, "createdAt"):
+		case strings.Contains(key, "--repo advoq/advoq") && strings.Contains(key, "createdAt"):
 			return lastRun(202, "failure"), nil
 		case strings.Contains(key, "--repo emersonbusson/vitae") && strings.Contains(key, "createdAt"):
 			return lastRun(303, "failure"), nil

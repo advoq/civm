@@ -22,7 +22,6 @@ import (
 // the explicit "default" repo mode. Generic doctor runs infer local repos.
 var DefaultRepos = []string{
 	"advoq/civm",
-	"emersonbusson/compexhub",
 	"emersonbusson/vitae",
 	"advoq/advoq",
 }

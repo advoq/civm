@@ -12,7 +12,7 @@ import (
 
 func validOpts() AddOptions {
 	o := DefaultOptions()
-	o.Repo = "emersonbusson/compexhub"
+	o.Repo = "emersonbusson/vitae"
 	o.Token = "AAAA1234"
 	o.Short = "cmpx"
 	o.BaseDir = "/home/emdev"
@@ -30,7 +30,7 @@ func TestValidate_AllRequiredFieldsChecked(t *testing.T) {
 		mut  func(*AddOptions)
 	}{
 		{"no repo", func(o *AddOptions) { o.Repo = "" }},
-		{"bad repo (no slash)", func(o *AddOptions) { o.Repo = "compexhub" }},
+		{"bad repo (no slash)", func(o *AddOptions) { o.Repo = "vitae" }},
 		{"no token", func(o *AddOptions) { o.Token = "" }},
 		{"no short", func(o *AddOptions) { o.Short = "" }},
 		{"bad short", func(o *AddOptions) { o.Short = "../cmpx" }},
@@ -209,7 +209,7 @@ func TestRenderTable_DryRun(t *testing.T) {
 	var buf bytes.Buffer
 	RenderTable(results, o, &buf)
 	out := buf.String()
-	for _, want := range []string{"DRY-RUN", "compexhub", "cmpx", "civm", "(seria-aplicado)", "--execute"} {
+	for _, want := range []string{"DRY-RUN", "vitae", "cmpx", "civm", "(seria-aplicado)", "--execute"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("RenderTable omitiu %q", want)
 		}

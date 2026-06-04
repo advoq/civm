@@ -10,7 +10,7 @@ import (
 )
 
 const fakeSystemctlOutput = `  actions.runner.advoq-civm.civm-1.service        loaded active running GitHub Actions Runner (advoq-civm.civm-1)
-  actions.runner.emersonbusson-compexhub.civm-cmpx.service loaded active running GitHub Actions Runner (emersonbusson-compexhub.civm-cmpx)
+  actions.runner.advoq-advoq.civm-cmpx.service loaded active running GitHub Actions Runner (advoq-advoq.civm-cmpx)
   actions.runner.emersonbusson-vitae.civm-vitae.service    loaded active running GitHub Actions Runner (emersonbusson-vitae.civm-vitae)
 `
 
@@ -29,7 +29,7 @@ func TestList_ParsesAllThree(t *testing.T) {
 	}
 	wantRepos := map[string]string{
 		"civm-1":     "advoq/civm",
-		"civm-cmpx":  "emersonbusson/compexhub",
+		"civm-cmpx":  "advoq/advoq",
 		"civm-vitae": "emersonbusson/vitae",
 	}
 	for _, s := range items {

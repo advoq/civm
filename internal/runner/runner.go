@@ -18,7 +18,7 @@ import (
 
 // AddOptions controls a single runner installation.
 type AddOptions struct {
-	Repo          string // "emersonbusson/compexhub"
+	Repo          string // "emersonbusson/vitae"
 	Token         string // registration token (efêmero ~1h)
 	Short         string // suffix do diretorio: ~/actions-runner-<short>
 	Label         string // CSV de labels (default: "civm")
@@ -88,7 +88,7 @@ func Add(ctx context.Context, opts AddOptions) ([]Result, error) {
 	tarball := fmt.Sprintf("https://github.com/actions/runner/releases/download/v%s/actions-runner-linux-x64-%s.tar.gz",
 		opts.RunnerVersion, opts.RunnerVersion)
 	url := fmt.Sprintf("https://github.com/%s", opts.Repo)
-	// Naming padrao: civm-<short>. Ex: civm-compexhub, civm-advoq.
+	// Naming padrao: civm-<short>. Ex: civm-vitae, civm-advoq.
 	// Para o proprio repo civm: convencao --short=self -> civm-self.
 	name := "civm-" + opts.Short
 	steps := []Step{

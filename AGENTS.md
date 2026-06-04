@@ -5,7 +5,7 @@ Resumo terso para CLIs estilo Codex/aider/Jules. Para visão completa, ler `READ
 ## Propósito do repo
 
 `civm` é o repo de infraestrutura compartilhada de CI/CD que serve múltiplos
-projetos do mesmo dono (compexhub, vitae, advoq, futuros). Hospeda:
+projetos do mesmo dono (vitae, advoq, futuros). Hospeda:
 
 1. **`civmctl`** — Go CLI zero-effort para provisionar e manter a VM
    self-hosted que serve como GitHub Actions runner com label `civm`.

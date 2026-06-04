@@ -83,7 +83,7 @@ func TestConfigureDoctorReposModes(t *testing.T) {
 		{raw: "auto", wantInfer: true},
 		{raw: "none", wantInfer: false, wantRepos: nil},
 		{raw: "", wantInfer: false, wantRepos: nil},
-		{raw: "default", wantInfer: false, wantRepos: []string{"advoq/civm", "emersonbusson/compexhub", "emersonbusson/vitae", "advoq/advoq"}},
+		{raw: "default", wantInfer: false, wantRepos: []string{"advoq/civm", "emersonbusson/vitae", "advoq/advoq"}},
 		{raw: "acme/api, acme/web", wantInfer: false, wantRepos: []string{"acme/api", "acme/web"}},
 	}
 	for _, c := range cases {
