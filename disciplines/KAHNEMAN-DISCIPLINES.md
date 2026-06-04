@@ -1,9 +1,10 @@
 # Kahneman disciplines — template portátil de higiene de decisão
 
-> Template importado de compexhub. Referências a `compexhubctl` e paths do
-> peer de origem são exemplos portáveis, não comandos ativos do `civm`.
+> Template portátil mantido pelo `civm`. Referências a `compexhubctl` e paths
+> de exemplo são ilustrações genéricas de como instanciar a disciplina num peer
+> repo, não comandos ativos do `civm`.
 
-Disciplinas operacionais derivadas de **Thinking, Fast and Slow** (Kahneman, 2011) e **Noise** (Kahneman, Sibony, Sunstein, 2021), aplicadas originalmente ao compexhub. Doc autocontido — não depende de nenhum outro repositório.
+Disciplinas operacionais derivadas de **Thinking, Fast and Slow** (Kahneman, 2011) e **Noise** (Kahneman, Sibony, Sunstein, 2021). Doc autocontido — não depende de nenhum outro repositório.
 
 LLMs falam Sistema 1 com fluência altíssima — articulam bem até quando estão errados. O humano (ou o agente AI quando assume papel humano) precisa ser o Sistema 2: verificar, medir, questionar o que parece óbvio. Este doc codifica os atritos que evitam que decisão fluente vire decisão errada.
 

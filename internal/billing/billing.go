@@ -1,6 +1,6 @@
 // Package billing implements the GitHub Actions billing-block heuristic
-// detector. Ported from compexhubctl ci/billing.go (2026-05-09 incident
-// validated). Stdlib-only.
+// detector. Validated against the 2026-05-09 billing-block incident.
+// Stdlib-only.
 package billing
 
 import (
