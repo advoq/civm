@@ -2,4 +2,4 @@ module github.com/advoq/civm
 
 go 1.26
 
-toolchain go1.26.3
+toolchain go1.26.4
