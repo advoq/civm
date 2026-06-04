@@ -1,10 +1,8 @@
 # SSDV3 — Spec-Driven Development: Prompts Base
 
-> **Template de metodologia portátil mantido pelo `civm`.** O stack alvo abaixo é um exemplo genérico de produto peer (modular monolith) para ilustrar os prompts — substitua pelo stack do seu repo. Stack de exemplo: modular monolith em `services/api/internal/platform/{auth,tenancy,rbac,...}` + `services/api/internal/apps/<produto>/`. Stack atual: Go 1.26 · chi/v5 · pgx/v5 (M3+) · sqlc (M3+) · goose (M3+) · Next.js 16 · React 19 · StyleX · Zustand · Serwist · PostgreSQL 18 schema-per-tenant (Neon serverless preview + production) · Redis 8 (M5) · OTel/Tempo/Prometheus/Loki (M5). Prompts referenciam genericamente `ms-auth`/`ms-core`/etc. — substitua mentalmente por `internal/platform/<área>/`. A metodologia (PRD → SPEC → IMPL) é o que importa.
+> O stack citado nos prompts (Go · chi · pgx · Next.js · React · PostgreSQL schema-per-tenant · Redis) é exemplo — substitua pelo do seu repo; `ms-auth`/`ms-core`/etc. são genéricos. A metodologia (PRD → SPEC → IMPL) é o que importa.
 
 Metodologia em 3 passos: **PRD → SPEC → IMPL**
-
-Versão revisada para um stack de exemplo: Go 1.26 · chi/v5 · pgx v5 · go-redis v9 · Next.js 16 · React 19 · StyleX · FSD · PostgreSQL 18 schema-per-tenant · Redis 8.6 · PgBouncer · Nginx · Docker
 
 Objetivo desta versão:
 
