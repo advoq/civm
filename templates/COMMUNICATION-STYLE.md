@@ -4,15 +4,13 @@
 > `<!-- COMMUNICATION-STYLE:BEGIN -->` e `<!-- COMMUNICATION-STYLE:END -->`)
 > para dentro de `CLAUDE.md`, `AGENTS.md` e `CODEX.md` do seu repo.
 > Manter os marcadores intactos para um auditor do repo consumidor conseguir
-> verificar. Este template não cria dependência runtime com outro repo.
+> verificar.
 >
 > **Por quê este snippet existe:** força agentes (Claude, Codex, Aider,
 > Jules) a gerarem relatórios de fim de sessão, MEMORY entries e respostas
 > a "explica o que isso quer dizer" no formato Tech Lead pragmático em vez
 > de listagem crua de commits. Qualquer repo do mesmo dono pode adotar
-> esta regra para experiência consistente entre projetos — mas cada repo
-> permanece self-contained: este snippet existe apenas como template
-> portátil, não como acoplamento entre repos.
+> esta regra para experiência consistente entre projetos.
 >
 > **Onde NÃO colocar:** `MEMORY.md`, `conversa.md`, ou qualquer arquivo
 > append-only de log. Esses são lidos para contexto histórico, não como
@@ -59,5 +57,4 @@ informativo (sem bloquear merge inicialmente).
 
 - **2026-05-10** — primeira versão. Criada como template portátil para
   garantir que múltiplos repos do mesmo dono adotem a mesma regra de
-  estilo de comunicação. Cada repo permanece self-contained: o template
-  existe pra ser vendor-eado, não pra criar acoplamento entre repos.
+  estilo de comunicação.
