@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.14.0](https://github.com/advoq/civm/compare/v1.13.1...v1.14.0) (2026-06-04)
+
+
+### Features
+
+* **reaper:** cancel queued/in_progress runs of closed PRs ([10d1d13](https://github.com/advoq/civm/commit/10d1d136dc83e0cb77e3027ecd8500fde88b62c3))
+* **reaper:** civmctl reap-runs — cancela runs de PRs já fechados ([e72433a](https://github.com/advoq/civm/commit/e72433aa8ec86dde8c28379c56555cd858be85ca))
+
 ## [1.13.1](https://github.com/advoq/civm/compare/v1.13.0...v1.13.1) (2026-06-04)
 
 
