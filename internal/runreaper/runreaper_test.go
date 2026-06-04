@@ -2,10 +2,30 @@ package runreaper
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 )
+
+// mockGH dispatches a fake `gh` by inspecting the joined command line, so the
+// default OpenBranchesFn/ActiveRunsFn/CancelFn (and their parsing) run for real.
+func mockGH(openJSON, queuedJSON, inProgressJSON string, cancelErr error) func(context.Context, string, ...string) ([]byte, error) {
+	return func(_ context.Context, name string, args ...string) ([]byte, error) {
+		joined := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "pr list"):
+			return []byte(openJSON), nil
+		case strings.Contains(joined, "status=queued"):
+			return []byte(queuedJSON), nil
+		case strings.Contains(joined, "status=in_progress"):
+			return []byte(inProgressJSON), nil
+		case strings.Contains(joined, "cancel"):
+			return nil, cancelErr
+		}
+		return nil, fmt.Errorf("unexpected gh call: %s", joined)
+	}
+}
 
 func ts(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339, s)
@@ -175,5 +195,73 @@ func TestRenderJSONRoundTrips(t *testing.T) {
 	}
 	if !strings.Contains(sb.String(), "\"cancelled\": 1") {
 		t.Errorf("json missing cancelled field: %s", sb.String())
+	}
+}
+
+// TestReapEndToEndViaRunFn drives Reap through the default gh-backed funcs
+// (only RunFn injected), exercising applyDefaults, listOpenBranches,
+// listActiveRuns, parseActiveRuns and cancelRun.
+func TestReapEndToEndViaRunFn(t *testing.T) {
+	open := `[{"headRefName":"feature/open-1"}]`
+	queued := `{"workflow_runs":[` +
+		`{"id":1,"head_branch":"feature/open-1","event":"pull_request","status":"queued","name":"Go CI","created_at":"2026-06-04T10:00:00Z"},` +
+		`{"id":2,"head_branch":"fix/closed","event":"pull_request","status":"queued","name":"Web CI","created_at":"2026-06-04T10:01:00Z"}]}`
+	inprog := `{"workflow_runs":[{"id":3,"head_branch":"old/gone","event":"pull_request","status":"in_progress","name":"Docs CI","created_at":"2026-06-04T09:00:00Z"}]}`
+
+	opts := Options{
+		Repos:   []string{"advoq/advoq"},
+		Execute: true,
+		RunFn:   mockGH(open, queued, inprog, nil),
+	}
+	report := Reap(context.Background(), opts)
+	if report.Exit != 0 {
+		t.Fatalf("exit = %d, want 0 (events %+v)", report.Exit, report.Events)
+	}
+	// runs 2 (fix/closed) and 3 (old/gone) reaped; run 1 (open) kept.
+	if report.Cancelled != 2 {
+		t.Fatalf("cancelled = %d, want 2", report.Cancelled)
+	}
+	if report.Scanned != 3 {
+		t.Fatalf("scanned = %d, want 3", report.Scanned)
+	}
+}
+
+func TestReapEndToEndCancelError(t *testing.T) {
+	open := `[]`
+	queued := `{"workflow_runs":[{"id":9,"head_branch":"fix/closed","event":"pull_request","status":"queued","name":"Go CI"}]}`
+	inprog := `{"workflow_runs":[]}`
+	opts := Options{
+		Repos:   []string{"advoq/advoq"},
+		Execute: true,
+		RunFn:   mockGH(open, queued, inprog, fmt.Errorf("boom")),
+	}
+	report := Reap(context.Background(), opts)
+	if report.Exit != 1 {
+		t.Fatalf("exit = %d, want 1 on cancel error", report.Exit)
+	}
+}
+
+func TestReapOpenBranchesError(t *testing.T) {
+	opts := Options{
+		Repos: []string{"advoq/advoq"},
+		RunFn: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+			return nil, fmt.Errorf("gh down")
+		},
+	}
+	report := Reap(context.Background(), opts)
+	if report.Exit != 1 {
+		t.Fatalf("exit = %d, want 1 when open-PR listing fails", report.Exit)
+	}
+}
+
+func TestRenderHumanIncludesCounts(t *testing.T) {
+	report := Reap(context.Background(), fixture(nil,
+		[]Run{{ID: 5, Event: "pull_request", Status: "queued", Branch: "fix/x", Workflow: "Go CI"}},
+		new([]int64)))
+	var sb strings.Builder
+	report.Render(&sb)
+	out := sb.String()
+	if !strings.Contains(out, "reap-runs") || !strings.Contains(out, "run-reaped") {
+		t.Errorf("render output missing expected lines:\n%s", out)
 	}
 }
