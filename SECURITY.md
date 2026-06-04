@@ -18,8 +18,8 @@ are fine.
 
 ## Threat model
 
-The civm runner is a **shared resource** across peer repos (`compexhub`,
-`vitae`, `advoq`, etc.). Multiple jobs from different repos can run
+The civm runner is a **shared resource** across peer repos (`vitae`,
+`advoq`, etc.). Multiple jobs from different repos can run
 concurrently on the same VM. Each job ships with whatever code its
 authors push — so untrusted input includes:
 

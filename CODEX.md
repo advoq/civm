@@ -28,7 +28,7 @@ civm **NÃO** permite autonomamente:
 - ❌ `git push` para `origin/main` (sempre humano)
 - ❌ Alterar `.git/config` ou hooks
 - ❌ Criar/deletar repos no GitHub via `gh repo create`/`gh repo delete`
-- ❌ Modificar repos peer (compexhub, vitae, advoq) sem autorização
+- ❌ Modificar repos peer (vitae, advoq) sem autorização
   explícita do humano para o escopo cross-repo
 - ❌ Executar `civmctl bootstrap` ou `civmctl cleanup --execute` na máquina
   do dev (destinado à VM dedicada; agente sandboxed não tem SSH)

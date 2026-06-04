@@ -1,7 +1,7 @@
 # civm — infraestrutura de CI compartilhada
 
 Repo dedicado para a infraestrutura de CI/CD que serve múltiplos
-projetos do mesmo dono (compexhub, vitae, advoq, etc).
+projetos do mesmo dono (vitae, advoq, etc).
 
 **O que civm É:**
 
@@ -189,7 +189,7 @@ civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml
 ```
 
 Audit/discipline-checks ficam no projeto do peer (cada um com sua
-própria ferramenta — ex.: compexhub tem `compexhubctl`).
+própria ferramenta — ex.: advoq tem `devctl`).
 `peer-status` é observabilidade read-only: consolida sinais para decisão
 humana, mas não corrige workspace ou configuração de peer automaticamente.
 
