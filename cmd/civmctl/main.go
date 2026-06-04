@@ -97,6 +97,8 @@ func main() {
 		os.Exit(runSelfUpgrade(args))
 	case "ci-guard":
 		os.Exit(runCIGuard(args))
+	case "reap-runs":
+		os.Exit(runReapRuns(args))
 	case "lock":
 		os.Exit(runLock(args))
 	case "-h", "--help", "help":
@@ -142,6 +144,7 @@ COMANDOS
   actions-metrics Agrega minutos billable + run counts cross-repo (espelha Actions Usage Metrics)
   self-upgrade    Rebuilda civmctl do /opt/civm e substitui /usr/local/bin/civmctl
   ci-guard        Lint de compose/workflow do peer contra invariantes de isolamento
+  reap-runs       Cancela runs queued/in_progress de PRs ja fechados (libera o runner compartilhado)
   lock            Serializa trabalho docker-heavy (acquire/release/--exec com heartbeat + budget)
   help            Esta mensagem
 
@@ -169,6 +172,8 @@ EXEMPLOS
   civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml
   civmctl health --json | jq '.exit'
   civmctl reverse-watchdog --max-age-hours=4
+  civmctl reap-runs --repos=owner/repo            # dry-run: lista runs de PRs fechados
+  civmctl reap-runs --repos=owner/a,owner/b --execute
   civmctl idle-check --json
   sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute
   civmctl disk-watchdog --execute
