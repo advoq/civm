@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.13.1](https://github.com/advoq/civm/compare/v1.13.0...v1.13.1) (2026-06-04)
+
+
+### Bug Fixes
+
+* **host:** clamp autoreclaim gap math with [int64]0 to stop V: fill ([1b70ddd](https://github.com/advoq/civm/commit/1b70ddde3b069e0d4dedd7e150e1b01e97dbfbc9))
+* **host:** stop V: fill (autoreclaim Int32) + auto-restart wedged runner ([2b4ff33](https://github.com/advoq/civm/commit/2b4ff334601766adae6ec2ed9c5b17dd126612f6))
+
 ## [1.13.0](https://github.com/advoq/civm/compare/v1.12.0...v1.13.0) (2026-06-02)
 
 
