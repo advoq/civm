@@ -230,8 +230,11 @@ try {
 
     $vhd = Get-VHD -Path $VhdxPath -ErrorAction Stop
     $guestFreeBytes = Get-GuestFreeBytes
-    $guestUsedBytes = [math]::Max(0, ([int64]$vhd.Size - $guestFreeBytes))
-    $gapBytes = [math]::Max(0, ([int64]$vhd.FileSize - $guestUsedBytes))
+    # Force the Max(long, long) overload: a bare 0 is Int32, which pins both
+    # args to Max(int, int) and overflows on any byte value > 2 GiB
+    # (Int32.MaxValue). That was throwing every run and aborting the reclaim.
+    $guestUsedBytes = [math]::Max([int64]0, ([int64]$vhd.Size - $guestFreeBytes))
+    $gapBytes = [math]::Max([int64]0, ([int64]$vhd.FileSize - $guestUsedBytes))
     $gapGB = ConvertTo-GiB -Bytes ([double]$gapBytes)
     if ($gapGB -lt $MinReclaimableGB) {
         Write-ReclaimLog -Event 'autoreclaim_skip_low_gap' -Data @{
