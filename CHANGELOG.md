@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.14.2](https://github.com/advoq/civm/compare/v1.14.1...v1.14.2) (2026-06-04)
+
+
+### Bug Fixes
+
+* **reaper:** force-cancel para drenar runs presos em queued ([9155971](https://github.com/advoq/civm/commit/9155971ab422c455ff61c935dde75c1c9cb4109e))
+* **reaper:** force-cancel to actually drain runs stuck queued ([193de84](https://github.com/advoq/civm/commit/193de84faabb57433992715aaf97e5a3b6fa6360))
+
+
+### Documentation
+
+* **disciplines:** rewrite as civm-native, drop compexhub templates ([fbea438](https://github.com/advoq/civm/commit/fbea4389c842410b34457d27d9d660b10ef49fa6))
+* **rules:** add Go coding-style hygiene rule ([b7ac136](https://github.com/advoq/civm/commit/b7ac136bccbf3fe7550554f8171d5fda6a721ef0))
+* **rules:** regra de coding-style (higiene de código Go) ([b986b33](https://github.com/advoq/civm/commit/b986b33e673ede2e2e365ee76f24f4086a8e6fbb))
+
 ## [1.14.1](https://github.com/advoq/civm/compare/v1.14.0...v1.14.1) (2026-06-04)
 
 
