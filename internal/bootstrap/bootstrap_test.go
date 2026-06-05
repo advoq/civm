@@ -373,6 +373,7 @@ func TestRun_WatchdogTimer_OnlyCleanup(t *testing.T) {
 	opts.RunnerWatchdog = false
 	opts.MetricsTimer = false
 	opts.RunReaper = false
+	opts.MemWatchdog = false
 	opts.Execute = false
 	calls := []string{}
 	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -453,10 +454,14 @@ func TestTimerListIncludesRunnerWatchdogByDefault(t *testing.T) {
 	if !strings.Contains(timers, "civmctl-run-reaper.timer") {
 		t.Fatalf("timerList default = %s, want run-reaper", timers)
 	}
+	if !strings.Contains(timers, "civmctl-mem-watchdog.timer") {
+		t.Fatalf("timerList default = %s, want mem-watchdog", timers)
+	}
 	opts := DefaultOptions()
 	opts.RunnerWatchdog = false
 	opts.MetricsTimer = false
 	opts.RunReaper = false
+	opts.MemWatchdog = false
 	timers = strings.Join(timerList(opts), ",")
 	if strings.Contains(timers, "civmctl-runner-watchdog.timer") {
 		t.Fatalf("RunnerWatchdog=false still included runner-watchdog: %s", timers)
@@ -466,6 +471,9 @@ func TestTimerListIncludesRunnerWatchdogByDefault(t *testing.T) {
 	}
 	if strings.Contains(timers, "civmctl-run-reaper.timer") {
 		t.Fatalf("RunReaper=false still included run-reaper: %s", timers)
+	}
+	if strings.Contains(timers, "civmctl-mem-watchdog.timer") {
+		t.Fatalf("MemWatchdog=false still included mem-watchdog: %s", timers)
 	}
 }
 

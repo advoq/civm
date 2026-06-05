@@ -85,6 +85,8 @@ func main() {
 		os.Exit(runMetrics(args))
 	case "reverse-watchdog":
 		os.Exit(runReverseWatchdog(args))
+	case "mem-watchdog":
+		os.Exit(runMemWatchdog(args))
 	case "bootstrap-everything":
 		os.Exit(runBootstrapEverything(args))
 	case "peer-status":
@@ -138,6 +140,7 @@ COMANDOS
   capacity        Status JSON estável para Busson/integrações
   metrics         Prometheus textfile dump (node_exporter collector)
   reverse-watchdog Alerta se disk-watchdog nao disparou em >MaxAge (default 2h)
+  mem-watchdog    Monitora pressao de RAM/swap em tempo real (exit 0=ok 1=warn 2=critical; timer 1min)
   bootstrap-everything  Wrapper: cp systemd units + daemon-reload + bootstrap --execute
   peer-status     Consolida billing + runners + last run em 1 view por peer/fleet
   active-runs     Lista workflow runs in_progress + queued + ETA (avg historico)
