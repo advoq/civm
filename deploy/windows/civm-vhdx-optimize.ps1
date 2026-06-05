@@ -346,26 +346,45 @@ try {
         v_free_gb_before  = $vFreeBefore
     }
 
+    # SPECv3 DT-v3-2: campanha de medicao. O scratch high-water deste run alimenta
+    # o ScratchBudget que admite (ou nao) o caminho de emergencia do autoreclaim.
+    $scratchHighWaterGB = $null
     if ($PSCmdlet.ShouldProcess($VhdxPath, "Optimize-VHD -Mode Full")) {
+        # Baseline ao vivo (Get-PSDrive, NUNCA o JSON de 10 min): a medicao de
+        # scratch exige o numero ao vivo (red-team Finding 3).
+        $liveFreeBeforeGB = [math]::Round((Get-PSDrive V -ErrorAction Stop).Free / 1GB, 2)
+        $lowWaterGB = $liveFreeBeforeGB
+
         $optJob = Start-Job -ScriptBlock {
             param($path)
             Optimize-VHD -Path $path -Mode Full -ErrorAction Stop
         } -ArgumentList $VhdxPath
 
-        if (-not (Wait-Job -Job $optJob -Timeout $OptimizeWaitSec)) {
-            Stop-Job -Job $optJob -ErrorAction SilentlyContinue
-            Remove-Job -Job $optJob -Force -ErrorAction SilentlyContinue
-            throw "Optimize-VHD exceeded ${OptimizeWaitSec}s"
+        # Poll de 1s: amostra o MENOR V: livre durante a compactacao. NAO aborta
+        # nada (telemetria, nao controle de seguranca — DT-v3-5); Optimize-VHD e
+        # ininterruptivel. So registra o scratch high-water para recalibrar o
+        # ScratchBudget. O timeout segue como antes.
+        $optDeadline = (Get-Date).AddSeconds($OptimizeWaitSec)
+        while ($null -eq (Wait-Job -Job $optJob -Timeout 1)) {
+            $nowFreeGB = [math]::Round((Get-PSDrive V -ErrorAction SilentlyContinue).Free / 1GB, 2)
+            if ($nowFreeGB -gt 0 -and $nowFreeGB -lt $lowWaterGB) { $lowWaterGB = $nowFreeGB }
+            if ((Get-Date) -ge $optDeadline) {
+                Stop-Job -Job $optJob -ErrorAction SilentlyContinue
+                Remove-Job -Job $optJob -Force -ErrorAction SilentlyContinue
+                throw "Optimize-VHD exceeded ${OptimizeWaitSec}s"
+            }
         }
         Receive-Job -Job $optJob -ErrorAction Stop | Out-Null
         Remove-Job -Job $optJob -Force -ErrorAction SilentlyContinue
+        $scratchHighWaterGB = [math]::Round($liveFreeBeforeGB - $lowWaterGB, 2)
     }
 
     $vhdAfter = Get-VHD -Path $VhdxPath -ErrorAction Stop
     Write-CivmLog -Event 'optimize_end' -Data @{
-        vhdx               = $VhdxPath
-        file_size_gb_after = [math]::Round($vhdAfter.FileSize / 1GB, 2)
-        reclaimed_gb       = [math]::Round(($vhd.FileSize - $vhdAfter.FileSize) / 1GB, 2)
+        vhdx                  = $VhdxPath
+        file_size_gb_after    = [math]::Round($vhdAfter.FileSize / 1GB, 2)
+        reclaimed_gb          = [math]::Round(($vhd.FileSize - $vhdAfter.FileSize) / 1GB, 2)
+        scratch_high_water_gb = $scratchHighWaterGB
     }
 } catch {
     # Log the failure; the FINALLY block still guarantees Start-VM.
