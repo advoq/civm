@@ -133,6 +133,35 @@ sudo systemctl restart civmctl-runner-watchdog.timer
 
 Ver `docs/specs/civmctl/PRD.md` §"Rollback trigger".
 
+## civmctl admit (gate de memória para jobs heavy)
+
+`civmctl admit` envelopa um passo de job memory-heavy num slot de admissão: no
+máximo **2 heavy** simultâneos por host (slots de flock em `/run/civm/`), jobs
+**light** fluem sem slot. O payload roda como o usuário do runner sob um cgroup
+`MemoryMax` (`systemd-run --pipe --wait`, nunca `--scope`/root). Spec:
+`docs/specs/runner-memory-admission/SPECv4.md`.
+
+Uso no passo do job (o comando após `--` roda sob a admissão):
+
+```bash
+civmctl admit --weight heavy --exec -- make test
+civmctl admit --weight light --exec -- ./scripts/lint.sh
+civmctl admit --weight auto --exclusive docker --wait-minutes 30 --exec -- make up-local
+```
+
+- `--weight heavy|light|auto` — `auto` lê `CIVM_JOB_WEIGHT` (heavy/light), default heavy.
+- `--exclusive docker` — também serializa no sub-slot docker (count=1), em vez do
+  `civmctl lock --scope docker-heavy` legado (deprecated para jobs envelopados).
+- `--wait-minutes N` — orçamento de espera; esgotado, sai com **exit 78** (sem slot
+  no prazo) e o job-timeout do runner decide. **exit 79** = falha interna (ex:
+  cgroup `memory` ausente → recusa heavy fail-closed; `/run/civm` não provisionável).
+- Inerte por design (forward-only): nada chama `admit` até um workflow optar por ele.
+
+`/run/civm` é provisionado on-demand (`sudo install -d`, runner-owned); um
+`tmpfiles.d` é opcional. Pré-checagem: `civmctl doctor` reporta `ADMIT_CGROUP`,
+`ADMIT_RUN_AS_USER` e `ADMIT_RAM_INVARIANT`; `civmctl capacity --json` expõe
+`admit.heavy_live` / `admit.max_heavy`.
+
 ## GitHub Actions job hooks
 
 Systemd timers handle periodic and pressure-based cleanup. Job hooks handle
