@@ -43,6 +43,14 @@ param(
 
     [Parameter()]
     [ValidateRange(1, 4096)]
+    [int]$HardFloorGB = 1,
+
+    [Parameter()]
+    [ValidateRange(0, 4096)]
+    [int]$ScratchBudgetGB = 0,
+
+    [Parameter()]
+    [ValidateRange(1, 4096)]
     [int]$MinReclaimableGB = 8,
 
     [Parameter()]
@@ -234,13 +242,33 @@ try {
         }
         exit 0
     }
+    # SPECv3 DT-v3-1 admission gate. Abaixo do headroom normal, o caminho de
+    # EMERGENCIA so pode rodar se a folga ao vivo menos o piso duro cobrir o
+    # ScratchBudget MEDIDO. Optimize-VHD e ininterruptivel (sem Stop-Job), entao
+    # a unica alavanca segura e recusar comecar. ScratchBudget=0 => emergencia
+    # DESABILITADA: identico ao abort antigo, sem regressao, sem realocar o
+    # deadlock para um piso adivinhado.
+    $emergency = $false
     if ($beforeFreeGB -lt $MinHeadroomGB) {
-        Write-ReclaimLog -Event 'autoreclaim_abort_headroom' -Level 'ERROR' -Data @{
-            v_free_gb    = $beforeFreeGB
-            headroom_gb  = $MinHeadroomGB
+        if ($ScratchBudgetGB -le 0) {
+            Write-ReclaimLog -Event 'autoreclaim_abort_headroom' -Level 'ERROR' -Data @{
+                v_free_gb   = $beforeFreeGB
+                headroom_gb = $MinHeadroomGB
+                reason      = 'emergency_disabled_no_budget'
+            }
+            $exitCode = 2
+            exit 2
         }
-        $exitCode = 2
-        exit 2
+        if (($beforeFreeGB - $HardFloorGB) -lt $ScratchBudgetGB) {
+            Write-ReclaimLog -Event 'autoreclaim_abort_insufficient_slack' -Level 'ERROR' -Data @{
+                v_free_gb         = $beforeFreeGB
+                hard_floor_gb     = $HardFloorGB
+                scratch_budget_gb = $ScratchBudgetGB
+            }
+            $exitCode = 2
+            exit 2
+        }
+        $emergency = $true
     }
 
     $vm = Get-VM -Name $VMName -ErrorAction Stop
@@ -279,10 +307,13 @@ try {
         throw "fstrim failed (exit $($trim.ExitCode)): $($trim.Output)"
     }
 
-    Write-ReclaimLog -Event 'autoreclaim_start' -Data @{
-        v_free_gb_before = $beforeFreeGB
-        gap_gb           = $gapGB
-        vhdx             = $VhdxPath
+    $startEvent = if ($emergency) { 'emergency_reclaim_start' } else { 'autoreclaim_start' }
+    Write-ReclaimLog -Event $startEvent -Data @{
+        v_free_gb_before  = $beforeFreeGB
+        gap_gb            = $gapGB
+        vhdx              = $VhdxPath
+        emergency         = $emergency
+        scratch_budget_gb = $ScratchBudgetGB
     }
 
     if ($PSCmdlet.ShouldProcess($VMName, 'Stop-VM for offline Optimize-VHD')) {

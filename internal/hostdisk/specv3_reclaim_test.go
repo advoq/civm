@@ -61,3 +61,40 @@ func TestReclaimersShareCanonicalLock(t *testing.T) {
 			"lock also makes the watchdog back off (SPECv3 DT-v3-3)", canonical)
 	}
 }
+
+// SPECv3 DT-v3-1 (red-team Findings 1+2): the below-headroom emergency reclaim is
+// admission-gated, not floored by a guess, and the Optimize-VHD it runs is
+// UNINTERRUPTIBLE. The autoreclaim must (a) gate on the measured scratch budget
+// vs the hard floor (abort_insufficient_slack), (b) label the admitted run
+// emergency_reclaim_start, and (c) NEVER contain a Stop-Job — Stop-Job does not
+// abort CompactVirtualDisk, so trying to abort mid-flight is the exact unsafe
+// mechanism the red-team killed.
+func TestAutoreclaimAdmissionGate(t *testing.T) {
+	body := readWindowsScript(t, "civm-vhdx-autoreclaim.ps1")
+
+	for _, token := range []string{
+		"autoreclaim_abort_insufficient_slack", // the gate refusal
+		"emergency_reclaim_start",              // the admitted-run label
+		"$ScratchBudgetGB",                     // measured budget wired in
+		"$HardFloorGB",                         // absolute hard floor wired in
+	} {
+		if !strings.Contains(body, token) {
+			t.Errorf("civm-vhdx-autoreclaim.ps1 must contain %q for the SPECv3 admission gate (DT-v3-1)", token)
+		}
+	}
+
+	// Match a Stop-Job CALL, not a comment that explains its absence. Optimize-VHD
+	// is uninterruptible (red-team Finding 2): Stop-Job does not abort the native
+	// CompactVirtualDisk, so the emergency path must be admission-gated and never
+	// attempt a mid-compaction abort.
+	for i, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if strings.Contains(line, "Stop-Job") {
+			t.Errorf("civm-vhdx-autoreclaim.ps1:%d must NOT call Stop-Job — Optimize-VHD is "+
+				"uninterruptible (red-team Finding 2); the emergency path is admission-gated, "+
+				"never aborted mid-compaction: %s", i+1, strings.TrimSpace(line))
+		}
+	}
+}
