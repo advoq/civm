@@ -98,3 +98,30 @@ func TestAutoreclaimAdmissionGate(t *testing.T) {
 		}
 	}
 }
+
+// The supervised optimize drains the guest via `civmctl maintenance enter/exit`.
+// /var/lib/civm/maintenance.lock is root-owned, and the SSH user (emdev) cannot
+// open it without sudo — so the un-sudo'd call failed with "permission denied"
+// BEFORE draining any runner, aborting every supervised optimize run (the reason
+// the measurement-campaign vehicle never worked, found 2026-06-05). Both calls
+// must use sudo -n, like the sibling `sudo fstrim`.
+func TestOptimizeMaintenanceUsesSudo(t *testing.T) {
+	body := readWindowsScript(t, "civm-vhdx-optimize.ps1")
+
+	for _, cmd := range []string{
+		"sudo -n civmctl maintenance enter --execute",
+		"sudo -n civmctl maintenance exit --execute",
+	} {
+		if !strings.Contains(body, cmd) {
+			t.Errorf("civm-vhdx-optimize.ps1 must invoke %q (root-owned maintenance.lock needs sudo)", cmd)
+		}
+	}
+
+	// Guard against the un-sudo'd RemoteCommand form that broke it.
+	for i, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, "RemoteCommand 'civmctl maintenance") {
+			t.Errorf("civm-vhdx-optimize.ps1:%d invokes civmctl maintenance without sudo: %s",
+				i+1, strings.TrimSpace(line))
+		}
+	}
+}
