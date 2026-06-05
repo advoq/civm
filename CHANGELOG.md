@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.0](https://github.com/advoq/civm/compare/v1.17.2...v1.18.0) (2026-06-05)
+
+
+### Features
+
+* **admit:** memory-aware admission gate (civmctl admit) ([#112](https://github.com/advoq/civm/issues/112)) ([801319a](https://github.com/advoq/civm/commit/801319a2df52b7237ef09fdd246e42c2bc0f4a04))
+
 ## [1.17.2](https://github.com/advoq/civm/compare/v1.17.1...v1.17.2) (2026-06-05)
 
 
