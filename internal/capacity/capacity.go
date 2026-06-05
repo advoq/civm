@@ -4,6 +4,7 @@ package capacity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -34,6 +35,18 @@ type Report struct {
 	// RunnerPortBlocks is the best-effort slot->base map read from the port
 	// allocation state file; nil when unreadable or empty.
 	RunnerPortBlocks map[string]int `json:"runner_port_blocks,omitempty"`
+	// Admit reports the memory-admission slot occupancy (heavy_live/max_heavy)
+	// read-only by probing the flock slots (SPECv3 ITEM-7 wiring). nil when the
+	// admit status could not be sampled.
+	Admit *AdmitStatus `json:"admit,omitempty"`
+}
+
+// AdmitStatus is the read-only memory-admission view: how many of the MaxHeavy
+// flock slots are currently live (held by a heavy job). It is observability
+// only — it never blocks job acceptance.
+type AdmitStatus struct {
+	HeavyLive int `json:"heavy_live"`
+	MaxHeavy  int `json:"max_heavy"`
 }
 
 type Options struct {
@@ -48,16 +61,21 @@ type Options struct {
 	// PortBlocksFn returns the slot->base allocation map best-effort; the default
 	// reads civm.DefaultPortBlockStatePath and returns nil on any error.
 	PortBlocksFn func() map[string]int
+	// AdmitStatusFn returns the read-only admit slot occupancy; the default
+	// probes the flock slots non-destructively. Injected so tests never touch
+	// /run/civm.
+	AdmitStatusFn func() AdmitStatus
 }
 
 func DefaultOptions() Options {
 	return Options{
-		Path:         "/",
-		MaxDiskPct:   civm.DefaultCapacityMaxDiskPct,
-		StatfsFn:     defaultStatfs,
-		RunFn:        defaultRun,
-		LockActiveFn: defaultLockActive,
-		PortBlocksFn: defaultPortBlocks,
+		Path:          "/",
+		MaxDiskPct:    civm.DefaultCapacityMaxDiskPct,
+		StatfsFn:      defaultStatfs,
+		RunFn:         defaultRun,
+		LockActiveFn:  defaultLockActive,
+		PortBlocksFn:  defaultPortBlocks,
+		AdmitStatusFn: defaultAdmitStatus,
 	}
 }
 
@@ -98,6 +116,58 @@ func defaultPortBlocks() map[string]int {
 	return m
 }
 
+// defaultAdmitStatus probes the memory-admission flock slots read-only and
+// returns how many are live (held by a heavy job). It never mutates state and
+// never blocks: a free slot is taken with flock(LOCK_NB) and immediately
+// released; a busy slot reports live (SPECv3 ITEM-7 wiring, DT-v3-3 no minting).
+func defaultAdmitStatus() AdmitStatus {
+	maxHeavy := civm.DefaultAdmitMaxHeavy
+	return AdmitStatus{
+		HeavyLive: countLiveHeavySlots(civm.DefaultAdmitSlotPathPrefix, maxHeavy, probeSlotFree),
+		MaxHeavy:  maxHeavy,
+	}
+}
+
+// countLiveHeavySlots counts slots "{prefix}{1..maxHeavy}.lock" that are NOT
+// free. freeFn(path) reports (free, err); a probe error counts the slot as
+// not-live (best-effort observability, never a hard dependency).
+func countLiveHeavySlots(prefix string, maxHeavy int, freeFn func(path string) (bool, error)) int {
+	live := 0
+	for i := 1; i <= maxHeavy; i++ {
+		path := fmt.Sprintf("%s%d.lock", prefix, i)
+		free, err := freeFn(path)
+		if err != nil {
+			continue
+		}
+		if !free {
+			live++
+		}
+	}
+	return live
+}
+
+// probeSlotFree reports whether a heavy slot is free by attempting a
+// non-blocking advisory lock and releasing it immediately. A missing slot file
+// is free (no holder has ever taken it). EWOULDBLOCK means a live holder.
+func probeSlotFree(path string) (bool, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil // never claimed → free
+		}
+		return false, fmt.Errorf("capacity: abrir slot %s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return false, nil // held by a live heavy job
+		}
+		return false, fmt.Errorf("capacity: flock probe %s: %w", path, err)
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return true, nil
+}
+
 func Check(ctx context.Context, opts Options) Report {
 	if opts.Path == "" {
 		opts.Path = "/"
@@ -117,13 +187,18 @@ func Check(ctx context.Context, opts Options) Report {
 	if opts.PortBlocksFn == nil {
 		opts.PortBlocksFn = defaultPortBlocks
 	}
+	if opts.AdmitStatusFn == nil {
+		opts.AdmitStatusFn = defaultAdmitStatus
+	}
 	r := Report{DiskPath: opts.Path, AcceptingJobs: true}
-	// Lock/port telemetry is best-effort and never blocks job acceptance: a
+	// Lock/port/admit telemetry is best-effort and never blocks job acceptance: a
 	// read error leaves DockerHeavyLockActive=false (DT-v2-13).
 	active, holder, _ := opts.LockActiveFn()
 	r.DockerHeavyLockActive = active
 	r.DockerHeavyLockHolder = holder
 	r.RunnerPortBlocks = opts.PortBlocksFn()
+	admitStatus := opts.AdmitStatusFn()
+	r.Admit = &admitStatus
 	total, free, err := opts.StatfsFn(opts.Path)
 	if err != nil || total == 0 {
 		r.AcceptingJobs = false

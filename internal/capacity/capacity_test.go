@@ -144,6 +144,50 @@ func TestCheckPopulatesDockerHeavyLockActive(t *testing.T) {
 	}
 }
 
+func TestCheckPopulatesAdmitStatus(t *testing.T) {
+	r := Check(context.Background(), Options{
+		StatfsFn: func(string) (uint64, uint64, error) { return 100, 50, nil },
+		RunFn:    func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		AdmitStatusFn: func() AdmitStatus {
+			return AdmitStatus{HeavyLive: 1, MaxHeavy: 2}
+		},
+	})
+	if r.Admit == nil {
+		t.Fatalf("Admit not populated")
+	}
+	if r.Admit.HeavyLive != 1 || r.Admit.MaxHeavy != 2 {
+		t.Fatalf("admit status = %+v, want {1 2}", r.Admit)
+	}
+	var buf bytes.Buffer
+	if err := RenderJSON(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"admit"`) ||
+		!strings.Contains(buf.String(), `"heavy_live": 1`) ||
+		!strings.Contains(buf.String(), `"max_heavy": 2`) {
+		t.Fatalf("admit JSON shape missing: %s", buf.String())
+	}
+}
+
+func TestCountLiveHeavySlots(t *testing.T) {
+	// Slots 1..2: slot 1 is "held" (flock fails => live), slot 2 free.
+	held := map[string]bool{"/run/civm/admit-heavy-1.lock": true}
+	n := countLiveHeavySlots("/run/civm/admit-heavy-", 2, func(path string) (bool, error) {
+		return !held[path], nil // free => can flock
+	})
+	if n != 1 {
+		t.Fatalf("countLiveHeavySlots = %d, want 1", n)
+	}
+	// All free → 0 live.
+	if n := countLiveHeavySlots("/run/civm/admit-heavy-", 2, func(string) (bool, error) { return true, nil }); n != 0 {
+		t.Fatalf("countLiveHeavySlots(all free) = %d, want 0", n)
+	}
+	// A probe error for a slot is counted conservatively as not-live (best-effort).
+	if n := countLiveHeavySlots("/run/civm/admit-heavy-", 2, func(string) (bool, error) { return false, errors.New("io") }); n != 0 {
+		t.Fatalf("countLiveHeavySlots(probe error) = %d, want 0", n)
+	}
+}
+
 func TestCheckLockErrorLeavesInactive(t *testing.T) {
 	r := Check(context.Background(), Options{
 		StatfsFn:     func(string) (uint64, uint64, error) { return 100, 50, nil },
