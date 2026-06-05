@@ -199,6 +199,7 @@ commit, push, rollback ou alteração automática em peer repo.
 - `runbooks/PEER-ADOPTION-CHECKLIST.md` — adoção manual em peer repo
 - `templates/CIVM-USAGE.md` — fonte para `docs/CIVM.md` nos peer repos
 - `disciplines/KAHNEMAN-DISCIPLINES.md` — 12 disciplinas Sistema 1 vs 2
+- `disciplines/SUPERPROMPT.md` — superprompt de auditoria de ruído arquitetural (Kahneman + DDD)
 - `disciplines/INVARIANTS.md` — catálogo de invariantes portáveis
 
 <!-- COMMUNICATION-STYLE:BEGIN -->
