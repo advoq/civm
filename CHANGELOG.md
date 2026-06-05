@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.15.0](https://github.com/advoq/civm/compare/v1.14.2...v1.15.0) (2026-06-05)
+
+
+### Features
+
+* **memwatchdog:** monitoramento de RAM em tempo real ([d7c1b08](https://github.com/advoq/civm/commit/d7c1b08653b51bf517ae3ce6c04b38188746476e))
+* **memwatchdog:** real-time RAM pressure monitoring ([ae52277](https://github.com/advoq/civm/commit/ae52277daa1b31f57cf1a02afc9ceece62f425c1))
+* **templates:** cancel-on-pr-close workflow template ([e71bfa2](https://github.com/advoq/civm/commit/e71bfa288b053d1eb9de7ddb53a0c083726b13b0))
+* **templates:** cancel-on-pr-close workflow template ([0fef0c4](https://github.com/advoq/civm/commit/0fef0c448ae3b84b08942db0bb0fb830561a8260))
+
+
+### Bug Fixes
+
+* **host:** vhdx watchdog honors both reclaim locks before start ([#98](https://github.com/advoq/civm/issues/98)) ([4f33111](https://github.com/advoq/civm/commit/4f331118c7c6ebd16738d9fce4e4dfc18f262144))
+
+
+### Documentation
+
+* **disciplines:** add architectural-noise audit superprompt ([#96](https://github.com/advoq/civm/issues/96)) ([78bcf75](https://github.com/advoq/civm/commit/78bcf758ff2377ff21fd7b76a825ef72237a3fc9))
+* **spec:** SPECv3 host reclaim deadlock resilience ([#99](https://github.com/advoq/civm/issues/99)) ([1e882d1](https://github.com/advoq/civm/commit/1e882d1ffa6d5bae9134b0a5584a1c305fdec598))
+
 ## [1.14.2](https://github.com/advoq/civm/compare/v1.14.1...v1.14.2) (2026-06-04)
 
 
