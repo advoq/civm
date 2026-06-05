@@ -115,10 +115,18 @@ $watchdogBody = @"
 .SYNOPSIS
     civm-vhdx-optimize-watchdog: religa a VM se ela ficou Off sem reclaim ativo.
 .DESCRIPTION
-    SPECv2 DT-v2-7. A cada 5 min (SYSTEM): se a VM esta Off E nenhuma instancia
-    de civm-vhdx-optimize esta rodando, faz Start-VM incondicional e loga. Isso
-    recupera um reclaim que crashou deixando a VM Off (invariante "VM nunca fica
-    Off").
+    SPECv2 DT-v2-7. A cada 5 min (SYSTEM): se a VM esta Off E nenhuma manutencao
+    de VHDX esta ativa, faz Start-VM e loga. Isso recupera um reclaim que crashou
+    deixando a VM Off (invariante "VM nunca fica Off").
+
+    "Manutencao ativa" e checada pelos DOIS locks de reclaim — civm-vhdx-optimize
+    (civm-optimize.lock) E civm-vhdx-autoreclaim (civm-autoreclaim.lock) —, nao
+    so pela Scheduled Task civm-vhdx-optimize. O autoreclaim e quem dispara a cada
+    ciclo: ele para a VM pra Optimize-VHD e a religa no proprio finally. Religar a
+    VM no meio desse Optimize batia em 0x80070020 ("arquivo ja esta sendo usado
+    por outro processo") e era logado CRITICAL toda janela de reclaim. Um lock so
+    conta como vivo se abrir FileShare::None lanca; um arquivo orfao (reclaim que
+    morreu) abre livre e NAO impede a recuperacao da VM.
 #>
 [CmdletBinding()]
 param(
@@ -127,6 +135,11 @@ param(
 `$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 `$LogPath = 'V:\civm-hyperv-maintenance.log'
+
+# Locks de manutencao de VHDX. Mirror das constantes em civm-vhdx-optimize.ps1
+# (LockPath) e civm-vhdx-autoreclaim.ps1 (LockPath). Qualquer um vivo => um
+# reclaim e dono do estado de energia da VM; o watchdog nao interfere.
+`$MaintenanceLocks = @('V:\civm-optimize.lock', 'V:\civm-autoreclaim.lock')
 
 function Write-WatchdogLog {
     param([string]`$Event, [hashtable]`$Data = @{}, [string]`$Level = 'INFO')
@@ -142,6 +155,27 @@ function Write-WatchdogLog {
     Write-Host "`$Event `$line"
 }
 
+# Vivo == abrir FileShare::None lanca (alguem segura). Ausente ou aberto livre
+# (orfao de um reclaim que crashou) == nao impede a recuperacao da VM.
+function Test-LockHeld {
+    param([string]`$Path)
+    if (-not (Test-Path -LiteralPath `$Path)) { return `$false }
+    try {
+        `$fs = [System.IO.FileStream]::new(`$Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        `$fs.Close(); `$fs.Dispose()
+        return `$false
+    } catch {
+        return `$true
+    }
+}
+
+function Get-HeldMaintenanceLock {
+    foreach (`$lock in `$MaintenanceLocks) {
+        if (Test-LockHeld -Path `$lock) { return `$lock }
+    }
+    return `$null
+}
+
 try {
     `$state = (Get-VM -Name `$VMName -ErrorAction Stop).State
 } catch {
@@ -150,8 +184,16 @@ try {
 }
 if (`$state -eq 'Running') { exit 0 }
 
-# Is a civm-vhdx-optimize instance running? If so the reclaim owns the VM
-# state; do not interfere (it has its own guaranteed Start-VM).
+# Manutencao viva (civm-optimize.lock OU civm-autoreclaim.lock): o reclaim religa
+# a VM no proprio finally. Recuar.
+`$heldLock = Get-HeldMaintenanceLock
+if (`$null -ne `$heldLock) {
+    Write-WatchdogLog -Event 'watchdog_skip_reclaim_active' -Data @{ vm_state = "`$state"; lock = `$heldLock }
+    exit 0
+}
+
+# Defesa em profundidade: honrar tambem a Scheduled Task civm-vhdx-optimize
+# rodando, caso o lock ainda nao tenha sido materializado.
 `$reclaimRunning = `$false
 try {
     `$task = Get-ScheduledTask -TaskName 'civm-vhdx-optimize' -ErrorAction Stop
@@ -160,11 +202,11 @@ try {
 } catch {
     # Fall back to a process scan if the scheduled task is not queryable.
     `$reclaimRunning = `$null -ne (Get-Process -Name powershell -ErrorAction SilentlyContinue |
-        Where-Object { `$_.CommandLine -like '*civm-vhdx-optimize.ps1*' })
+        Where-Object { `$_.CommandLine -like '*civm-vhdx-optimize.ps1*' -or `$_.CommandLine -like '*civm-vhdx-autoreclaim.ps1*' })
 }
 
 if (`$reclaimRunning) {
-    Write-WatchdogLog -Event 'watchdog_skip_reclaim_active' -Data @{ vm_state = "`$state" }
+    Write-WatchdogLog -Event 'watchdog_skip_reclaim_active' -Data @{ vm_state = "`$state"; reason = 'optimize-task' }
     exit 0
 }
 
@@ -173,7 +215,15 @@ try {
     Start-VM -Name `$VMName -ErrorAction Stop
     Write-WatchdogLog -Event 'watchdog_start_vm_issued'
 } catch {
-    Write-WatchdogLog -Event 'watchdog_start_vm_failed' -Level 'CRITICAL' -Data @{ error = `$_.Exception.Message }
+    # 0x80070020 (ERROR_SHARING_VIOLATION): um reclaim agarrou o VHDX na janela
+    # TOCTOU entre o check de lock e o Start-VM. Transiente — um tick de 5 min
+    # depois recupera quando o lock soltar. NAO escalar pra CRITICAL.
+    `$msg = `$_.Exception.Message
+    if (`$msg -match '0x80070020' -or `$msg -match 'sendo usado por outro processo' -or `$msg -match 'being used by another process') {
+        Write-WatchdogLog -Event 'watchdog_start_vm_skipped_busy' -Level 'WARN' -Data @{ error = `$msg }
+        exit 0
+    }
+    Write-WatchdogLog -Event 'watchdog_start_vm_failed' -Level 'CRITICAL' -Data @{ error = `$msg }
     exit 1
 }
 exit 0
