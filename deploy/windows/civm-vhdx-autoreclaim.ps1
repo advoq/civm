@@ -69,6 +69,10 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
+    [string]$ReclaimLockPath = 'V:\civm-reclaim.lock',
+
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
     [string]$LogPath = 'V:\civm-hyperv-maintenance.log'
 )
 
@@ -191,6 +195,23 @@ try {
         [System.IO.FileShare]::None)
 } catch {
     Write-ReclaimLog -Event 'autoreclaim_already_running' -Level 'WARN' -Data @{ lock = $LockPath }
+    exit 0
+}
+
+# Canonical shared reclaim lock (SPECv3 DT-v3-3): mutual exclusion with
+# civm-vhdx-optimize so the two reclaimers never Stop-VM / Optimize the same
+# VHDX concurrently. Held FileShare::None; released in finally.
+$reclaimLockStream = $null
+try {
+    $reclaimLockStream = [System.IO.FileStream]::new(
+        $ReclaimLockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None)
+} catch {
+    Write-ReclaimLog -Event 'reclaim_skip_other_active' -Level 'WARN' -Data @{ lock = $ReclaimLockPath }
+    $lockStream.Close(); $lockStream.Dispose()
+    Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
     exit 0
 }
 
@@ -334,6 +355,11 @@ try {
         $lockStream.Close()
         $lockStream.Dispose()
         Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $reclaimLockStream) {
+        $reclaimLockStream.Close()
+        $reclaimLockStream.Dispose()
+        Remove-Item -LiteralPath $ReclaimLockPath -Force -ErrorAction SilentlyContinue
     }
 
     Write-ReclaimLog -Event 'autoreclaim_done' -Data @{

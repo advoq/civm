@@ -100,6 +100,7 @@ Set-StrictMode -Version Latest
 
 # --- Constants (mirror SPECv2 DT-v2-1 concrete timeouts and host paths) -------
 $LockPath        = 'V:\civm-optimize.lock'
+$ReclaimLockPath = 'V:\civm-reclaim.lock'         # SPECv3 DT-v3-3 exclusao mutua
 $LogPath         = 'V:\civm-hyperv-maintenance.log'
 $MetricsPath     = 'V:\civm-host-metrics.json'   # civm.DefaultHostMetricsFileNameOnHost
 $ShutdownWaitSec = 120                            # DT-v2-1 shutdown-wait
@@ -270,6 +271,23 @@ try {
 } catch {
     Write-CivmLog -Event 'already-running' -Level 'WARN' -Data @{ lock = $LockPath }
     exit 1
+}
+
+# 0c. Canonical shared reclaim lock (SPECv3 DT-v3-3): mutual exclusion with
+# civm-vhdx-autoreclaim so the two reclaimers never Stop-VM / Optimize the same
+# VHDX concurrently. Held FileShare::None; released in finally.
+$reclaimLockStream = $null
+try {
+    $reclaimLockStream = [System.IO.FileStream]::new(
+        $ReclaimLockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None)
+} catch {
+    Write-CivmLog -Event 'reclaim_skip_other_active' -Level 'WARN' -Data @{ lock = $ReclaimLockPath }
+    $lockStream.Close(); $lockStream.Dispose()
+    Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+    exit 0
 }
 
 # vmLeftOff escalates the FINALLY exit code: when true we must NOT run
@@ -453,6 +471,12 @@ try {
         $lockStream.Close()
         $lockStream.Dispose()
         Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+    }
+    # Release the canonical shared reclaim lock (SPECv3 DT-v3-3).
+    if ($null -ne $reclaimLockStream) {
+        $reclaimLockStream.Close()
+        $reclaimLockStream.Dispose()
+        Remove-Item -LiteralPath $ReclaimLockPath -Force -ErrorAction SilentlyContinue
     }
 }
 

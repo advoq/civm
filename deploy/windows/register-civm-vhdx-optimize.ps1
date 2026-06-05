@@ -139,7 +139,7 @@ Set-StrictMode -Version Latest
 # Locks de manutencao de VHDX. Mirror das constantes em civm-vhdx-optimize.ps1
 # (LockPath) e civm-vhdx-autoreclaim.ps1 (LockPath). Qualquer um vivo => um
 # reclaim e dono do estado de energia da VM; o watchdog nao interfere.
-`$MaintenanceLocks = @('V:\civm-optimize.lock', 'V:\civm-autoreclaim.lock')
+`$MaintenanceLocks = @('V:\civm-reclaim.lock', 'V:\civm-optimize.lock', 'V:\civm-autoreclaim.lock')
 
 function Write-WatchdogLog {
     param([string]`$Event, [hashtable]`$Data = @{}, [string]`$Level = 'INFO')
