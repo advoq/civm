@@ -100,6 +100,7 @@ Set-StrictMode -Version Latest
 
 # --- Constants (mirror SPECv2 DT-v2-1 concrete timeouts and host paths) -------
 $LockPath        = 'V:\civm-optimize.lock'
+$ReclaimLockPath = 'V:\civm-reclaim.lock'         # SPECv3 DT-v3-3 exclusao mutua
 $LogPath         = 'V:\civm-hyperv-maintenance.log'
 $MetricsPath     = 'V:\civm-host-metrics.json'   # civm.DefaultHostMetricsFileNameOnHost
 $ShutdownWaitSec = 120                            # DT-v2-1 shutdown-wait
@@ -272,6 +273,23 @@ try {
     exit 1
 }
 
+# 0c. Canonical shared reclaim lock (SPECv3 DT-v3-3): mutual exclusion with
+# civm-vhdx-autoreclaim so the two reclaimers never Stop-VM / Optimize the same
+# VHDX concurrently. Held FileShare::None; released in finally.
+$reclaimLockStream = $null
+try {
+    $reclaimLockStream = [System.IO.FileStream]::new(
+        $ReclaimLockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None)
+} catch {
+    Write-CivmLog -Event 'reclaim_skip_other_active' -Level 'WARN' -Data @{ lock = $ReclaimLockPath }
+    $lockStream.Close(); $lockStream.Dispose()
+    Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+    exit 0
+}
+
 # vmLeftOff escalates the FINALLY exit code: when true we must NOT run
 # maintenance exit and must exit non-zero (DT-v2-1).
 $vmLeftOff = $false
@@ -346,26 +364,45 @@ try {
         v_free_gb_before  = $vFreeBefore
     }
 
+    # SPECv3 DT-v3-2: campanha de medicao. O scratch high-water deste run alimenta
+    # o ScratchBudget que admite (ou nao) o caminho de emergencia do autoreclaim.
+    $scratchHighWaterGB = $null
     if ($PSCmdlet.ShouldProcess($VhdxPath, "Optimize-VHD -Mode Full")) {
+        # Baseline ao vivo (Get-PSDrive, NUNCA o JSON de 10 min): a medicao de
+        # scratch exige o numero ao vivo (red-team Finding 3).
+        $liveFreeBeforeGB = [math]::Round((Get-PSDrive V -ErrorAction Stop).Free / 1GB, 2)
+        $lowWaterGB = $liveFreeBeforeGB
+
         $optJob = Start-Job -ScriptBlock {
             param($path)
             Optimize-VHD -Path $path -Mode Full -ErrorAction Stop
         } -ArgumentList $VhdxPath
 
-        if (-not (Wait-Job -Job $optJob -Timeout $OptimizeWaitSec)) {
-            Stop-Job -Job $optJob -ErrorAction SilentlyContinue
-            Remove-Job -Job $optJob -Force -ErrorAction SilentlyContinue
-            throw "Optimize-VHD exceeded ${OptimizeWaitSec}s"
+        # Poll de 1s: amostra o MENOR V: livre durante a compactacao. NAO aborta
+        # nada (telemetria, nao controle de seguranca — DT-v3-5); Optimize-VHD e
+        # ininterruptivel. So registra o scratch high-water para recalibrar o
+        # ScratchBudget. O timeout segue como antes.
+        $optDeadline = (Get-Date).AddSeconds($OptimizeWaitSec)
+        while ($null -eq (Wait-Job -Job $optJob -Timeout 1)) {
+            $nowFreeGB = [math]::Round((Get-PSDrive V -ErrorAction SilentlyContinue).Free / 1GB, 2)
+            if ($nowFreeGB -gt 0 -and $nowFreeGB -lt $lowWaterGB) { $lowWaterGB = $nowFreeGB }
+            if ((Get-Date) -ge $optDeadline) {
+                Stop-Job -Job $optJob -ErrorAction SilentlyContinue
+                Remove-Job -Job $optJob -Force -ErrorAction SilentlyContinue
+                throw "Optimize-VHD exceeded ${OptimizeWaitSec}s"
+            }
         }
         Receive-Job -Job $optJob -ErrorAction Stop | Out-Null
         Remove-Job -Job $optJob -Force -ErrorAction SilentlyContinue
+        $scratchHighWaterGB = [math]::Round($liveFreeBeforeGB - $lowWaterGB, 2)
     }
 
     $vhdAfter = Get-VHD -Path $VhdxPath -ErrorAction Stop
     Write-CivmLog -Event 'optimize_end' -Data @{
-        vhdx               = $VhdxPath
-        file_size_gb_after = [math]::Round($vhdAfter.FileSize / 1GB, 2)
-        reclaimed_gb       = [math]::Round(($vhd.FileSize - $vhdAfter.FileSize) / 1GB, 2)
+        vhdx                  = $VhdxPath
+        file_size_gb_after    = [math]::Round($vhdAfter.FileSize / 1GB, 2)
+        reclaimed_gb          = [math]::Round(($vhd.FileSize - $vhdAfter.FileSize) / 1GB, 2)
+        scratch_high_water_gb = $scratchHighWaterGB
     }
 } catch {
     # Log the failure; the FINALLY block still guarantees Start-VM.
@@ -434,6 +471,12 @@ try {
         $lockStream.Close()
         $lockStream.Dispose()
         Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
+    }
+    # Release the canonical shared reclaim lock (SPECv3 DT-v3-3).
+    if ($null -ne $reclaimLockStream) {
+        $reclaimLockStream.Close()
+        $reclaimLockStream.Dispose()
+        Remove-Item -LiteralPath $ReclaimLockPath -Force -ErrorAction SilentlyContinue
     }
 }
 
