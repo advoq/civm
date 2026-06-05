@@ -24,9 +24,9 @@
 - ❌ Tokens de registro de runner GitHub (são ephemeral mas ainda
    secrets)
 - ❌ PAT/GitHub App private key
-- ❌ DATABASE_URL, qualquer env de produção
+- ❌ Qualquer variável de ambiente de produção
 - ❌ Senhas de usuários do sistema
-- ❌ Secrets de webhook (ASAAS, Stripe, etc)
+- ❌ Qualquer secret/token de serviço de terceiros
 
 ## Onde VALORES reais ficam
 

@@ -15,13 +15,13 @@ issues: []
 
 ## 1. Resumo
 
-O civm é um runner self-hosted compartilhado por múltiplos repos peer (advoq, vitae, compexhub) numa **única VM, com um único daemon Docker e um único disco** (Confirmado em docs — `runbooks/MULTI-PROJECT-RUNNER.md:393-397`). Hoje, todo o isolamento de trabalho docker-heavy entre projetos concorrentes é **delegado à disciplina do consumidor**: o runbook manda "sempre passar `--project-name <repo>-<run-id>`" e "nunca bindar portas fixas", mas o civm **não fornece, não injeta e não verifica** nada disso (Confirmado em docs — `MULTI-PROJECT-RUNNER.md:398-424`).
+O civm é um runner self-hosted compartilhado por múltiplos repos peer (advoq, vitae) numa **única VM, com um único daemon Docker e um único disco** (Confirmado em docs — `runbooks/MULTI-PROJECT-RUNNER.md:393-397`). Hoje, todo o isolamento de trabalho docker-heavy entre projetos concorrentes é **delegado à disciplina do consumidor**: o runbook manda "sempre passar `--project-name <repo>-<run-id>`" e "nunca bindar portas fixas", mas o civm **não fornece, não injeta e não verifica** nada disso (Confirmado em docs — `MULTI-PROJECT-RUNNER.md:398-424`).
 
 Essa é uma guardrail por convenção, não por construção — e ela falha de forma observável. O `advoq#1006` existe exatamente porque o advoq não seguiu a regra não-fornecida: `infra/docker-compose.yml` fixa `name: advoq`, 24 `container_name: advoq-*` e portas de host estáticas, sem nenhum `COMPOSE_PROJECT_NAME` em lugar nenhum (Confirmado no codebase — advoq `infra/docker-compose.yml:1`, `tools/devctl/internal/ci/run.go:155-162,731-751`). Resultado: dois jobs docker-heavy co-residentes colidem em nome de container, rede, volume e porta de host, e o build de ~40 min satura o daemon/disco — derrubando justamente o gate de **isolamento de tenant**, a defesa de maior severidade do produto.
 
-O problema é estrutural e **comum a todos os peers**, não específico do advoq. Vitae e compexhub têm o mesmo footgun latente assim que rodarem `docker compose` no runner. A auditoria também confirmou que o civm **não tem nenhum primitivo de serialização** para trabalho docker-heavy (activeruns/reversewatchdog/idle são read-only; capacity é hard-fail passivo a 90%; cleanup dispara a 60%) (Confirmado no codebase — `internal/activeruns/activeruns.go`, `internal/reversewatchdog/reversewatchdog.go`, `internal/civm/civm.go:37-40`), e que um lock segurado por um bring-up longo pode **starvar o próprio disk-watchdog/cleanup do civm** até o hard-fail de 90% (Confirmado em docs — advoq `docs/specs/M48/1006-...PRD.md:307`).
+O problema é estrutural e **comum a todos os peers**, não específico do advoq. Vitae tem o mesmo footgun latente assim que rodar `docker compose` no runner. A auditoria também confirmou que o civm **não tem nenhum primitivo de serialização** para trabalho docker-heavy (activeruns/reversewatchdog/idle são read-only; capacity é hard-fail passivo a 90%; cleanup dispara a 60%) (Confirmado no codebase — `internal/activeruns/activeruns.go`, `internal/reversewatchdog/reversewatchdog.go`, `internal/civm/civm.go:37-40`), e que um lock segurado por um bring-up longo pode **starvar o próprio disk-watchdog/cleanup do civm** até o hard-fail de 90% (Confirmado em docs — advoq `docs/specs/M48/1006-...PRD.md:307`).
 
-Este PRD move o isolamento docker-heavy **para dentro do civm como primitivo de primeira classe**: **fornecido** (cada runner recebe identidade e faixa de porta disjuntas via `.env`), **enforced** (um linter recusa compose/workflow de peer que viole as invariantes) e **observável** (lock-wait/hold, colisões, faixa de porta em `capacity --json`/`hooks.jsonl`). O objetivo é que advoq/vitae/compexhub tenham CI docker-heavy **correto por padrão, livre de colisão e fail-safe**, consumindo um contrato único publicado em vez de cada repo re-implementar (errado) a disciplina.
+Este PRD move o isolamento docker-heavy **para dentro do civm como primitivo de primeira classe**: **fornecido** (cada runner recebe identidade e faixa de porta disjuntas via `.env`), **enforced** (um linter recusa compose/workflow de peer que viole as invariantes) e **observável** (lock-wait/hold, colisões, faixa de porta em `capacity --json`/`hooks.jsonl`). O objetivo é que advoq/vitae tenham CI docker-heavy **correto por padrão, livre de colisão e fail-safe**, consumindo um contrato único publicado em vez de cada repo re-implementar (errado) a disciplina.
 
 Valor: o civm passa a "funcionar de forma linda nos repos" — o peer não precisa entender a física do daemon compartilhado; ele consome `CIVM_PORT_BASE`/`COMPOSE_PROJECT_NAME` e `civmctl lock`, e o `ci-guard` o impede de mergear uma config colidível. O `advoq#1006` deixa de ser um fix local e vira um **consumidor fino** deste primitivo.
 
@@ -101,7 +101,7 @@ N/A para persistência. O que está em jogo é a **integridade dos gates** de ca
 | **Manter "isolamento por disciplina" só adicionando o linter** | Meia-medida: não dá ao consumidor um primitivo de porta/lock; cada repo ainda hand-rolla portas e flock, divergindo. O advoq#1006 nasceu desse modelo. |
 | **dockerd rootless / `DOCKER_HOST` por runner (isolamento real de daemon)** | Eliminaria toda disciplina de porta, mas multiplica imagens/cache/disco numa VM que já bate hard-fail a 90%; caveats de rede/perf rootless. Inviável no VM 128GB single-daemon atual. **Deferido** atrás de gate de expansão de disco/RAM. |
 | **Injeção per-run dinâmica via hook de job** | Impossível: hooks rodam em processo separado e não exportam env para steps (Confirmado no codebase — `hook.go`). |
-| **Fix só no advoq (#1006), runbook continua imperativo** | Deixa vitae/compexhub expostos ao mesmo footgun; mantém caminho de lock divergente; contraria o pedido explícito de corrigir a raiz no civm. |
+| **Fix só no advoq (#1006), runbook continua imperativo** | Deixa vitae exposto ao mesmo footgun; mantém caminho de lock divergente; contraria o pedido explícito de corrigir a raiz no civm. |
 | **Lock como `sync.Mutex`/flag em `/tmp`** | `sync.Mutex` não cruza processos; flag em `/tmp` não tem semântica de stale/heartbeat. `syscall.Flock` em `/run/civm/` é o primitivo correto e auditável. |
 | **`COMPOSE_PROJECT_NAME` per-runner sem `$GITHUB_RUN_ID`** | Protege cross-repo, mas um leftover de job crashado no mesmo runner colidiria com o próximo bring-up. Per-run (`<slot>-<run_id>`) + remoção de `container_name` fixo no consumidor fecha o gap. |
 
@@ -189,7 +189,7 @@ Reescrever `MULTI-PROJECT-RUNNER.md` (§Riscos compartilhados → §Isolamento f
 
 - `CIVM_PORT_BASE` por runner torna a stack horizontalmente segura para N runners co-residentes. Bloco de ~64 portas/runner cobre a maior stack peer com folga.
 - O lock limita trabalho docker-heavy concorrente a 1 para proteger daemon/disco único; o detector de changes de cada peer limita frequência; a classe de runner dedicada dá slot próprio ao pesado.
-- Comportamento com N peers: o lock só agrega valor se peers de fato rodam compose docker-heavy no mesmo box (lacuna aberta — confirmar vitae/compexhub).
+- Comportamento com N peers: o lock só agrega valor se peers de fato rodam compose docker-heavy no mesmo box (lacuna aberta — confirmar vitae).
 
 ### LGPD
 
@@ -219,7 +219,7 @@ Reescrever `MULTI-PROJECT-RUNNER.md` (§Riscos compartilhados → §Isolamento f
 ### Fluxos alternativos
 
 - **Runner dedicado `civm-e2e` ausente:** job pesado roda no `civm` geral; RF-1 (porta/projeto) + RF-2 (lock) carregam a maior parte do benefício; `doctor` sinaliza ausência.
-- **Peer sem docker-heavy (ex.: compexhub usa Neon serverless):** `ci-guard` passa trivialmente; lock não é adquirido; nenhum overhead.
+- **Peer sem docker-heavy (ex.: stack serverless):** `ci-guard` passa trivialmente; lock não é adquirido; nenhum overhead.
 
 ### Fluxos de erro
 
@@ -284,7 +284,7 @@ Sem endpoint HTTP, schema OpenAPI/SDK ou evento Redis. As interfaces são contra
 
 ### Pré-requisitos
 
-- Confirmar se vitae/compexhub de fato rodam compose docker-heavy no box (lacuna aberta) — define quanto o lock agrega cross-repo.
+- Confirmar se vitae de fato roda compose docker-heavy no box (lacuna aberta) — define quanto o lock agrega cross-repo.
 - Operador roda `civmctl hook install --execute` + `self-upgrade` para distribuir o binário com as novas chaves/lock.
 
 ### Riscos técnicos (com mitigação)

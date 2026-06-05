@@ -12,7 +12,7 @@
 >
 > **Modelo conceitual:** o gate de verdade de cada peer roda no laptop
 > ANTES de push (cada projeto define o seu — npm script, devctl Go,
-> compexhubctl, etc). Este runbook NAO descreve gate alternativo de
+> etc). Este runbook NAO descreve gate alternativo de
 > validacao. Descreve **como manter o checkmark verde no PR** quando
 > GitHub Actions billing esta bloqueado, porque branch protection
 > precisa de algo verde mas a validacao real ja aconteceu antes do
@@ -37,9 +37,9 @@
 > **Camada 2 — manual:** quando a Camada 1 nao bastar (ex.: civm
 > offline OU peer novo sem workflow refatorado), o admin roda o gate
 > local do peer e posta check manual informativo na PR via gh api.
-> Cada peer mantem seu "manual reporter" (compexhub:
-> `compexhubctl ci local --report-pr <N>`; advoq: `devctl ...`;
-> vitae: script proprio). Camada 2 NAO e' uniforme entre peers.
+> Cada peer mantem seu "manual reporter" (advoq:
+> `devctl ci local --report-pr <N>`; vitae: script proprio). Camada 2
+> NAO e' uniforme entre peers.
 >
 > **Camada 3 — CI pago com aprovacao:** quando o plano GitHub permitir
 > `required_reviewers` em Environments de repo privado, o peer pode usar
@@ -83,7 +83,7 @@ runs), heuristica retorna `BillingUnknown` e roteamento e' default-remote
 (ubuntu-latest). Em payment failure no primeiro PR, o ci-router roda em
 civm, ubuntu-latest tenta e falha em <10s, e o aggregator canonico
 `Gates (typecheck, test, build, invariants)` falha. Operador entao roda
-`compexhubctl ci local --report-pr <N>` (Camada 2). Aceitavel — caso
+`devctl ci local --report-pr <N>` (Camada 2). Aceitavel — caso
 edge, primeira sessao.
 
 Se o trade-off virar problema (>1 falso negativo por mes), reavaliar
@@ -125,10 +125,10 @@ padrão e devolve `ok`.
 ## Fallback manual: rodar local + reportar para PR
 
 Quando billing está bloqueado, o gate de merge passa a ser
-`compexhubctl ci local --report-pr <N>`:
+`devctl ci local --report-pr <N>`:
 
 ```bash
-go run ./tools/compexhubctl ci local --report-pr 42
+go run ./tools/devctl ci local --report-pr 42
 ```
 
 Comportamento:
@@ -155,7 +155,7 @@ pelo reporter do peer, conclusion `success` e summary dos gates.
 Quando o agente roda em modo autônomo e quer fluxo zero-touch:
 
 ```bash
-go run ./tools/compexhubctl ci local --auto-fallback --report-pr 42
+go run ./tools/devctl ci local --auto-fallback --report-pr 42
 ```
 
 Comportamento:
@@ -301,7 +301,7 @@ workflow refatorado ainda nao esta presente, usar a Camada 2 manual:
 
 1. Manter branch protection exigindo `Gates (typecheck, test, build,
    invariants)` quando o workflow existir.
-2. Operador roda `compexhubctl ci local --report-pr <N>`.
+2. Operador roda `devctl ci local --report-pr <N>`.
 3. Check manual aparece na PR com conclusion=success/failure.
 4. Se o workflow `Gates` estiver indisponivel, humano decide a excecao
    de merge com base no check manual e registra o motivo no PR.
@@ -346,7 +346,7 @@ em todos os caminhos.
 mais de 3 runs consecutivos (deve ser <5s), inspecionar gh CLI no
 civm (rede, auth, rate limit). Se civm ficar offline >1h, abrir
 incidente — o gate `Gates` nao consegue rodar e merge fica travado.
-Mitigacao temporaria: usar Camada 2 (`compexhubctl ci local --report-pr`)
+Mitigacao temporaria: usar Camada 2 (`devctl ci local --report-pr`)
 ate civm voltar, com excecao humana registrada no PR.
 
 **Falso negativo da heuristica:** se a heuristica reportar `BillingOK`
@@ -363,10 +363,10 @@ Migracao seria nova SPEC + ADR justificando o trade-off.
 civmctl billing-status --repo=<owner>/<repo> --workflow=ci.yml
 
 # Posting manual de check
-go run ./tools/compexhubctl ci local --report-pr 42
+go run ./tools/devctl ci local --report-pr 42
 
 # Fluxo combinado (autonomy mode)
-go run ./tools/compexhubctl ci local --auto-fallback --report-pr 42
+go run ./tools/devctl ci local --auto-fallback --report-pr 42
 
 # Verificar checks postadas em uma PR (debug)
 gh api repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/commits/$(gh pr view 42 --json headRefOid -q .headRefOid)/check-runs --jq '.check_runs[] | {name, status, conclusion}'
@@ -376,7 +376,7 @@ gh api repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/commits/$(gh
 
 - **2026-05-10** — Primeira versão. Criada após billing block em
   2026-05-09 que bloqueou run 25611144720 e impediu janela de
-  contagem do gate Tier-3 de M5. Camada 2 (manual `compexhubctl ci
+  contagem do gate Tier-3 de M5. Camada 2 (manual `devctl ci
   local --report-pr`) entregue.
 - **2026-05-10 (mesma sessao)** — Camada 1 entregue: refatoracao do
   ci.yml com job `ci-router` em civm usando heuristica via gh

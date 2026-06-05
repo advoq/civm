@@ -18,7 +18,7 @@
 >
 > **Companion runbooks:**
 > - [`CI-BILLING-FALLBACK.md`](./CI-BILLING-FALLBACK.md) — Camada 1+2 do
->   mirror visivel no GitHub (compexhub-specific).
+>   mirror visivel no GitHub (peer-specific).
 > - [`LOCAL-CI-DISCIPLINE.md`](./LOCAL-CI-DISCIPLINE.md) — gate local do
 >   peer como validacao real do projeto (mandatorio antes de push).
 
@@ -155,7 +155,7 @@ A partir de 2026-05-10, **provisionamento e cleanup são automatizados** via
 # Numa VM Ubuntu 24.04 LTS limpa, como root:
 
 # 1. Build civmctl (uma vez; precisa Go ≥ 1.26 instalado manualmente OU
-#    rodar bootstrap do compexhub que ja tem Go).
+#    rodar bootstrap do advoq que ja tem Go).
 git clone https://github.com/advoq/civm.git /opt/civm
 cd /opt/civm && go build -o /usr/local/bin/civmctl ./cmd/civmctl
 
@@ -403,8 +403,8 @@ volumes podem colidir** se múltiplos repos usarem o mesmo `--project-name`.
 docker compose --project-name "${GITHUB_REPOSITORY##*/}-${GITHUB_RUN_ID}" up -d
 ```
 
-Em compexhub o ci.yml atual **não roda docker compose** (integration usa
-NEON serverless externo), então o risco é zero. Para vitae/advoq <!-- invariant-waive:#11 -- runbook lista projetos peer no runner -->, **se
+Um peer cujo ci.yml **não roda docker compose** (ex.: integration usando
+stack serverless externo) tem risco zero. Para vitae/advoq <!-- invariant-waive:#11 -- runbook lista projetos peer no runner -->, **se
 precisarem docker**, exigir essa convenção em cada step que invoca
 compose.
 
@@ -808,7 +808,7 @@ find /home/*/actions-runner-*/_work/_temp -mtime +7 -delete
 
 ## Como vitae e advoq adotam o padrão router <!-- invariant-waive:#11 -- secao operacional descreve adocao por repos peer -->
 
-O `.github/workflows/ci.yml` do compexhub é o template de referência.
+O `.github/workflows/ci.yml` do advoq é o template de referência.
 Estrutura mínima a copiar:
 
 1. Job `ci-router` em `runs-on: [self-hosted, civm]` que classifica
@@ -844,10 +844,10 @@ extra. Tier 3 é o único que funciona mesmo se o token estiver indisponível
 
 ## Checklist de adoção (por repo)
 
-Para cada repo (compexhub, vitae, advoq) que vai usar civm: <!-- invariant-waive:#11 -- checklist enumera repos peer -->
+Para cada repo (vitae, advoq) que vai usar civm: <!-- invariant-waive:#11 -- checklist enumera repos peer -->
 
 - [ ] Runner registrado e online (verificar via `gh api repos/<owner>/<repo>/actions/runners`)
-- [ ] Workflow `ci.yml` adota router pattern (template do compexhub)
+- [ ] Workflow `ci.yml` adota router pattern (template do advoq)
 - [ ] `civmctl billing-status` chamavel no workflow
 - [ ] Branch protection rule de `main`:
   - [ ] `Require status checks to pass before merging` habilitado
@@ -888,7 +888,7 @@ Heurística inicial:
 | Repos ativos | Workflows típicos | Runners recomendados |
 |---|---|---|
 | 1 | 1 PR/dia | 1-2 |
-| 3 (compexhub + vitae + advoq) | 3-5 PR/dia, alguns simultâneos | 3-5 | <!-- invariant-waive:#11 -- linha de capacity planning lista repos peer -->
+| 2 (vitae + advoq) | 3-5 PR/dia, alguns simultâneos | 3-5 | <!-- invariant-waive:#11 -- linha de capacity planning lista repos peer -->
 | 5+ | dezenas de PR | 5-10 + monitoramento de queue |
 
 Métrica de stress: `gh run list --status queued --jq 'length'` retornar
@@ -913,7 +913,7 @@ Cada caso reabre este runbook + atualiza secão Capacity planning.
 ## Histórico
 
 - **2026-05-10** — Primeira versão. Criada após pedido de unificar
-  CI de compexhub + vitae + advoq no mesmo runner self-hosted. <!-- invariant-waive:#11 -- entrada de historico explicita escopo de adocao -->
+  CI de vitae + advoq no mesmo runner self-hosted. <!-- invariant-waive:#11 -- entrada de historico explicita escopo de adocao -->
   Companion da Camada 1 entregue em ci.yml refactor (commit `7e5835e`).
 
 ## Hooks de job e contrato de integração
