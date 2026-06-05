@@ -107,6 +107,24 @@ func Check(ctx context.Context, opts Options) Result {
 	return res
 }
 
+// Sample reads /proc/meminfo (via MeminfoFn) and returns the parsed, MB-
+// normalized Meminfo without classifying pressure. Admission uses it to compute
+// the generous MemoryMax (MemTotal − host)/MaxHeavy without duplicating the
+// parser. A read or parse failure is returned to the caller (no thresholds, no
+// Decision). Check/thresholds are untouched.
+func Sample(opts Options) (Meminfo, error) {
+	applyDefaults(&opts)
+	raw, err := opts.MeminfoFn()
+	if err != nil {
+		return Meminfo{}, fmt.Errorf("memwatchdog: ler meminfo: %w", err)
+	}
+	mem, err := parseMeminfo(raw)
+	if err != nil {
+		return Meminfo{}, fmt.Errorf("memwatchdog: parse meminfo: %w", err)
+	}
+	return mem, nil
+}
+
 func classify(m Meminfo, opts Options) (Decision, string) {
 	if m.AvailPct < opts.CritAvailPct {
 		return DecisionCritical, fmt.Sprintf("mem-available %d%% < %d%%", m.AvailPct, opts.CritAvailPct)

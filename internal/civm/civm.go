@@ -115,6 +115,28 @@ const (
 	// > 3× este valor OU PID morto OU pidStartTicks divergente (SPECv2 DT-v2-1/3).
 	DefaultDockerHeavyHeartbeatSeconds = 30
 
+	// Admissão de jobs por memória (docs/specs/runner-memory-admission/SPECv3.md,
+	// §Constantes). `civmctl admit` envelopa o job num service transiente
+	// (sudo systemd-run --pipe -p MemoryMax) com no máximo DefaultAdmitMaxHeavy
+	// jobs heavy concorrentes, serializados por N flock-slots fixos. light flui
+	// sem slot. Liveness = o flock (liberado pelo kernel na morte); sem heartbeat.
+	DefaultAdmitMaxHeavy = 2 // teto = nº de slots de flock (invariante: >=1)
+	// RAM reservada ao host/SO; MemoryMax efetivo = (MemTotal - isto)/MaxHeavy
+	// quando HeavyMaxMB não foi calibrado (DT-v3-5). Invariante: >0.
+	DefaultAdmitHostReserveMB = 2048
+	// 0 => MemoryMax generoso (MemTotal-host)/MaxHeavy até o pico RSS ser medido
+	// sob carga (DT-v3-5: safe-by-default, não mata job legítimo antes de calibrar).
+	DefaultAdmitHeavyMaxMB = 0
+	// WaitBudget: depois disso Acquire retorna exit tipado exitAdmitWaitTimeout
+	// (DT-v3-3: nunca cria slot N+1, nunca trava; o job-timeout do runner decide).
+	DefaultAdmitWaitMinutes = 30
+	// Prefixo dos N slots de flock heavy: + "{1..MaxHeavy}.lock". O arquivo grava
+	// o nome da unit systemd para co-terminação e reap-on-reuse (DT-v3-2).
+	DefaultAdmitSlotPathPrefix = "/run/civm/admit-heavy-"
+	// Sub-slot docker count=1 do próprio admit (DT-v3-8): --exclusive=docker
+	// serializa docker-heavy sem o dockerlock legado de 75 min.
+	DefaultAdmitDockerSlotPath = "/run/civm/admit-docker.lock"
+
 	// Escalada de remoção privilegiada para arquivos root-owned no _work
 	// (docs/specs/civm-runner-reliability, DT-v2-1/3/5/8). Steps CI que rodam
 	// como root dentro de containers gravam arquivos no _work montado que o

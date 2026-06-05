@@ -103,6 +103,8 @@ func main() {
 		os.Exit(runReapRuns(args))
 	case "lock":
 		os.Exit(runLock(args))
+	case "admit":
+		os.Exit(runAdmit(args))
 	case "-h", "--help", "help":
 		printHelp()
 		os.Exit(0)
@@ -149,6 +151,7 @@ COMANDOS
   ci-guard        Lint de compose/workflow do peer contra invariantes de isolamento
   reap-runs       Cancela runs queued/in_progress de PRs ja fechados (libera o runner compartilhado)
   lock            Serializa trabalho docker-heavy (acquire/release/--exec com heartbeat + budget)
+  admit           Admite job memory-heavy em slot (cgroup MemoryMax via systemd-run; max 2 heavy, light flui)
   help            Esta mensagem
 
 EXEMPLOS
@@ -196,6 +199,8 @@ EXEMPLOS
   sudo civmctl self-upgrade --execute
   civmctl ci-guard --repo-root . --mode report --json
   civmctl lock --exec --scope docker-heavy --budget 50m --wait 75m -- make up-local
+  civmctl admit --weight heavy --exec -- make test
+  civmctl admit --weight auto --exclusive docker --wait-minutes 30 --exec -- make up-local
 
 DOCUMENTACAO
   PRD/SPEC: docs/specs/civmctl/
