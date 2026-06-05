@@ -156,6 +156,11 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 		worst = maxSeverity(worst, sev)
 	}
 
+	// SPECv3 ITEM-7: cgroup v2 + run-as-runner-user (DT-v3-1) + RAM-fit invariant.
+	admitChecks, admitSeverity := collectAdmitChecks(ctx, opts)
+	report.HostChecks = append(report.HostChecks, admitChecks...)
+	worst = maxSeverity(worst, admitSeverity)
+
 	systemd, systemdErr := opts.SystemRunnersFn(ctx)
 	if systemdErr != nil {
 		worst = maxSeverity(worst, SeverityWarning)

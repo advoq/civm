@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -339,6 +340,139 @@ func TestCheckScopedSudoersCapabilityProbe(t *testing.T) {
 	}
 }
 
+func TestCheckAdmitCgroup(t *testing.T) {
+	t.Parallel()
+	// cgroup v2 with memory controller → OK.
+	okOpts := DefaultOptions()
+	okOpts.ReadFileFn = func(path string) ([]byte, error) {
+		if path == cgroupControllersPath {
+			return []byte("cpuset cpu io memory pids\n"), nil
+		}
+		return nil, errors.New("unexpected: " + path)
+	}
+	if c := checkAdmitCgroup(okOpts); c.Severity != string(SeverityOK) {
+		t.Fatalf("cgroup v2 + memory should be OK, got %+v", c)
+	}
+	// cgroup v2 present but no memory controller → WARN (degraded, DT-v3-6).
+	noMem := DefaultOptions()
+	noMem.ReadFileFn = func(string) ([]byte, error) { return []byte("cpuset cpu io pids\n"), nil }
+	if c := checkAdmitCgroup(noMem); c.Severity != string(SeverityWarning) {
+		t.Fatalf("missing memory controller should WARN, got %+v", c)
+	}
+	// No cgroup2 file at all → WARN (admit degrades to watchdog-gated, DT-v3-6).
+	absent := DefaultOptions()
+	absent.ReadFileFn = func(string) ([]byte, error) { return nil, os.ErrNotExist }
+	if c := checkAdmitCgroup(absent); c.Severity != string(SeverityWarning) {
+		t.Fatalf("absent cgroup2 should WARN (degraded), got %+v", c)
+	}
+}
+
+func TestCheckAdmitRunAsUser(t *testing.T) {
+	t.Parallel()
+	// systemd-run --pipe -p MemoryMax runs as the runner user (NOT root) → OK,
+	// and it must use a SERVICE (--pipe), never --scope (DT-v3-1).
+	var got string
+	okOpts := DefaultOptions()
+	okOpts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		got = strings.Join(append([]string{name}, args...), " ")
+		return []byte("emdev\n"), nil
+	}
+	c := checkAdmitRunAsUser(context.Background(), okOpts, "emdev")
+	if c.Severity != string(SeverityOK) {
+		t.Fatalf("run-as-user emdev should be OK, got %+v", c)
+	}
+	if strings.Contains(got, "--scope") {
+		t.Fatalf("probe must not use --scope (runs as root): %q", got)
+	}
+	if !strings.Contains(got, "--pipe") || !strings.Contains(got, "MemoryMax=") {
+		t.Fatalf("probe must use --pipe -p MemoryMax: %q", got)
+	}
+
+	// Probe returns root → CRITICAL (the v2 footgun this whole SPEC fixes).
+	rootOpts := DefaultOptions()
+	rootOpts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return []byte("root\n"), nil }
+	if c := checkAdmitRunAsUser(context.Background(), rootOpts, "emdev"); c.Severity != string(SeverityCritical) {
+		t.Fatalf("run-as root should be CRITICAL, got %+v", c)
+	}
+
+	// Probe command fails (no NOPASSWD / no systemd-run) → WARN (capability gone).
+	failOpts := DefaultOptions()
+	failOpts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New("sudo: password required")
+	}
+	if c := checkAdmitRunAsUser(context.Background(), failOpts, "emdev"); c.Severity != string(SeverityWarning) {
+		t.Fatalf("probe failure should WARN, got %+v", c)
+	}
+}
+
+func TestCheckAdmitRAMInvariant(t *testing.T) {
+	t.Parallel()
+	// MaxHeavy × effMB <= MemTotal − host holds → OK. 16GB total, 2GB host,
+	// generous effMB=(16384-2048)/2=7168, 2×7168=14336 <= 14336. OK.
+	okOpts := DefaultOptions()
+	okOpts.ReadFileFn = func(path string) ([]byte, error) {
+		if path == meminfoPath {
+			return []byte("MemTotal:       16777216 kB\nMemAvailable:    8388608 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n"), nil
+		}
+		return nil, errors.New("unexpected: " + path)
+	}
+	if c := checkAdmitRAMInvariant(okOpts); c.Severity != string(SeverityOK) {
+		t.Fatalf("RAM invariant should hold for 16GB host, got %+v", c)
+	}
+	// Meminfo unreadable → WARN (cannot verify; never crashes doctor).
+	badOpts := DefaultOptions()
+	badOpts.ReadFileFn = func(string) ([]byte, error) { return nil, os.ErrNotExist }
+	if c := checkAdmitRAMInvariant(badOpts); c.Severity != string(SeverityWarning) {
+		t.Fatalf("unreadable meminfo should WARN, got %+v", c)
+	}
+}
+
+func TestCollectIncludesAdmitHostChecks(t *testing.T) {
+	t.Parallel()
+	opts := DefaultOptions()
+	opts.Repos = []string{"advoq/civm"}
+	opts.HealthFn = func(context.Context) health.Report {
+		return health.Report{Checks: []health.Check{{Name: "DISK", Detail: "ok", Status: health.StatusOK}}}
+	}
+	opts.SystemRunnersFn = func(context.Context) ([]runner.Status, error) {
+		return []runner.Status{{UnitName: "actions.runner.advoq-civm.civm-self.service", Repo: "advoq/civm", Name: "civm-self", ActiveState: "active", SubState: "running"}}, nil
+	}
+	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]GitHubRunner, error) {
+		return []GitHubRunner{{Repo: repo, Name: "civm-self", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
+	}
+	stubHookContractOK(&opts)
+	// stubHookContractOK only stubs the hook paths; extend ReadFileFn for the
+	// admit probes (cgroup + meminfo) so Collect exercises the admit checks.
+	base := opts.ReadFileFn
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		switch path {
+		case cgroupControllersPath:
+			return []byte("cpu memory pids\n"), nil
+		case meminfoPath:
+			return []byte("MemTotal: 16777216 kB\nMemAvailable: 8388608 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n"), nil
+		default:
+			return base(path)
+		}
+	}
+	// RunFn is used by both SCOPED_SUDOERS and the run-as-user probe; emdev keeps
+	// both green.
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return []byte("emdev\n"), nil }
+
+	report, err := Collect(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Collect err = %v", err)
+	}
+	names := map[string]bool{}
+	for _, c := range report.HostChecks {
+		names[c.Name] = true
+	}
+	for _, want := range []string{"ADMIT_CGROUP", "ADMIT_RUN_AS_USER", "ADMIT_RAM_INVARIANT"} {
+		if !names[want] {
+			t.Fatalf("missing admit host check %q in %+v", want, report.HostChecks)
+		}
+	}
+}
+
 func assertHookCheck(t *testing.T, report Report, name string, severity Severity, detailContains string) {
 	t.Helper()
 	for _, check := range report.HookChecks {
@@ -353,10 +487,11 @@ func assertHookCheck(t *testing.T, report Report, name string, severity Severity
 }
 
 func stubHookContractOK(opts *Options) {
-	// The SCOPED_SUDOERS check runs the safedelete capability probe via RunFn;
-	// mock it as present so the hook contract reads fully green.
+	// The SCOPED_SUDOERS check and the ADMIT_RUN_AS_USER probe both run via RunFn.
+	// "emdev\n" keeps both green: safedelete --check exits 0 (output ignored) and
+	// the systemd-run probe reports the runner user (not root).
 	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
-		return nil, nil
+		return []byte("emdev\n"), nil
 	}
 	opts.GlobFn = func(string) ([]string, error) {
 		return []string{"/home/emdev/actions-runner"}, nil
@@ -373,6 +508,10 @@ func stubHookContractOK(opts *Options) {
 				"ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh",
 				"",
 			}, "\n")), nil
+		case cgroupControllersPath:
+			return []byte("cpu memory pids\n"), nil
+		case meminfoPath:
+			return []byte("MemTotal: 16777216 kB\nMemAvailable: 8388608 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n"), nil
 		default:
 			return nil, errors.New("unexpected read path: " + path)
 		}

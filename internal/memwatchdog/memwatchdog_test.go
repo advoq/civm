@@ -92,6 +92,47 @@ func TestMeminfoParseErrorIsCritical(t *testing.T) {
 	}
 }
 
+func TestSampleReturnsParsedMeminfo(t *testing.T) {
+	mem, err := Sample(Options{
+		MeminfoFn: func() (string, error) {
+			return mk(10_485_760 /*10GiB*/, 8_388_608 /*8GiB*/, 2_097_152 /*2GiB*/, 1_048_576 /*1GiB free*/), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Sample err = %v", err)
+	}
+	if mem.MemTotalMB != 10240 {
+		t.Errorf("MemTotalMB = %d, want 10240", mem.MemTotalMB)
+	}
+	if mem.MemAvailableMB != 8192 {
+		t.Errorf("MemAvailableMB = %d, want 8192", mem.MemAvailableMB)
+	}
+	if mem.SwapUsedMB != 1024 {
+		t.Errorf("SwapUsedMB = %d, want 1024", mem.SwapUsedMB)
+	}
+}
+
+func TestSamplePropagatesReadError(t *testing.T) {
+	_, err := Sample(Options{
+		MeminfoFn: func() (string, error) { return "", fmt.Errorf("boom") },
+	})
+	if err == nil {
+		t.Fatalf("Sample err = nil, want propagated read error")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("Sample err = %v, want wrapped boom", err)
+	}
+}
+
+func TestSampleParseErrorPropagates(t *testing.T) {
+	_, err := Sample(Options{
+		MeminfoFn: func() (string, error) { return "garbage without fields\n", nil },
+	})
+	if err == nil {
+		t.Fatalf("Sample err = nil, want parse error")
+	}
+}
+
 func TestRenderAndJSON(t *testing.T) {
 	res := checkWith(t, mk(10_000_000, 8_200_000, 2_097_152, 2_097_152))
 	var human strings.Builder
