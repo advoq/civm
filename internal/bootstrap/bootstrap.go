@@ -45,6 +45,7 @@ type Options struct {
 	RunnerWatchdog   bool   // habilita civmctl-runner-watchdog.timer
 	MetricsTimer     bool   // habilita civmctl-metrics.timer
 	RunReaper        bool   // habilita civmctl-run-reaper.timer (cancela runs de PR fechado)
+	MemWatchdog      bool   // habilita civmctl-mem-watchdog.timer (monitora pressao de RAM/swap)
 	InstallUnitsFrom string // se nao-vazio, copia .service/.timer de PATH para /etc/systemd/system/ antes de enable
 	OSReader         func() (string, error)
 	RunFn            func(ctx context.Context, name string, args ...string) ([]byte, error)
@@ -63,6 +64,7 @@ func DefaultOptions() Options {
 		RunnerWatchdog:   true,
 		MetricsTimer:     true,
 		RunReaper:        true,
+		MemWatchdog:      true,
 		InstallUnitsFrom: "", // assume admin ja copiou; pode setar pra automatizar
 		OSReader:         defaultOSReader,
 		RunFn:            defaultRun,
@@ -292,6 +294,9 @@ func timerList(opts Options) []string {
 	}
 	if opts.RunReaper {
 		timers = append(timers, "civmctl-run-reaper.timer")
+	}
+	if opts.MemWatchdog {
+		timers = append(timers, "civmctl-mem-watchdog.timer")
 	}
 	return timers
 }
