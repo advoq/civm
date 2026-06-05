@@ -1,12 +1,10 @@
 # SSDV3 — Spec-Driven Development: Prompts Base
 
-> **Template de metodologia portátil mantido pelo `civm`.** A metodologia (PRD → SPEC → IMPL) é o que importa e é independente de stack. O `civm` em si é um repo **Go de infra** (Go 1.26 stdlib-first, `cmd/civmctl/` + `internal/**`, sem frontend e sem multi-tenant) — para mudanças no próprio `civm`, leia `.github/workflows/ci.yml`, `rules/*.md`, `AGENTS.md` e os packages relevantes em `internal/**`.
->
-> Os prompts abaixo trazem, para ilustrar, um **stack de exemplo de produto web modular** (modular monolith Go + Next.js + PostgreSQL schema-per-tenant + Redis). Esse stack é **genérico/ilustrativo** — substitua mentalmente pelos serviços, contratos e camadas do seu repo. Referências a `ms-auth`/`ms-core`/`services/...`/frontend são placeholders do exemplo, não componentes do `civm`.
+> **Metodologia civm-native (PRD → SPEC → IMPL).** Os prompts abaixo são os do próprio `civm` — repo **Go de infra** (Go 1.26 stdlib-first, `cmd/civmctl/` + `internal/**`, mais a camada host PowerShell em `deploy/windows/*.ps1` que dirige a VM/VHDX Hyper-V). Sem frontend, sem HTTP API, sem multi-tenant, sem banco. O pipeline em si (PRD → SPEC → Passo 2.5 Red-Team → SPECv2/SPECv3) é independente de stack; um peer repo que o adote troca o exemplo e os gates pelos seus.
 
 Metodologia em 3 passos: **PRD → SPEC → IMPL**
 
-Stack de exemplo usado nos prompts (ilustrativo): Go · chi/v5 · pgx v5 · go-redis v9 · Next.js · React · PostgreSQL schema-per-tenant · Redis · Docker. Troque pelo stack real do seu repo.
+Exemplo trabalhado usado ao longo deste doc: o redesign de reclaim do `civm` (`docs/specs/host-volume-reclamation/`, slug do exemplo: `host-reclaim-admission-gate`). É um caso SSDV3 real — um **deadlock de headroom** (quando `V: < 8 GB` todo reclaimer aborta, então um disco cheio não consegue rodar a própria limpeza) que virou PRD → SPEC; o SPEC levou **no-go** no red-team (`Stop-Job` NÃO aborta `Optimize-VHD`; a evidência N=1 nunca mediu scratch) e foi reescrito em SPECv3 (medir-primeiro, optimize ininterruptível, lock canônico). Veja a história inteira nas snippets ao longo deste arquivo.
 
 Objetivo desta versão:
 
@@ -18,60 +16,73 @@ Objetivo desta versão:
 
 ## Como usar
 
-1. Use o **Passo 1** para gerar `docs/{feature-slug}/PRD.md`
-2. Use o **Passo 2** para transformar o PRD em `docs/{feature-slug}/SPEC.md`
-3. Use o **Passo 2.5** quando houver risco estrutural, operacional ou de segurança
+1. Use o **Passo 1** para gerar `docs/specs/{feature-slug}/PRD.md`
+2. Use o **Passo 2** para transformar o PRD em `docs/specs/{feature-slug}/SPEC.md`
+3. Use o **Passo 2.5** quando houver risco estrutural, operacional ou de segurança (no `civm`: mexe na VM/VHDX, no contrato de reclaim/cleanup, em subcomando `civmctl` que muta, na superfície de privilégio, ou quebra invariante documentado)
 4. Use o **Passo 3** para implementar estritamente a partir do SPEC
 
 Se um passo encontrar ambiguidade que pertence ao passo anterior, volte um passo.
 
+## Quando SSDV3 é obrigatório (cf. `rules/ssdv3.md`)
+
+SSDV3 é **mandatório** para mudanças em:
+
+1. **Camada host que muta VM/VHDX** — `deploy/windows/*.ps1` (`Stop-VM`, `Optimize-VHD`, `Start-VM`, reclaim, maintenance): risco de deixar a VM Off ou estourar o `V:`.
+2. **Contrato de cleanup/reclaim** — o que `civmctl cleanup --execute` apaga, os guards de headroom/admissão do reclaim, a ordem fail-closed.
+3. **Subcomando `civmctl` que muta** — `runner restart/remove/upgrade`, `bootstrap`, `maintenance enter/exit`, `hook install`.
+4. **Superfície de privilégio** — `deploy/sudoers.d/*`, Scheduled Tasks SYSTEM, o wrapper `civm-safedelete`.
+5. **Constantes que gateiam comportamento** em `internal/civm/civm.go` (headroom, faixas de porta, pre-cleanup %, `ScratchBudget`).
+6. **Quebra de invariante documentado** (`disciplines/INVARIANTS.md`): sync rule, anti-skynet, cobertura ≥80%.
+
+Tudo o mais é opcional — para UI/refactor sem mudança de contrato, bugfix localizado, atualização de docs/deps, o pipeline completo é overhead.
+
 ## Organização dos arquivos
 
-**Todos os artefatos SDD (PRD.md e SPEC.md) devem ser criados dentro de pastas semânticas em `docs/`**, nunca soltos na raiz do repositório.
+**Todos os artefatos SDD (PRD.md, SPEC.md, IMPL.md) devem ser criados dentro de pastas semânticas em `docs/specs/`**, nunca soltos na raiz do repositório.
 
 **Convenção de nomes:**
 
 ```text
-docs/{feature-slug}/
+docs/specs/{feature-slug}/
 ├── PRD.md
 ├── SPEC.md
-└── SPECv2.md  # opcional, criado somente quando o Passo 2.5 der no-go
+├── SPECv2.md  # opcional, criado somente quando o Passo 2.5 der no-go
+├── SPECv3.md  # opcional, criado quando uma 2ª rodada de red-team der no-go
+└── IMPL.md    # registro do que foi feito (commits, arquivos, decisões pequenas, métricas)
 ```
 
-- `{feature-slug}` deve ser kebab-case, curto e descritivo
+- `{feature-slug}` deve ser kebab-case inglês, curto e descritivo (ex.: `host-reclaim-admission-gate`, `multi-project-isolation`)
 - `SPEC.md` é a primeira versão gerada pelo Passo 2 e deve ser preservada como baseline histórico
 - `SPECv2.md` é a versão melhorada criada pelo Passo 2 quando a auditoria do Passo 2.5 resultar em `no-go`
 - Não sobrescreva `SPEC.md` para incorporar correções de auditoria; gere `SPECv2.md`, salvo pedido explícito do usuário para edição in-place
-- Se `SPECv2.md` já existir e uma nova auditoria ainda der `no-go`, atualize `SPECv2.md` in-place, salvo pedido explícito do usuário para criar `SPECv3.md`
-- Se a feature já tem uma pasta em `docs/`, reutilize-a
+- Se `SPECv2.md` já existir e uma nova auditoria ainda der `no-go`, atualize `SPECv2.md` in-place, salvo pedido explícito do usuário para criar `SPECv3.md` (foi o que aconteceu no caso reclaim: SPECv2 fechou robustez operacional, SPECv3 fechou o deadlock de headroom)
+- Se a feature já tem uma pasta em `docs/specs/`, reutilize-a
 - Se a feature for uma evolução incremental, reutilize a pasta existente ou crie uma subpasta semântica
 
 ## Frontmatter obrigatório no PRD.md
 
-Toda PRD.md começa com frontmatter YAML. Esses campos alimentam o índice gerado em `docs/INDEX.md`:
+Toda PRD.md começa com frontmatter YAML:
 
 ```yaml
 ---
-slug: 613-tenant-scoped-outbox
-title: Tenant-scoped outbox com UNIQUE(event_id)
-milestone: M22
-issues: [613]
+slug: host-reclaim-admission-gate
+title: Resiliência do reclaim — quebrar o deadlock de headroom com admissão por folga provada
+milestone: —
+issues: []
 ---
-# PRD — Issue #613 — Outbox tenant-scoped
+# PRD — Reclamação de volume do host (VHDX): guest-free vira host-free com segurança
 ```
 
 - `slug`: igual ao nome da pasta (`<issue>-<descricao>` para issues, ou `<descricao>` para mudanças sem issue).
-- `title`: humano, vai aparecer no índice.
-- `milestone`: identificador (M14, M21, M22...). Use `—` se ainda não associada.
+- `title`: humano, descreve a mudança.
+- `milestone`: identificador (M14, v1.0.0, …). Use `—` se ainda não associada.
 - `issues`: array de números de issue do GitHub (vazio `[]` se não tem).
 
-O status no índice é derivado da presença de arquivos: `PRD` → só PRD.md; `SPEC` → SPEC.md ou SPECv2.md também presente; `DONE` → IMPL.md presente.
-
-Regenerar o índice: `yarn docs:index` (ou `npm run docs:index`). Validar sincronia em CI: `yarn docs:check`.
+O status de um spec é derivado da presença de arquivos: `PRD` → só PRD.md; `SPEC` → SPEC.md (ou SPECv2/SPECv3) também presente; `DONE` → IMPL.md presente.
 
 ## Referência cognitiva
 
-Quando a mudança envolver risco estrutural, operacional, de segurança, rollout, rollback, migração, cache, contrato, secret, backfill ou tenant isolation, o SPEC deve apontar explicitamente para `disciplines/KAHNEMAN-DISCIPLINES.md`.
+Quando a mudança envolver risco estrutural, operacional, de segurança, rollout, rollback, migração de estado, concorrência, contrato de reclaim/cleanup, secret, privilégio do host ou isolamento/concorrência (se aplicável), o SPEC deve apontar explicitamente para `disciplines/KAHNEMAN-DISCIPLINES.md`.
 
 O objetivo não é teorizar no documento, mas forçar cada etapa crítica a responder:
 
@@ -80,22 +91,22 @@ O objetivo não é teorizar no documento, mas forçar cada etapa crítica a resp
 - qual evidência mínima autoriza avançar
 - qual condição objetiva exige abortar, voltar um passo ou fazer rollback
 
-## Política Day-0 (produto sem produção viva — opcional)
+## Política Day-0 (sem produção legada obrigatória)
 
-> Aplica-se a um produto-exemplo que ainda **não** tem produção viva com dados legados obrigatórios. Não se aplica ao `civm`, que já roda em produção (runner self-hosted) — para o `civm`, qualquer mudança em comportamento operacional segue rollback trigger numérico e teste, não a política Day-0.
+> O `civm` **já roda em produção** (runner self-hosted), mas **não tem dados legados persistidos** que precisem de migração/backfill — o estado é arquivos efêmeros (`/var/lib/civm/*.json`, locks, métricas do host). Logo a política Day-0 se aplica ao **modelo de dados/estado** (sem shim, sem dual-reader, sem backfill para estado inexistente), enquanto qualquer mudança em **comportamento operacional** (reclaim, drain, headroom) segue rollback trigger numérico e teste, não a política Day-0 isoladamente.
 
-Quando o produto ainda não possui produção viva com dados legados obrigatórios, toda mudança deve ser especificada e implementada como solução principal e única, no formato correto final para Day-0.
+Quando não houver estado persistido legado obrigatório, toda mudança deve ser especificada e implementada como solução principal e única, no formato correto final para Day-0.
 
-Por padrão, é proibido criar workaround, shim, dual-reader, dual-write, camada de compatibilidade com formato antigo, backfill para produção inexistente, migration incremental corretiva desnecessária ou código morto.
+Por padrão, é proibido criar workaround, shim, dual-reader, dual-write, camada de compatibilidade com formato antigo, backfill para estado inexistente, migração incremental corretiva desnecessária ou código morto.
 
-Exceções só são permitidas quando houver requisito explícito e documentado para manter duas versões, integração externa real, dado persistido que não possa ser resetado, ou rollout coordenado aprovado. A exceção deve registrar motivo, prazo de remoção, rollback e evidência.
+Exceções só são permitidas quando houver requisito explícito e documentado para manter duas versões, integração externa real, estado persistido que não possa ser resetado, ou rollout coordenado aprovado. A exceção deve registrar motivo, prazo de remoção, rollback e evidência.
 
 ## Princípios da versão 3
 
 1. **Discovery antes de convergência**
    A investigação pode ser ampla, mas o documento final deve convergir para uma única direção recomendada.
 2. **Reuso antes de criação**
-   Antes de propor novo endpoint, tabela, evento, env var, cache key ou componente, prove que o padrão existente não atende.
+   Antes de propor novo subcomando, constante, arquivo de estado, script `.ps1`, Scheduled Task ou env var, prove que o padrão existente não atende (`internal/**`, `cmd/civmctl/`, `deploy/windows/`).
 3. **Separar fato de proposta**
    Todo documento deve diferenciar explicitamente:
    - `Confirmado no codebase`
@@ -126,13 +137,13 @@ Objetivo:
 
 Camada(s) envolvida(s):
 
-- [ ] Backend — serviço(s):
-- [ ] Frontend
-- [ ] Infra
-- [ ] Migração
-- [ ] Eventos/Redis
-- [ ] OpenAPI / SDK types
-- [ ] Documentação / ADR
+- [ ] Guest Go — package(s) em `internal/**` / subcomando(s) em `cmd/civmctl/`
+- [ ] Host PowerShell — `deploy/windows/*.ps1` (Stop-VM/Optimize-VHD/Start-VM) + Scheduled Task
+- [ ] Estado / arquivos (`/var/lib/civm/*.json`, locks, métricas do host)
+- [ ] Constantes que gateiam comportamento (`internal/civm/civm.go`)
+- [ ] Systemd (timers/units do guest) / `schtasks` (host)
+- [ ] Superfície de privilégio (`deploy/sudoers.d/*`, SYSTEM task, `civm-safedelete`)
+- [ ] Documentação / runbook / ADR
 
 ### Processo obrigatório
 
@@ -143,12 +154,12 @@ Antes de escrever o PRD final, siga estas fases:
 - Levante o contexto real no codebase
 - Identifique o que já existe e pode ser reutilizado
 - Liste opções de implementação viáveis
-- Levante edge cases, riscos, dependências e impactos cross-service
+- Levante edge cases, riscos, dependências e impactos cross-camada (guest↔host)
 
 #### Fase 2 — Convergência
 
 - Escolha uma opção principal
-- Explique por que ela é a recomendada no contexto do seu repo
+- Explique por que ela é a recomendada no contexto do `civm`
 - Liste alternativas descartadas e por quê
 - Registre lacunas de contexto que permaneceram abertas
 
@@ -160,22 +171,18 @@ Antes de escrever o PRD final, siga estas fases:
 
 ### Pesquisa obrigatória antes de gerar o PRD
 
-#### 1. Codebase do seu repo — contexto interno
+#### 1. Codebase do `civm` — contexto interno
 
-> No `civm`: leia `rules/*.md`, `AGENTS.md`/`README.md`/`CODEX.md`, `.github/workflows/ci.yml` e os packages em `internal/**` (+ `cmd/civmctl/`) tocados pela mudança. Não há serviços HTTP, schema PostgreSQL nem frontend — pule os itens de exemplo abaixo que não se aplicam.
-
-- Leia as regras do repo (no exemplo: `rules/` backend.md, frontend.md, security.md, testing.md, infra.md, coding.md)
-- Leia o doc de instruções na raiz para topologia de serviços, multi-tenancy flow, auth modes, env vars (quando existirem)
-- Identifique o(s) serviço(s)/package(s) alvo e leia o entry point, routes, handlers, services, repository e models existentes
-- Mapeie o schema atual: migrações e schema tenant vs. global (se o repo tiver banco)
-- Identifique tabelas, índices, constraints e relações que tocam nessa feature
-- Verifique Redis keys, Pub/Sub channels, locks, cache patterns e invalidação relacionados
-- Leia `docs/config-reference.json` para env vars existentes e categorias disponíveis
-- Leia `docs/events-catalog.json` para eventos Redis Pub/Sub já catalogados
+- Leia as regras do repo: `rules/*.md` (`coding-style.md`, `testing.md`, `security.md`, `observability.md`, `ssdv3.md`, `governance.md`, …) e os docs autoritativos `AGENTS.md` / `README.md` / `CODEX.md` / `CLAUDE.md`
+- Leia `.github/workflows/ci.yml` e `tools/ci/detect-changes.mjs` para entender os gates (jobs `validate-templates`, `build-civmctl`, `self-hosted-smoke`)
+- Identifique o(s) package(s)/subcomando(s) alvo e leia o código existente: dispatch em `cmd/civmctl/main.go` (`switch`), os runners de subcomando (`cmd/civmctl/*.go`) e a lógica em `internal/**`
+- Mapeie o estado atual: arquivos JSON em `/var/lib/civm/`, locks, logs estruturados (`slog`), métricas do host (`V:\civm-host-metrics.json`)
+- Identifique constantes, timers systemd, Scheduled Tasks e invariantes que tocam nessa feature
+- Verifique a camada host: `deploy/windows/*.ps1` e o registro das tasks (`register-*.ps1`); confira o lint guard de `.ps1` (`internal/hostdisk/ps1_safety_test.go`)
 - Leia `disciplines/KAHNEMAN-DISCIPLINES.md` quando a mudança envolver risco estrutural, operacional ou de segurança
-- Verifique ADRs existentes em `docs/decisions/` que sejam relevantes
-- Se frontend: leia `web/CLAUDE.md`, `web/src/fsd/`, `web/src/app/`, `shared/ui/`, `shared/tokens/`
-- Se tocar em auth/permissões: verifique o chain `TenantResolver → Auth → Permission` e permissões existentes em `ms-auth`
+- Verifique runbooks relevantes em `runbooks/` (ex.: `MULTI-PROJECT-RUNNER.md`, `RUNBOOK-HOST-VHDX-MAINTENANCE.md`) e ADRs/specs anteriores em `docs/specs/`
+- Se tocar a VM/VHDX/disco: confirme topologia (Windows host → Hyper-V → VM Linux guest; `V:` NTFS hospedando o VHDX dinâmico) e o pipeline de discard (controlador SCSI vs IDE, `fstrim`, `Optimize-VHD`)
+- Se tocar privilégio: verifique `deploy/sudoers.d/*`, o wrapper `civm-safedelete` e o direito Hyper-V das tasks SYSTEM
 - Identifique explicitamente:
   - o que já existe e pode ser reutilizado
   - o que precisa ser estendido
@@ -185,41 +192,28 @@ Antes de escrever o PRD final, siga estas fases:
 
 Pesquise e valide contra a documentação oficial das tecnologias realmente envolvidas na mudança:
 
-**Backend:**
+**Guest (Go):**
 
-- Go 1.26
-- chi/v5
-- pgx v5
-- go-redis v9
-- goose
-- testcontainers-go
-- Prometheus client_golang
+- Go 1.26 (stdlib-first: `os`, `os/exec` com `exec.CommandContext`, `encoding/json`, `log/slog`, `syscall`/`golang.org/x/sys/unix` para `Statfs`)
+- `golangci-lint` (config `.golangci.yml`), `govulncheck`, `go test -race`
 
-**Frontend:**
+**Host (Hyper-V / Windows):**
 
-- Next.js 16 App Router
-- React 19
-- StyleX
-- TanStack Query v5
-- Zustand
-- React Hook Form + Zod
-- Playwright
+- Hyper-V cmdlets: `Get-VM` / `Stop-VM` / `Start-VM`, `Get-VHD` / `Optimize-VHD` / `Resize-VHD`, `Get-Volume` / `Get-PSDrive`
+- `Optimize-VHD -Mode Full` (compactação offline; semântica de scratch; ininterruptibilidade — `CompactVirtualDisk` em `virtdisk`)
+- Controladores Hyper-V: SCSI repassa UNMAP/TRIM, IDE não
+- `schtasks` (`/create`, `/run`, `/RU SYSTEM /RL HIGHEST`), `Start-Job`/`Wait-Job`, `[System.IO.FileStream]` `FileShare::None` (lock de arquivo)
 
-**Infra:**
+**Guest Linux / runner:**
 
-- PostgreSQL 18
-- Redis 8.6
-- PgBouncer
-- Nginx
-- Docker multi-stage builds
+- `fstrim` / montagem com `discard`, `lsblk -D` (DISC-GRAN/DISC-MAX), `/proc/mounts`, `findmnt --json`
+- systemd timers/units, `systemctl`, `gh api` (label dance do runner)
 
 #### 3. Padrões de mercado e edge cases
 
-- Pesquise implementações de referência em projetos open-source de escala similar
-- Identifique edge cases comuns para esse tipo de feature em contexto multi-tenant
-- Verifique padrões OWASP relevantes
-- Para features com dados pessoais: verifique requisitos LGPD
-- Avalie trade-offs de consistência vs. disponibilidade
+- Pesquise implementações de referência (GitHub code search, docs oficiais) para reclaim de VHDX dinâmico, compactação offline segura e admission gates de disco antes de propor algo novo
+- Identifique edge cases comuns para esse tipo de mudança em contexto de host single-VM (host a poucos GB livres, optimize pendurado, VM ocupada, controlador sem UNMAP)
+- Avalie trade-offs de disponibilidade (deixar a VM Off é o pior caso) vs. recuperação de espaço
 
 ### Regras de qualidade do PRD
 
@@ -229,31 +223,33 @@ Pesquise e valide contra a documentação oficial das tecnologias realmente envo
   - **Confirmado na documentação oficial**
   - **Inferência / proposta**
 - Se faltar contexto no repo, declare a lacuna em vez de assumir como fato
-- Prefira reaproveitar tabelas, env vars, canais Redis, middlewares, componentes e contratos existentes
-- Não proponha novos endpoints, tabelas, eventos ou env vars sem justificar por que os existentes não atendem
-- Aponte breaking changes, estratégia de rollout, rollback e backfill quando aplicável
-- Quando o produto não tiver produção viva, aplique a política Day-0: proponha a solução correta principal, sem compatibilidade legada, shims, workarounds ou backfills para produção inexistente
-- Se sugerir backfill, migration incremental, dual path ou compatibilidade, declare a exceção Day-0 com motivo objetivo; caso contrário, consolide a modelagem/migration/contrato no desenho final
-- Em **Alternativas descartadas**, descarte explicitamente soluções de compatibilidade quando elas só existirem para preservar versão antiga sem produção viva
-- Liste os documentos que precisarão ser atualizados no mesmo commit quando houver impacto estrutural
+- Prefira reaproveitar constantes, subcomandos, packages, scripts `.ps1`, Scheduled Tasks e arquivos de estado existentes
+- Não proponha novos subcomandos, constantes, scripts ou env vars sem justificar por que os existentes não atendem
+- Aponte breaking changes, estratégia de rollout, rollback e migração de estado quando aplicável
+- Como não há estado legado obrigatório, aplique a política Day-0: proponha a solução correta principal, sem compatibilidade legada, shims, workarounds ou backfills para estado inexistente
+- Se sugerir dual path, camada de compatibilidade ou migração corretiva de estado, declare a exceção Day-0 com motivo objetivo; caso contrário, consolide o desenho final
+- Em **Alternativas descartadas**, descarte explicitamente soluções de compatibilidade quando elas só existirem para preservar versão antiga sem estado vivo
+- Liste os documentos que precisarão ser atualizados no mesmo commit quando houver impacto estrutural (sync rule: README ≡ AGENTS ≡ CODEX ≡ rules)
 - Se a mudança tiver risco alto, antecipe no PRD quais etapas provavelmente exigirão disciplina explícita de `disciplines/KAHNEMAN-DISCIPLINES.md` no SPEC
 - Mantenha o PRD específico e operacional; evite texto genérico
 
 ### Saída esperada
 
-Gere o arquivo `docs/{feature-slug}/PRD.md` com **EXATAMENTE** esta estrutura:
+Gere o arquivo `docs/specs/{feature-slug}/PRD.md` com **EXATAMENTE** esta estrutura:
 
 #### Resumo
 
 - O que é, por que existe, qual problema resolve
-- Valor de negócio no contexto do produto
+- Valor operacional no contexto do runner
+
+> Exemplo (reclaim): "O VHDX dinâmico cresce quando o guest escreve mas **não encolhe** quando o guest libera blocos; o `V:` chegou a 3 GB livres (98%) enquanto o guest tinha 44 GB livres. Pior: quando `V: < 8 GB`, **todo reclaimer aborta** por falta de headroom — então um disco cheio não consegue rodar a própria limpeza (deadlock). Valor: o runner para de morrer por disco do host de forma silenciosa, e a manutenção vira um comando seguro e auditável."
 
 #### Contexto técnico
 
-- Serviço(s)/package(s) envolvidos e papel de cada um na topologia do repo
-- Estado atual: tabelas, endpoints, componentes, caches e fluxos já existentes que serão reutilizados ou estendidos
-- Tenant scope: tenant-scoped (`{slug}_{service}`) ou global (`public`)
-- Dependências entre serviços (HTTP interno, Redis Pub/Sub, cache)
+- Package(s)/subcomando(s)/script(s) envolvidos e papel de cada um na topologia (guest Go ↔ host PowerShell ↔ VM/VHDX)
+- Estado atual: constantes, timers, Scheduled Tasks, arquivos de estado, fluxos já existentes que serão reutilizados ou estendidos
+- Isolamento/concorrência — se aplicável (locks entre reclaimers, anti-reentrância de task, mutual exclusion de `Stop-VM`/`Optimize-VHD`)
+- Dependências entre camadas (guest ↔ host via SSH; o que cada lado autoritativamente conhece)
 - O que está **confirmado no codebase**
 - O que está **confirmado na documentação oficial**
 - O que está **sendo proposto**
@@ -265,143 +261,143 @@ Gere o arquivo `docs/{feature-slug}/PRD.md` com **EXATAMENTE** esta estrutura:
 - Alternativas descartadas
 - Trade-offs aceitos
 
+> Exemplo (reclaim): "Admission gate (`EmergencyAdmits`) em vez de piso fixo: o caminho de emergência (`V: < HeadroomGB`) só é admitido quando `liveVFree − HardFloorGB >= ScratchBudgetGB` (o pior scratch high-water **medido**). Descartado: 'baixar o piso de 8 GB para um menor' — só **realoca** o deadlock; 'abortar o Optimize no meio via `Stop-Job`' — `Stop-Job` NÃO aborta a compactação nativa, que segue escrevendo o `V:`."
+
 #### Requisitos funcionais
 
 Para cada requisito:
 
 - **RF-N**: descrição objetiva sem ambiguidade
 - **Critério de aceite**: condição verificável
-- **Tenant isolation**: como esse requisito respeita o isolamento, se aplicável
+- **Isolamento/concorrência**: como esse requisito respeita exclusão mútua / fail-closed, se aplicável
 
 #### Requisitos não-funcionais
 
-- **Performance**: latência esperada (p50, p99), throughput, tamanho de payload
-- **Segurança**: autenticação, autorização, rate limiting, validação de input
-- **Observabilidade**: métricas Prometheus, structured logs, health checks
-- **Escalabilidade**: comportamento com N tenants, N réplicas, limites de pool
-- **LGPD**: dados pessoais envolvidos, masking, retenção, anonimização
-- **Resiliência**: comportamento com Redis down, upstream lento, falhas parciais
+- **Performance**: tempo do caminho online (sem downtime) vs. offline (`Optimize-VHD`, minutos com a VM off); meta de `V:` livre sustentado
+- **Segurança / privilégio**: o que roda como SYSTEM, qual direito mínimo do host (Hyper-V), nada de `pull_request_target`/código de PR no host, sem segredo em `deploy/windows/`
+- **Observabilidade**: logs estruturados (`slog`/JSON no guest, log da task no host), métricas do host (`V:` free/size + VHDX file/min/max + gap), alarmes nos pisos
+- **Escalabilidade**: comportamento por-host/por-VM; o gap guest×host como sinal de saúde
+- **Resiliência (worst-case — Kahneman #5)**: host a 3 GB livres, `Optimize-VHD` pendura/falha, VM ocupada, controlador sem UNMAP — cada um com mitigação
 
 #### Fluxos
 
 **Happy path**
 
 - Passo a passo numerado
-- Qual componente/serviço executa cada passo
-- Qual protocolo é usado (HTTP, Redis Pub/Sub, PostgreSQL tx)
-- Como o tenant slug flui (Host header → X-Tenant-Slug → WithSchema)
+- Qual componente/camada executa cada passo (guest Go, host `.ps1`, Hyper-V)
+- Qual mecanismo é usado (subcomando `civmctl`, SSH guest↔host, `fstrim`, `Optimize-VHD`, lock de arquivo)
+- Como o estado flui (ex.: drain grava `/var/lib/civm/maintenance.json`; métricas do host entregues ao guest)
 
 **Fluxos alternativos**
 
-- Variações válidas do happy path
+- Variações válidas do happy path (ex.: caminho online auto-shrink vs. fallback offline)
 
 **Fluxos de erro**
 
 Para cada erro:
 
 - Condição de trigger
-- HTTP status code / mensagem ao cliente
+- Resultado / exit code / mensagem (ex.: `abort_insufficient_slack` exit 2; nunca deixar a VM Off)
 - Log level e campos contextuais
-- Impacto na consistência dos dados
+- Impacto na consistência do estado (VHDX/VM/disco)
 
 #### Modelo de dados
 
-**Tabelas novas**
+> **N/A — sem banco.** Para o `civm`, "modelo de dados" = **estado em arquivos**. Liste os arquivos de estado novos/alterados, o shape JSON e a semântica de escrita.
 
-Para cada tabela, incluir DDL completo:
+**Estado novo (arquivos)**
 
-```sql
-CREATE TABLE schema.table_name (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    -- ...
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+Para cada arquivo, descrever shape e gravação atômica:
 
-CREATE INDEX idx_table_column ON schema.table_name (column);
--- Justificativa: ...
+```text
+/var/lib/civm/maintenance.json (guest):
+  { "drained_at": "<iso>", "runners": [ { "name": "...", "repo": "...",
+    "stopped": true, "label_removed": true } ] }
+  Escrita: os.WriteFile substitui o arquivo (atômico por arquivo).
 ```
 
-**Alterações em tabelas existentes**
+```text
+V:\civm-host-metrics.json (host) + cópia em /var/lib/civm/host-metrics.json (guest):
+  { "v_free_gb": N, "v_size_gb": N, "vhdx_file_size_gb": N,
+    "vhdx_min_size_gb": N, "vhdx_max_size_gb": N, "guest_free_gb": N,
+    "gap_gb": N, "timestamp": "<iso>", "delivery_status": "ok|failed" }
+```
 
-- `ALTER` exato
+**Alterações em estado/constantes existentes**
+
+- Constante exata adicionada/alterada em `internal/civm/civm.go`
 - Justificativa
-- Impacto em dados existentes
-- Necessidade de backfill, se houver
+- Impacto em comportamento (quem lê a constante)
+- Necessidade de migração de estado, se houver
 
-**Schema scope**
+**Estado scope**
 
-- `{slug}_{service}` para dados tenant-scoped
-- `public.` para dados globais
+- Guest-local (`/var/lib/civm/*.json`) vs. host (`V:\*.json` / `V:\*.log`)
+- Backfill = **N/A — Day-0** por padrão (estado efêmero, sem dado legado)
 
 #### API / Interfaces
 
-**Endpoints novos ou modificados**
+> **Sem endpoint HTTP/OpenAPI/SDK.** Para o `civm`, "interfaces" = **CLI `civmctl` + componente host + arquivos/locks**.
 
-| Campo            | Valor                                        |
-| ---------------- | -------------------------------------------- |
-| Method           | `GET` / `POST` / `PATCH` / `DELETE`          |
-| Path             | `/v1/...` ou `/internal/v1/...`              |
-| Auth             | JWT + Permission / Token / Internal          |
-| Rate limit       | se aplicável                                 |
-| Middleware chain | TenantResolver → Auth → Permission → Handler |
-| Idempotência     | sim/não e por quê                            |
+**Subcomandos `civmctl` (guest) novos ou modificados**
 
-**Request**
+| Campo            | Valor                                                   |
+| ---------------- | ------------------------------------------------------- |
+| Subcomando       | `disk-doctor` / `maintenance enter\|exit` / `host-disk` |
+| Read-only?       | sim/não (`disk-doctor`/`host-disk` read-only; `maintenance` muta com `--execute`) |
+| Exit codes       | `0` ok / `1` erro ou `crit` / `2` abort / `64` flag inválida |
+| Privilégio       | usuário do runner / `sudo` via `civm-safedelete` / SSH→host SYSTEM |
+| Idempotência     | sim/não e por quê (`maintenance enter/exit` é idempotente) |
 
-```json
-{
-  "field": "type — validação"
-}
+**Contrato (shape)**
+
+```text
+civmctl disk-doctor --json  →  { "device": "...", "controller": "scsi|ide|virtio",
+  "mount_discard": bool, "disc_max_bytes": N, "trim_effective": bool,
+  "root_cause": "IDE controller does not propagate UNMAP | TRIM supported, ..." }
 ```
 
-**Response (2xx)**
+**Componente host (Windows, `deploy/windows/`)**
 
-```json
-{
-  "field": "type"
-}
-```
+| Artefato                                              | Função                                              |
+| ---------------------------------------------------- | --------------------------------------------------- |
+| `civm-host-metrics.ps1` + Scheduled Task             | emite JSON de `V:`/VHDX e entrega ao guest          |
+| `civm-vhdx-optimize.ps1` + Scheduled Task (SYSTEM)   | compactação offline segura, não-interativa          |
+| `civm-vhdx-autoreclaim.ps1` + Scheduled Task (SYSTEM)| reclaim por pressão com admission gate + lock canônico |
+| `register-*.ps1`                                     | `schtasks /create /RU SYSTEM /RL HIGHEST` versionado |
 
-**Erros**
+**Erros / abort triggers**
 
-| Status | Condição           | Body                     |
-| ------ | ------------------ | ------------------------ |
-| 400    | Validação falha    | `{"error":"mensagem"}`   |
-| 403    | Sem permissão      | `{"error":"forbidden"}`  |
-| 404    | Recurso não existe | `{"error":"not found"}`  |
-| 409    | Conflito           | `{"error":"conflict"}`   |
-| 429    | Rate limit         | headers e body esperados |
+| Exit | Condição                                  | Log                          |
+| ---- | ----------------------------------------- | ---------------------------- |
+| 2    | `V: < Headroom` e budget=0 (gate off)     | `abort_headroom`             |
+| 2    | folga não cobre `ScratchBudget` medido    | `abort_insufficient_slack`   |
+| 0    | outro reclaimer ativo (lock canônico)     | `reclaim_skip_other_active`  |
+| 1    | `Start-VM` falhou 3× — VM Off             | `CRITICAL vm_left_off`       |
 
-**Impacto em OpenAPI / SDK / BFF**
+**Impacto em contrato / docs**
 
-- Schemas novos ou alterados
-- Tipos gerados afetados
-- Rotas proxy/BFF afetadas
-- Hooks / invalidation / queries afetadas no frontend
-
-**Eventos Redis Pub/Sub** (se aplicável)
-
-| Channel (env var) | Default             | Publisher | Consumer | Payload              |
-| ----------------- | ------------------- | --------- | -------- | -------------------- |
-| `EVENT_CHANNEL`   | `domain.event_name` | ms-X      | ms-Y     | `EventEnvelope{...}` |
+- Subcomandos novos no `printHelp` (`cmd/civmctl/main.go`)
+- Constantes novas em `internal/civm/civm.go` (sync rule se mudar contrato)
+- Runbook (`runbooks/RUNBOOK-HOST-VHDX-MAINTENANCE.md`) e `MULTI-PROJECT-RUNNER.md` §Disk
+- `deploy/windows/*` versionado; lint guard de `.ps1`
 
 #### Dependências e riscos
 
 - Pré-requisitos
 - Riscos técnicos com mitigação concreta
-- Impacto em serviços existentes
+- Impacto em componentes existentes (guest cleanup/hook, watchdogs, timers, tasks)
 - Breaking changes, se houver
-- Estratégia de rollout
-- Estratégia de rollback
+- Estratégia de rollout (slices)
+- Estratégia de rollback (app / host / estado / proibições)
 - Hipóteses que precisarão de disciplina explícita no SPEC, quando aplicável
 
 #### Estratégia de implementação
 
 - Ordem recomendada das fatias de implementação
 - Dependências entre fatias
-- O que pode ser validado cedo
-- O que exige migração, backfill ou rollout coordenado
+- O que pode ser validado cedo (ex.: Slice 0 = diagnóstico/baseline sem código)
+- O que exige janela de manutenção, troca one-time (SCSI) ou rollout supervisionado
 
 #### Fora de escopo
 
@@ -410,60 +406,60 @@ CREATE INDEX idx_table_column ON schema.table_name (column);
 
 ---
 
-## PASSO 2 — Geração do SPEC.md / SPECv2.md (a partir do PRD ou auditoria)
+## PASSO 2 — Geração do SPEC.md / SPECv2.md / SPECv3.md (a partir do PRD ou auditoria)
 
-> **Leia o `docs/{feature-slug}/PRD.md` e produza um `docs/{feature-slug}/SPEC.md` cirúrgico para implementação.**
-> Se este Passo 2 estiver sendo reexecutado depois de um `no-go` do Passo 2.5, preserve o `SPEC.md` original e crie/atualize `docs/{feature-slug}/SPECv2.md`.
+> **Leia o `docs/specs/{feature-slug}/PRD.md` e produza um `docs/specs/{feature-slug}/SPEC.md` cirúrgico para implementação.**
+> Se este Passo 2 estiver sendo reexecutado depois de um `no-go` do Passo 2.5, preserve o `SPEC.md` original e crie/atualize `docs/specs/{feature-slug}/SPECv2.md` (e `SPECv3.md` numa 2ª rodada).
 > O SPEC não replica o PRD; ele fecha decisões, remove ambiguidade e traduz requisitos em mudanças exatas no repo.
 
 ### Objetivo do Passo 2
 
 - transformar requisitos em tarefas de código com ordem e dependências
 - resolver ambiguidades do PRD antes do código
-- explicitar impactos em contrato, dados, docs, testes e rollout
+- explicitar impactos em contrato, estado, docs, testes e rollout
 - ligar etapas críticas às disciplinas de `disciplines/KAHNEMAN-DISCIPLINES.md`
 
 ### Prompt
 
-Leia `docs/{feature-slug}/PRD.md` e gere `docs/{feature-slug}/SPEC.md` com decisões fechadas, rastreabilidade por requisito e instruções implementáveis sem interpretação.
+Leia `docs/specs/{feature-slug}/PRD.md` e gere `docs/specs/{feature-slug}/SPEC.md` com decisões fechadas, rastreabilidade por requisito e instruções implementáveis sem interpretação.
 
-Se você estiver voltando do Passo 2.5 com decisão `no-go`, leia também o relatório da auditoria e gere `docs/{feature-slug}/SPECv2.md` como versão melhorada, sem alterar o `SPEC.md` original.
+Se você estiver voltando do Passo 2.5 com decisão `no-go`, leia também o relatório da auditoria e gere `docs/specs/{feature-slug}/SPECv2.md` (ou atualize-o / crie `SPECv3.md`) como versão melhorada, sem alterar o `SPEC.md` original.
 
 ### Regras
 
 1. Só inclua o que será realmente implementado agora
 2. Cada arquivo listado deve ter caminho completo a partir da raiz do repo
 3. Cada mudança deve explicar **o que muda**, **como muda** e **por que muda**
-4. Referências a código existente devem usar nome exato de função, struct, tipo ou interface
+4. Referências a código existente devem usar nome exato de função, struct, tipo, interface, constante ou caminho de `.ps1`
 5. Ordem dos itens = ordem de implementação
 6. Se o PRD estiver ambíguo, resolva aqui com uma decisão explícita e justificativa
-   - Na primeira execução do Passo 2, grave o resultado em `docs/{feature-slug}/SPEC.md`
-   - Na execução após `no-go` do Passo 2.5, grave o resultado em `docs/{feature-slug}/SPECv2.md`, preservando `SPEC.md`
-   - Se `SPECv2.md` já existir, atualize `SPECv2.md` in-place, salvo pedido explícito para criar nova versão
-7. Toda query SQL deve usar placeholders posicionais (`$1`, `$2`)
-8. Todo handler deve validar input antes de tocar no service layer
-9. Todo endpoint tenant-scoped deve passar por `TenantResolver → Auth → Permission` quando aplicável
-10. Não deixe pseudocódigo estrutural em tipos, handlers, queries ou contratos
+   - Na primeira execução do Passo 2, grave o resultado em `docs/specs/{feature-slug}/SPEC.md`
+   - Na execução após `no-go` do Passo 2.5, grave o resultado em `docs/specs/{feature-slug}/SPECv2.md`, preservando `SPEC.md`
+   - Se `SPECv2.md` já existir, atualize `SPECv2.md` in-place (ou crie `SPECv3.md` numa 2ª rodada de red-team), salvo pedido explícito
+7. Todo subcomando `civmctl` que executa comando externo deve usar `exec.CommandContext` (sem shell), com timeout
+8. Todo subcomando que muta deve validar flags e estado antes de tocar a VM/VHDX/disco ou o estado em `/var/lib/civm`
+9. Todo caminho de reclaim que pode disparar `Stop-VM`/`Optimize-VHD` deve passar por guard de admissão (headroom/folga provada) + lock canônico, fail-closed, quando aplicável
+10. Não deixe pseudocódigo estrutural em assinaturas Go, esqueletos `.ps1`, contratos JSON ou ordem de operações do host
 11. Todo requisito funcional do PRD deve ser rastreado por ID no SPEC
-12. Toda mudança estrutural deve dizer quais documentos serão atualizados no mesmo commit
-13. Em etapas com risco estrutural, operacional, de segurança, rollout, rollback, migração, tenant isolation, auth, cache, contrato, secret, retry ou backfill, o SPEC deve apontar explicitamente a disciplina correspondente em `disciplines/KAHNEMAN-DISCIPLINES.md`
+12. Toda mudança estrutural deve dizer quais documentos serão atualizados no mesmo commit (sync rule)
+13. Em etapas com risco estrutural, operacional, de segurança, rollout, rollback, migração de estado, concorrência, privilégio do host, contrato de reclaim/cleanup, secret ou indisponibilidade, o SPEC deve apontar explicitamente a disciplina correspondente em `disciplines/KAHNEMAN-DISCIPLINES.md`
 14. Nenhum passo crítico pode ficar só com instrução operacional; ele deve registrar também pergunta obrigatória, evidência mínima e abort trigger
-15. Em qualquer mudança com transação, onboarding, saga, backfill ou múltiplos writes, o SPEC deve declarar explicitamente a fronteira de atomicidade: o que fica atômico nesta issue e o que continua fora dessa garantia
-16. Toda evidência mínima de etapa crítica deve dizer como será produzida no repo de forma executável, observável e reproduzível (`go test`, `yarn test`, query SQL, diff, log esperado, validação manual obrigatória documentada). Não vale evidência implícita, presumida ou sem caminho de execução descrito
-17. Em qualquer mudança com migration, backfill, rollout ou risco de perda de dados, o SPEC deve definir separadamente:
-    - rollback de aplicação
-    - rollback de migration
-    - rollback de dados
+15. Em qualquer mudança com sequência multi-passo no host (drain→shutdown→optimize→start→restore), múltiplos writes de estado ou dois reclaimers concorrentes, o SPEC deve declarar explicitamente a fronteira de atomicidade: o que fica atômico nesta issue e o que continua fora dessa garantia (ex.: cada `os.WriteFile` é atômico; o ciclo de compactação não é)
+16. Toda evidência mínima de etapa crítica deve dizer como será produzida no repo de forma executável, observável e reproduzível (`go test -race`, lint host `ps1_safety_test.go`, log esperado do `.ps1`, janela supervisionada documentada, medição VHDX antes/depois). Não vale evidência implícita, presumida ou sem caminho de execução descrito
+17. Em qualquer mudança com migração de estado, troca one-time (ex.: re-anexar VHDX a SCSI), rollout ou risco de indisponibilidade, o SPEC deve definir separadamente:
+    - rollback de aplicação (binário)
+    - rollback de host (Scheduled Task / config Hyper-V)
+    - rollback de estado (arquivos)
       e dizer explicitamente o que é permitido, proibido ou `forward-only` por ambiente
 18. Aplique a política Day-0: o SPEC deve escolher a solução principal e única. Não liste shims, compatibilidade legada, dual-reader, dual-write, backfill ou código morto, salvo exceção explícita e justificada
-19. Para migrations de estruturas ainda não vivas em produção, prefira consolidar a migration inicial correta em vez de criar migration incremental corretiva
+19. Para estruturas de estado ainda não vivas, prefira consolidar o formato correto desde já em vez de criar caminho corretivo incremental
 20. Se qualquer arquivo existir apenas para compatibilidade temporária, o SPEC deve marcar o arquivo para não criar ou para deletar, salvo exceção Day-0 documentada
 
 ### Guardrail cognitivo obrigatório
 
-Em qualquer ITEM do SPEC que envolva migração, auth, tenant isolation, rollout, rollback, cache, contrato, secret, retry, backfill ou risco de indisponibilidade, incluir um bloco `Disciplina Kahneman` com:
+Em qualquer ITEM do SPEC que envolva migração de estado, privilégio do host, concorrência/exclusão mútua, rollout, rollback, contrato de reclaim/cleanup, secret, retry ou risco de indisponibilidade (deixar a VM Off, estourar o `V:`), incluir um bloco `Disciplina Kahneman` com:
 
-- **Disciplina**: nome exato da disciplina em `disciplines/KAHNEMAN-DISCIPLINES.md`
+- **Disciplina**: nome exato da disciplina em `disciplines/KAHNEMAN-DISCIPLINES.md` (ex.: #2 Counterfactual, #3 Número não adjetivo, #5 Availability/worst-case)
 - **Link**: caminho do documento e, quando possível, âncora da seção correspondente
 - **Pergunta obrigatória**: pergunta de Sistema 2 que precisa ser respondida antes de avançar
 - **Evidência mínima**: métrica, teste, log, diff, output ou validação objetiva exigida
@@ -471,20 +467,24 @@ Em qualquer ITEM do SPEC que envolva migração, auth, tenant isolation, rollout
 
 Nenhum passo crítico pode ficar apenas com instrução operacional.
 
+> Exemplo real (SPECv3 do reclaim), DT-v3-1 (admission gate):
+> **Disciplina** #5 Availability · **Pergunta** "O Optimize pode estourar o `V:`?" · **Evidência** gate pré-flight `liveVFree − HardFloor >= ScratchBudget`; Optimize ininterruptível (sem `Stop-Job`) · **Abort trigger** folga não cobrir o `ScratchBudget` medido → recusa começar.
+
 Regras adicionais para etapas críticas:
 
-- A evidência mínima deve ser reproduzível no estado real do repo; se depender de estado anterior à migration atual, o SPEC deve descrever o harness, fixture, seed ou teste específico para produzir esse estado
-- Se houver rollback, o SPEC deve dizer explicitamente se ele é de aplicação, de migration ou de dados
-- Se algum rollback não for seguro em ambiente compartilhado, o SPEC deve registrar isso como política `forward-only` explícita, com abort trigger correspondente
+- A evidência mínima deve ser reproduzível no estado real do repo; se depender de medição no host (ex.: scratch high-water do `Optimize-VHD`), o SPEC deve descrever a campanha (poll de 1 s, ≥5 runs supervisionados) que produz esse número antes de habilitar o gate
+- Se houver rollback, o SPEC deve dizer explicitamente se ele é de aplicação, de host (task/config) ou de estado
+- Se algum rollback não for seguro fora de janela (ex.: reverter SCSI→IDE, rodar durante Windows Update), o SPEC deve registrar isso como política `forward-only`/janela explícita, com abort trigger correspondente
 
 ### Saída esperada
 
-Quando gerar `SPECv2.md`, manter a mesma estrutura abaixo e adicionar logo após o H1:
+Quando gerar `SPECv2.md`/`SPECv3.md`, manter a mesma estrutura abaixo e adicionar logo após o H1:
 
 ```markdown
 > Versão melhorada após auditoria do Passo 2.5.
-> Baseline preservado: `SPEC.md`.
+> Baseline preservado: `SPEC.md` (e camada anterior `SPECv2.md`, se houver).
 > Motivo: {resumo objetivo dos blockers corrigidos}.
+> Onde houver conflito, **esta versão prevalece**.
 ```
 
 #### Escopo fechado desta implementação
@@ -507,60 +507,62 @@ Decisões tomadas que não estavam explícitas no PRD:
 | ---- | ------- | ------------- |
 | DT-1 | ...     | ...           |
 
+> No caso reclaim, as decisões viraram a coluna vertebral do red-team: `DT-v3-1` (admission gate em vez de piso fixo), `DT-v3-2` (campanha de medição ANTES de baixar o piso), `DT-v3-3` (lock canônico único entre os dois reclaimers).
+
 #### Fronteira de atomicidade e política de rollback
 
 - **Fronteira de atomicidade desta implementação**:
-  - o que esta issue garante atomicamente
-  - o que continua fora da atomicidade
-  - quais estados parciais continuam aceitos nesta fase
+  - o que esta issue garante atomicamente (ex.: cada `os.WriteFile` de estado; cada `Optimize-VHD` é uma operação Hyper-V única)
+  - o que continua fora da atomicidade (ex.: o ciclo drain→shutdown→optimize→start→restore; a entrega SSH de métricas best-effort)
+  - quais estados parciais continuam aceitos nesta fase (ex.: VM drenada mas não compactada; métricas stale → degrada para guest-only)
 - **Política de rollback**:
-  - rollback de app
-  - rollback de migration
-  - rollback de dados
-  - o que é proibido em `staging` / `production`
-  - se a migration é `forward-only`
+  - rollback de app (`civmctl self-upgrade` anterior; subcomandos novos viram no-op)
+  - rollback de host (`schtasks /delete`; reverter config Hyper-V em janela)
+  - rollback de estado (N/A — Day-0; arquivos efêmeros)
+  - o que é **proibido** (zero-fill sob baixo headroom; deixar a VM Off ao fim de qualquer caminho)
+  - se algo é `forward-only`/exige janela
 
 #### Mapa Kahneman por etapa crítica
 
 Para cada etapa crítica da implementação, rollout, validação ou rollback, preencher:
 
-| Etapa / ITEM | Disciplina Kahneman | Link                                       | Pergunta obrigatória | Evidência mínima | Abort trigger |
-| ------------ | ------------------- | ------------------------------------------ | -------------------- | ---------------- | ------------- |
-| ITEM-3       | ...                 | `disciplines/KAHNEMAN-DISCIPLINES.md` | ...                  | ...              | ...           |
+| Etapa / ITEM | Disciplina Kahneman | Link                                  | Pergunta obrigatória | Evidência mínima | Abort trigger |
+| ------------ | ------------------- | ------------------------------------- | -------------------- | ---------------- | ------------- |
+| ITEM-3       | #5 Availability     | `disciplines/KAHNEMAN-DISCIPLINES.md` | ...                  | ...              | ...           |
 
 #### Checklist de segurança (pré-implementação)
 
-- [ ] Tenant isolation: toda query roda dentro de tx com `WithSchema(ctx, tx, "{slug}_{service}")`
-- [ ] SQL injection: zero concatenação de input em SQL, apenas placeholders
-- [ ] Auth: endpoint tem middleware correto
-- [ ] Permissões: ações protegidas verificam `permission.RequirePermission("scope.action")`
-- [ ] Rate limiting: endpoints públicos têm `middleware.RateLimit()` aplicado
-- [ ] Input validation: todos os campos do request body são validados no handler
-- [ ] PII: dados pessoais não são logados; masking aplicado onde necessário
-- [ ] Secrets: nenhuma credencial hardcoded
-- [ ] Error messages: erros internos não vazam detalhes de implementação
+- [ ] Isolamento/concorrência: caminhos de reclaim concorrentes adquirem o lock canônico (`V:\civm-reclaim.lock`, `FileShare::None`) antes de qualquer `Stop-VM`; quem não obtém → skip exit 0
+- [ ] Exec safety: `civmctl` usa `exec.CommandContext` sem shell; `.ps1` sem `Invoke-Expression` de input externo
+- [ ] Privilégio do host: tasks que rodam como SYSTEM têm só o direito Hyper-V mínimo; sem rede; documentado
+- [ ] Sudoers / safedelete: nenhuma ampliação de `deploy/sudoers.d/*` sem justificativa; capacidade destrutiva validada pelo propósito (não pela existência)
+- [ ] Input validation: flags, JSON de métricas (+ timestamp/stale) e números de headroom validados antes de agir
+- [ ] Fail-closed: sob incerteza (budget=0, métrica stale, folga insuficiente) o caminho perigoso **recusa começar**, não tenta
+- [ ] Secrets: nenhuma credencial hardcoded; nada de segredo em `deploy/windows/`; usa `gh`/SSH já presentes
+- [ ] Logs: `slog` estruturado / JSON; sem PII; nunca `fmt.Println`/`log.Printf` em produção; a task nunca deixa a VM Off em silêncio
+- [ ] Int32 clamp: nenhum `[math]::Max(0, …)` literal nos `.ps1` (bug Int32 que travou todo reclaim do VHDX — invariante #17)
 
-#### Migrações SQL
+#### Mudanças de estado / constantes
 
-Para cada migração, na ordem de execução:
+Para cada constante ou arquivo de estado, na ordem de execução:
 
-**Arquivo:** `services/ms-{name}/migrations/NNN_description.sql`
+**Arquivo:** `internal/civm/civm.go` (bloco `const (...)`)
 
-```sql
--- +goose Up
--- DDL exato
-
--- +goose Down
--- Rollback exato
+```go
+// Reclamação de volume do host (docs/specs/host-reclaim-admission-gate).
+DefaultHostVolumeHeadroomGB      = 8  // mínimo de V: livre ANTES do Optimize (caminho normal)
+DefaultHostVolumeHardFloorGB     = 1  // piso DURO absoluto; nunca operar abaixo (Optimize é ininterruptível)
+DefaultHostVolumeScratchBudgetGB = 0  // pior scratch high-water MEDIDO + margem; 0 = emergência DESABILITADA
+DefaultAutoreclaimPressureGB     = 25 // abaixo disso, cadência de DETECÇÃO curta (não de ação)
+DefaultReclaimMinIntervalMin     = 30 // mínimo entre eventos reais de Stop-VM+Optimize
 ```
 
-- **Schema scope:** `{slug}_{service}` ou `public`
-- **Dependências:** migrações anteriores necessárias
-- **Política Day-0:** dizer explicitamente se a mudança consolida migration inicial ou cria migration incremental; migration incremental exige justificativa se não houver produção viva
-- **Backfill:** deve ser `N/A — Day-0, sem produção viva` por padrão. Só descrever backfill quando houver dado real que precise ser preservado
-- **Compatibilidade legada:** deve ser `N/A` por padrão. Se existir, justificar a exceção Day-0
-- **Disciplina Kahneman** quando a migração for crítica:
-  - **Disciplina**:
+- **Quem lê:** `internal/hostdisk`, o helper de admissão `EmergencyAdmits`, os `.ps1` de reclaim (via parâmetro)
+- **Invariante:** `HardFloor(1) < Headroom(8) < Pressure(25)`; `ScratchBudget >= 0`; o gate de emergência só habilita quando `ScratchBudget > 0`
+- **Política Day-0:** consolidar a constante correta desde já; **a constante de emergência (`ScratchBudget`) é commit explícito com as ≥5 medições anexadas** (Número, não adjetivo)
+- **Migração de estado:** **N/A — Day-0** por padrão (estado efêmero). Só descrever migração quando houver arquivo de estado vivo que precise ser convertido
+- **Disciplina Kahneman** quando a constante for crítica:
+  - **Disciplina**: #2 Counterfactual / #3 Número não adjetivo
   - **Link**:
   - **Pergunta obrigatória**:
   - **Evidência mínima**:
@@ -574,18 +576,36 @@ Para cada arquivo novo:
 
 - **Propósito**: uma frase
 - **Requisitos cobertos**: `RF-N`, `DT-N`
-- **Structs/Types/Interfaces**: assinatura exata
+- **Structs/Types/Interfaces** (Go) ou **esqueleto vinculante** (`.ps1`): assinatura/ordem de operações exata
 - **Funções**: assinatura exata + lógica resumida em passos
-- **Dependências internas**: imports do projeto
-- **Dependências externas**: libs de terceiros
-- **Padrão de referência**: arquivo existente no repo
-- **Testes requeridos**: arquivo de teste e cenários mínimos
+- **Dependências internas**: imports do projeto (`internal/**`, `internal/civm`)
+- **Dependências externas**: stdlib / `golang.org/x/sys`; cmdlets Hyper-V no host
+- **Padrão de referência**: arquivo existente no repo (ex.: `internal/capacity/capacity.go` para `Options{...Fn}` injetável; `deploy/windows/civm-vhdx-optimize.ps1` para a estrutura `try/catch/finally`)
+- **Testes requeridos**: arquivo de teste e cenários mínimos (Go `*_test.go`; ou assertion de lint host em `internal/hostdisk/ps1_safety_test.go`)
 - **Disciplina Kahneman** se o arquivo suportar etapa crítica:
   - **Disciplina**:
   - **Link**:
   - **Pergunta obrigatória**:
   - **Evidência mínima**:
   - **Abort trigger**:
+
+> Esqueleto real (SPECv3, `civm-vhdx-autoreclaim.ps1`):
+>
+> ```powershell
+> # Lock canonico compartilhado ANTES de tudo (DT-v3-3):
+> #   abrir V:\civm-reclaim.lock FileShare::None; se falhar -> reclaim_skip_other_active; exit 0
+> # Rate-limit (DT-v3-4): if (now - lastReclaim < MinIntervalMin) { skip_ratelimited; exit 0 }
+> #   $live = Get-VFreeGB                                  # SEMPRE ao vivo (Get-PSDrive)
+> #   if ($live -ge ThresholdGB) { skip_threshold; exit 0 }
+> #   if ($live -lt HeadroomGB) {
+> #       if (ScratchBudgetGB -le 0) { abort_headroom (gate disabled); exit 2 }   # sem medicao -> sem emergencia
+> #       if ($live - HardFloorGB -lt ScratchBudgetGB) { abort_insufficient_slack; exit 2 }
+> #       $emergency = $true
+> #   }
+> #   ... fstrim; Stop-VM; wait Off; Mount-VHD -ReadOnly ...
+> #   Optimize-VHD -Path $VhdxPath -Mode Full -ErrorAction Stop   # ININTERRUPTIVEL: sem Stop-Job
+> #   ... finally Start-VM (3x); liberar locks; gravar civm-reclaim-last.txt ...
+> ```
 
 #### Arquivos a MODIFICAR
 
@@ -595,11 +615,11 @@ Para cada arquivo existente:
 
 - **O que muda**: descrição cirúrgica
 - **Requisitos cobertos**: `RF-N`, `DT-N`
-- **Função/bloco afetado**: nome exato
+- **Função/bloco/constante afetada**: nome exato
 - **Antes**: trecho ou shape atual relevante
 - **Depois**: shape novo esperado
 - **Por quê**: vínculo ao PRD
-- **Impacto**: quebra interface? exige ajuste em callers? afeta docs? afeta SDK?
+- **Impacto**: quebra assinatura? exige ajuste em callers? afeta docs? afeta a sync rule? afeta o contrato de reclaim/cleanup?
 - **Testes requeridos**: quais cenários precisam ser cobertos
 - **Disciplina Kahneman** se a mudança for crítica:
   - **Disciplina**:
@@ -616,95 +636,99 @@ Para cada arquivo existente:
 
 #### Observabilidade
 
-**Métricas Prometheus** (se aplicável)
+**Métricas / contadores do host** (se aplicável)
 
-- nome exato da métrica
-- tipo (`CounterVec`, `HistogramVec`, etc.)
-- labels
-- onde registrar
-- quais fluxos incrementam ou observam
+- shape JSON exato (`V:\civm-host-metrics.json`): `v_free_gb`, `v_size_gb`, `vhdx_file_size_gb`, `vhdx_min_size_gb`, `vhdx_max_size_gb`, `guest_free_gb`, `gap_gb`, `timestamp`, `delivery_status`
+- como o guest consome (`civmctl host-disk` → `level` ok/warn/crit, `stale`, `headroom_violation`)
+- quais fluxos emitem/observam (task `civm-host-metrics`; alarme nos pisos 30/10 GB)
 
 **Logs estruturados**
 
-| Evento           | Level | Campos                              |
-| ---------------- | ----- | ----------------------------------- |
-| Resource created | Info  | `tenant`, `resource_id`, `actor_id` |
+| Evento           | Level | Campos                                          |
+| ---------------- | ----- | ----------------------------------------------- |
+| `optimize_start` | Info  | `vhdx_path`, `v_free_before_gb`                 |
+| `optimize_end`   | Info  | `v_free_after_gb`, `scratch_high_water_gb`, `duration_ms` |
+| `abort_headroom` | Error | `v_free_gb`, `headroom_gb`                       |
+| `vm_left_off`    | Error | `attempts`, `last_error`                         |
+
+> Guest = `slog`/JSON (nunca `fmt.Println` em produção); host = log estruturado em `V:\civm-hyperv-maintenance.log`. Sem PII, sem segredo, sem label de alta cardinalidade.
 
 #### Contratos e documentação viva
 
-Preencha explicitamente:
+Preencha explicitamente (sync rule: o que muda contrato/convenção entra no **mesmo commit**):
 
-| Documento                                  | Atualização necessária | Motivo                           |
-| ------------------------------------------ | ---------------------- | -------------------------------- |
-| `docs/openapi/ms-{name}.openapi.yaml`      | Criar / Alterar / N/A  | contrato mudou?                  |
-| `web/src/fsd/shared/api/sdk.types.ts`      | Regenerar / N/A        | schema mudou?                    |
-| `docs/config-reference.json`               | Criar / Alterar / N/A  | env var nova?                    |
-| `docs/events-catalog.json`                 | Criar / Alterar / N/A  | evento novo?                     |
-| `.env.example`                             | Criar / Alterar / N/A  | configuração nova?               |
-| `CLAUDE.md`                                | Alterar / N/A          | padrão estrutural mudou?         |
-| `.claude/rules/*.md`                       | Alterar / N/A          | convenção nova?                  |
-| `web/CLAUDE.md`                            | Alterar / N/A          | frontend pattern novo?           |
-| `docs/decisions/ADR-NNN-*.md`              | Criar / N/A            | decisão arquitetural relevante?  |
-| `disciplines/KAHNEMAN-DISCIPLINES.md` | Alterar / N/A          | nova disciplina, link ou anchor? |
+| Documento                                       | Atualização necessária | Motivo                              |
+| ----------------------------------------------- | ---------------------- | ----------------------------------- |
+| `cmd/civmctl/main.go` (`printHelp`)             | Alterar / N/A          | subcomando novo?                    |
+| `internal/civm/civm.go`                         | Alterar / N/A          | constante que gateia comportamento? |
+| `deploy/windows/*.ps1` + `register-*.ps1`       | Criar / Alterar / N/A  | script host / Scheduled Task?       |
+| `runbooks/RUNBOOK-HOST-VHDX-MAINTENANCE.md`     | Criar / Alterar / N/A  | procedimento operacional mudou?     |
+| `runbooks/MULTI-PROJECT-RUNNER.md` §Disk        | Alterar / N/A          | headroom/observabilidade/rollback?  |
+| `README.md` / `AGENTS.md` / `CODEX.md` / `rules/*.md` | Alterar / N/A     | sync rule (contrato/convenção)?     |
+| `docs/specs/{slug}/IMPL.md`                      | Criar                  | registro do que foi feito           |
+| `disciplines/KAHNEMAN-DISCIPLINES.md`           | Alterar / N/A          | nova disciplina, link ou anchor?    |
+| `disciplines/INVARIANTS.md`                      | Alterar / N/A          | novo gate/invariante?               |
 
 #### Ordem de implementação
 
 Lista numerada, verificável e sem gaps:
 
-1. Migrações
-2. Models / types / validation
-3. Repository / data access
-4. Service / business rules
-5. Handlers / routes / middleware
-6. OpenAPI / SDK / BFF
-7. Frontend integration
-8. Métricas / logs / eventos
-9. Testes unitários
-10. Testes de integração
-11. Documentação viva
+1. Diagnóstico / baseline (Slice 0, sem código — mede o root cause)
+2. Constantes (`internal/civm/civm.go`) + helper de admissão (`EmergencyAdmits`)
+3. Lógica de domínio (`internal/{diskdoctor,maintenance,hostdisk}`)
+4. Subcomandos `cmd/civmctl/*.go` + dispatch/`printHelp`
+5. Componente host observabilidade (`deploy/windows/civm-host-metrics.ps1` + register)
+6. Troca one-time / pipeline (ex.: SCSI/discard) em janela + verificação
+7. Componente host de ação (`civm-vhdx-optimize.ps1` / `civm-vhdx-autoreclaim.ps1` + register SYSTEM)
+8. Logs / contadores / lint host
+9. Testes unitários (Go `-race`)
+10. Validação em janela supervisionada (medição VHDX antes/depois)
+11. Documentação viva (runbook + sync rule)
 
 #### Plano de testes
 
-**Backend**
+**Guest (Go)**
 
-- unitários: casos
-- integração: casos
-- tenant isolation: casos
-- concorrência / atomicidade: casos
+- unitários: casos (mock `os/exec`, `ReadFileFn`/`RunFn` injetáveis)
+- helper de admissão: `EmergencyAdmits(liveFree, hardFloor, budget)` (folga insuficiente, budget=0 desabilita, folga exata)
+- concorrência / idempotência: enter/exit re-run no-op; `flock` serializa; estado parcial restaura correto
+- integração (`-race`, na VM): `disk-doctor` real (lsblk/proc), `maintenance` com gh/systemctl mock
 
-**Frontend**
+**Host (PowerShell, lint + janela)**
 
-- hooks / state: casos
-- componentes: casos
-- fluxos de página: casos
+- lint `internal/hostdisk/ps1_safety_test.go`: ausência de `Stop-Job` no caminho do Optimize; presença do lock canônico e do gate `abort_insufficient_slack`; sample `scratch_high_water_gb`; sem `[math]::Max(0, …)` Int32
+- janela supervisionada: 5 ciclos de medição; `V: < 8` com `ScratchBudget=0` ainda aborta (sem regressão); com budget setado, folga entre `HardFloor+Budget` e `8` admite e completa; dois reclaimers simultâneos → o 2º `reclaim_skip_other_active`; `Start-VM` falha simulada → 3 tentativas → CRITICAL exit; VM nunca fica Off
 
-**Manuais**
+**Manuais (evidência das etapas críticas)**
 
-- curl/httpie ou fluxo UI mínimo
-- cenários de erro
-- evidências objetivas exigidas pelas etapas críticas do mapa Kahneman
+- `disk-doctor --json` colado no IMPL (root cause)
+- log `optimize_start/end` com before/after FileSize e `scratch_high_water_gb`
+- `host-disk --json` mostrando `level` cruzando 30/10 GB
+- evidências objetivas exigidas pelo mapa Kahneman
 
 #### Checklist de validação
 
-**Backend**
+**Guest (Go)**
 
 - [ ] `gofmt -w ./...`
-- [ ] `golangci-lint run -c ../../.golangci.yml ./...`
+- [ ] `golangci-lint run -c .golangci.yml ./...`
+- [ ] `go vet ./...`
 - [ ] `go test ./... -race -count=1`
-- [ ] `go test ./... -tags=integration -race -count=1` se aplicável
+- [ ] `go test -count=1 -cover ./internal/...` (≥80% por package)
+- [ ] `govulncheck ./...`
+- [ ] `go build -ldflags='-s -w' -o /tmp/civmctl ./cmd/civmctl` (compila + < 10MB)
 
-**Frontend**
+**Host (PowerShell)**
 
-- [ ] `yarn lint`
-- [ ] `yarn format:check`
-- [ ] `yarn typecheck`
-- [ ] `yarn test`
+- [ ] lint host (`ps1_safety_test.go`): sem `Stop-Job` no Optimize; lock canônico; sample de scratch; sem clamp Int32
+- [ ] PSScriptAnalyzer nos `.ps1` (se disponível)
+- [ ] `schtasks /run /tn civm-vhdx-optimize` em janela: aborta sob baixo headroom; religa em erro; nunca deixa VM Off
+- [ ] Janela: ≥5 medições coletadas e `ScratchBudgetGB` definido por commit com evidência
 
 **Docs**
 
-- [ ] `yarn docs:merge`
-- [ ] `yarn docs:types`
-- [ ] `yarn docs:validate`
+- [ ] Links locais resolvem (job `validate-templates`)
+- [ ] Sync rule: README ≡ AGENTS ≡ CODEX ≡ rules no mesmo commit se contrato/convenção mudou
 
 **Gates cognitivos**
 
@@ -714,61 +738,63 @@ Lista numerada, verificável e sem gaps:
 
 ---
 
-## PASSO 2.5 — Auditoria do SPEC (opcional por risco)
+## PASSO 2.5 — Auditoria do SPEC (red-team, opcional por risco)
 
 > **Use este passo quando a implementação tiver risco estrutural, operacional ou de segurança.**
-> Ele existe para reduzir ambiguidade antes do código, não para burocratizar issues pequenas.
+> Ele existe para reduzir ambiguidade antes do código, não para burocratizar mudanças pequenas.
+> No caso reclaim, este passo **rodou duas vezes**: SPEC → SPECv2 (4 CRÍTICOS de robustez operacional do host) e SPECv2 → SPECv3 (2 CRÍTICOS: evidência N=1 não-medida + `Stop-Job` não aborta `Optimize-VHD`). Os no-go ficaram registrados no próprio SPEC para não reincidir.
 
 ### Quando usar
 
 Use o Passo 2.5 quando a mudança envolver um ou mais destes pontos:
 
-- auth, sessão, permissões ou secrets
-- tenant isolation ou acesso cross-tenant
-- migração de dados, backfill ou rollback delicado
-- contratos OpenAPI, SDK, BFF ou integração entre serviços
-- Redis, cache, filas, locks ou invalidação
-- rollout coordenado, restart ordenado ou janela operacional
-- risco alto de indisponibilidade, perda de dados ou drift de configuração
+- camada host que muta VM/VHDX (`Stop-VM`/`Optimize-VHD`/`Start-VM`) — risco de deixar a VM Off ou estourar o `V:`
+- contrato de reclaim/cleanup, guards de headroom/admissão, ordem fail-closed
+- subcomando `civmctl` que muta (`runner restart/remove/upgrade`, `bootstrap`, `maintenance`, `hook install`)
+- superfície de privilégio (`deploy/sudoers.d/*`, Scheduled Task SYSTEM, `civm-safedelete`)
+- concorrência / exclusão mútua entre reclaimers, watchdogs ou tasks; locks
+- constantes que gateiam comportamento; janela operacional / restart ordenado
+- quebra de invariante documentado; risco alto de indisponibilidade ou drift de configuração
 
 ### Quando pode pular
 
 Pode pular quando a mudança for pequena, local e sem risco estrutural relevante:
 
 - poucos arquivos
-- sem migração
-- sem impacto em auth, tenant isolation, contratos ou infra
-- sem necessidade de rollout especial
+- sem mutação de VM/VHDX nem do contrato de reclaim/cleanup
+- sem impacto em privilégio, concorrência, constantes ou infra do host
+- sem necessidade de rollout/janela especial
 
 ### Prompt
 
-Revise `docs/{feature-slug}/SPEC.md` como auditoria pré-implementação.
+Revise `docs/specs/{feature-slug}/SPEC.md` como auditoria pré-implementação.
 
-Se `docs/{feature-slug}/SPECv2.md` existir e tiver sido criado como resposta a um `no-go` anterior, revise o `SPECv2.md` como candidato ativo.
+Se `docs/specs/{feature-slug}/SPECv2.md` (ou `SPECv3.md`) existir e tiver sido criado como resposta a um `no-go` anterior, revise a versão mais recente como candidato ativo.
 
 Quero uma revisão de lacunas com foco em:
 
 - ambiguidades técnicas ainda não resolvidas
-- fronteira de atomicidade implícita, ambígua ou incompatível com o código real
-- riscos operacionais de rollout, restart e rollback
-- evidência mínima que não tenha caminho executável claro no repo
-- rollback descrito de forma genérica sem separar app, migration e dados
-- uso de `Down` tecnicamente existente, mas operacionalmente inseguro em ambiente compartilhado
-- dependências não mapeadas entre serviços, env vars, docs e automação
-- gaps de segurança, autorização, isolamento de tenant e consistência de dados
+- fronteira de atomicidade implícita, ambígua ou incompatível com o código/host real
+- riscos operacionais de rollout, shutdown/restart da VM e rollback
+- evidência mínima que não tenha caminho executável claro no repo (ex.: "não estourou o `V:`" inferido de "não deu erro", sem poll de `V:` durante o Optimize)
+- rollback descrito de forma genérica sem separar app, host (task/config) e estado
+- uso de mecanismo tecnicamente existente mas operacionalmente inseguro (ex.: `Stop-Job` "abortando" um `Optimize-VHD` que na verdade é ininterruptível e segue escrevendo o `V:`)
+- dependências não mapeadas entre guest, host, constantes, docs e automação
+- gaps de privilégio, fail-closed, exclusão mútua e consistência do estado (VM/VHDX/disco)
 - inconsistências entre requisitos, decisões técnicas, arquivos listados, testes e validação final
 - qualquer item do SPEC que ainda exija interpretação durante a implementação
 - ausência de disciplina cognitiva explícita nas etapas críticas
 - passos críticos sem pergunta obrigatória, evidência mínima ou abort trigger
 - uso de linguagem vaga (`validar`, `garantir`, `confirmar`, `se necessário`) sem critério observável
+- piso/threshold rígido que apenas **realoca** um deadlock para um valor menor em vez de resolvê-lo
 - gaps entre etapas críticas do SPEC e as disciplinas documentadas em `disciplines/KAHNEMAN-DISCIPLINES.md`
-- presença de workaround, shim, compatibilidade legada, dual-reader, dual-write, backfill ou migration incremental corretiva sem exceção Day-0 explícita
-- código novo mantendo versão antiga sem produção viva
+- presença de workaround, shim, compatibilidade legada, dual-reader, dual-write ou migração corretiva de estado sem exceção Day-0 explícita
+- código novo mantendo versão antiga sem estado vivo
 
 ### Formato da resposta
 
 1. Liste os findings primeiro, ordenados por severidade
-2. Para cada finding, cite a seção exata do SPEC afetada
+2. Para cada finding, cite a seção/ITEM exato do SPEC afetado
 3. Depois liste `Open questions`
 4. Depois diga se o SPEC está pronto para implementação
 5. Feche com `go` ou `no-go`
@@ -777,12 +803,13 @@ Quero uma revisão de lacunas com foco em:
 
 - Se houver finding que exija decisão nova, volte ao **Passo 2**
 - Se o arquivo auditado foi `SPEC.md` e o resultado foi `no-go`, **não pare apenas na auditoria**: volte ao **Passo 2 no mesmo turno**, crie `SPECv2.md` corrigindo os findings bloqueantes e preserve o `SPEC.md` original
-- Se o arquivo auditado foi `SPECv2.md` e o resultado foi `no-go`, **não pare apenas na auditoria**: volte ao **Passo 2 no mesmo turno** e atualize `SPECv2.md` in-place, salvo pedido explícito para criar `SPECv3.md`
+- Se o arquivo auditado foi `SPECv2.md` e o resultado foi `no-go`, **não pare apenas na auditoria**: volte ao **Passo 2 no mesmo turno** e atualize `SPECv2.md` in-place ou crie `SPECv3.md`, conforme o pedido
 - Ao criar ou atualizar o SPEC corrigido depois de um `no-go`, registre no arquivo:
   - qual SPEC foi auditado
-  - quais findings bloqueantes foram endereçados
+  - quais findings bloqueantes foram endereçados (no caso reclaim: "`Stop-Job` não aborta `Optimize-VHD`", "evidência N=1 não mediu scratch")
   - que a versão corrigida é o candidato ativo para nova auditoria
 - Se houver etapa crítica sem link para disciplina Kahneman aplicável, sem evidência mínima ou sem abort trigger, o resultado deve ser `no-go`
+- Se houver mecanismo de segurança que não funciona como descrito (abort que não aborta, guard só point-in-time numa corrida real), o resultado deve ser `no-go`
 - Se houver violação da política Day-0 sem exceção documentada, o resultado deve ser `no-go`
 - Se a auditoria resultar em `go`, siga para o **Passo 3**
 
@@ -792,95 +819,99 @@ Quero uma revisão de lacunas com foco em:
 
 > **Leia o SPEC ativo e execute-o passo a passo.**
 > O Passo 3 não fecha lacunas arquiteturais; ele implementa o que já foi decidido.
-> O SPEC ativo é a última versão auditada com `go`: `SPECv2.md` quando existir e tiver sido aprovado pelo Passo 2.5; caso contrário, `SPEC.md`.
+> O SPEC ativo é a última versão auditada com `go`: `SPECv3.md` quando existir e tiver sido aprovado pelo Passo 2.5; senão `SPECv2.md`; senão `SPEC.md`.
 
 ### Prompt
 
-Implemente a feature descrita no SPEC ativo de `docs/{feature-slug}/`.
+Implemente a feature descrita no SPEC ativo de `docs/specs/{feature-slug}/`.
 
-Use `docs/{feature-slug}/SPECv2.md` quando ele existir como versão melhorada pós-auditoria e tiver recebido `go` no Passo 2.5. Use `docs/{feature-slug}/SPEC.md` apenas quando não houver `SPECv2.md` ativo.
+Use a versão mais recente que recebeu `go` no Passo 2.5 (`SPECv3.md` > `SPECv2.md` > `SPEC.md`). Não altere as versões baseline preservadas.
 
 ### Regras de execução
 
-1. Siga a ordem de implementação do SPEC
-2. Use os trechos, assinaturas e contratos do SPEC como base
+1. Siga a ordem de implementação do SPEC (no caso reclaim, a ordem é OBRIGATÓRIA: medição → lock canônico → admission gate → cadência/footprint)
+2. Use os trechos, assinaturas, esqueletos `.ps1` e contratos do SPEC como base
 3. Não adicione funcionalidade fora do escopo fechado
 4. Se encontrar um gap, volte ao Passo 2 antes de continuar
-5. Toda alteração em contrato deve ser refletida em docs e types no mesmo ciclo
-6. Toda alteração em dado, auth, tenant isolation ou cache deve ser validada com teste
+5. Toda alteração em contrato/convenção deve ser refletida em docs e na sync rule no mesmo ciclo
+6. Toda alteração em estado, privilégio, concorrência ou comportamento de reclaim/cleanup deve ser validada com teste (Go `-race` e/ou lint host) — e número, não adjetivo, para qualquer claim de comportamento
 7. Não refatore código adjacente sem necessidade funcional
 8. Em qualquer item crítico, execute também o bloco `Disciplina Kahneman` antes de avançar para a próxima fatia
-9. Implemente a solução Day-0 limpa definida no SPEC. Não adicione shims, fallbacks, compatibilidade com versões antigas, backfills ou dead code
+9. Implemente a solução Day-0 limpa definida no SPEC. Não adicione shims, fallbacks, compatibilidade com versões antigas, migração corretiva de estado ou dead code
 10. Se durante a implementação parecer necessário manter duas versões, pare e volte ao Passo 2 para registrar a exceção Day-0
-11. Quando o SPEC consolidar uma estrutura Day-0, reescreva/remova o código antigo necessário em vez de preservar caminhos mortos
+11. Quando o SPEC consolidar um formato de estado/constante, reescreva/remova o código antigo necessário em vez de preservar caminhos mortos
+12. Registre o resultado em `docs/specs/{feature-slug}/IMPL.md` (commits, arquivos, decisões pequenas que não pediram nova ADR, métricas de validação) e cite os requirement IDs cobertos em cada commit/PR
 
 ### Ritual de execução por fatia
 
 Para cada fatia do SPEC:
 
 1. implementar apenas o item atual
-2. validar compilação
-3. validar testes relacionados
+2. validar compilação (`go build`)
+3. validar testes relacionados (`go test -race`; lint host se tocou `.ps1`)
 4. validar a pergunta obrigatória, a evidência mínima e o abort trigger quando o item tiver disciplina Kahneman
 5. comparar com o SPEC
 6. só então avançar
+
+> **Micro-slicing (anti-falácia do planejamento):** nunca implemente múltiplos padrões / dezenas de arquivos de uma vez — uma fatia ortogonal por vez → commit atômico → valida e testa → próxima. O Sistema 1 é otimista demais.
 
 ### Checklist durante a implementação
 
 A cada camada concluída:
 
 - [ ] Código compila sem erros
-- [ ] Lint passa
-- [ ] Testes existentes continuam passando
-- [ ] Novos testes da fatia foram adicionados
-- [ ] Tenant isolation mantida
-- [ ] Contratos atualizados quando necessário
-- [ ] Docs atualizadas quando o item exige
+- [ ] Lint passa (`golangci-lint`; lint host de `.ps1` se aplicável)
+- [ ] Testes existentes continuam passando (`-race`)
+- [ ] Novos testes da fatia foram adicionados (cobertura ≥80% no package)
+- [ ] Fail-closed mantido (sob incerteza, recusa começar o caminho perigoso)
+- [ ] Contrato/constantes atualizados quando necessário (sync rule)
+- [ ] Docs/runbook atualizados quando o item exige
 - [ ] Etapas críticas continuam coerentes com `disciplines/KAHNEMAN-DISCIPLINES.md`
 
 ### Quando voltar ao SPEC
 
-- Descobriu necessidade de índice não previsto
-- Handler precisa de campo extra
-- Edge case não coberto apareceu
+- Descobriu necessidade de constante/arquivo de estado não previsto
+- Subcomando precisa de flag/campo extra
+- Edge case do host não coberto apareceu (optimize pendurado, controlador inesperado, métrica stale)
 - Ordem de implementação não fecha
-- Mudou shape de resposta ou contrato OpenAPI
-- Surgiu necessidade de rollout, backfill ou rollback não descritos
+- Mudou shape de saída JSON, exit code ou contrato de reclaim/cleanup
+- Surgiu necessidade de janela, troca one-time ou rollback não descritos
 - A etapa crítica exige uma decisão que o mapa Kahneman do SPEC ainda não fechou
-- Surgiu necessidade de manter versão antiga, shim, dual path, backfill ou compatibilidade não documentada como exceção Day-0
+- Surgiu necessidade de manter versão antiga, shim, dual path ou compatibilidade não documentada como exceção Day-0
 
 > **Regra absoluta:** se o código precisar decidir algo que o SPEC não decidiu, a implementação deve parar e o SPEC deve ser atualizado primeiro.
-> Se o SPEC ativo for `SPECv2.md`, atualize `SPECv2.md`; não altere o `SPEC.md` baseline.
+> Se o SPEC ativo for `SPECv3.md`, atualize `SPECv3.md`; não altere as versões baseline.
 
 ### Validação final
 
 Ao terminar toda a implementação, execute o checklist do SPEC:
 
-**Backend**
+**Guest (Go)**
 
 ```bash
 gofmt -w ./...
-cd services/ms-{name} && golangci-lint run -c ../../.golangci.yml ./...
+golangci-lint run -c .golangci.yml ./...
+go vet ./...
 go test ./... -race -count=1
-go test ./... -tags=integration -race -count=1
+go test -count=1 -cover ./internal/...                # ≥80% por package
+govulncheck ./...
+go build -ldflags='-s -w' -o /tmp/civmctl ./cmd/civmctl && stat -c%s /tmp/civmctl
 ```
 
-**Frontend**
+**Host (PowerShell)**
 
 ```bash
-cd web
-yarn lint
-yarn format:check
-yarn typecheck
-yarn test
+# lint host (parte do go test -race): varre deploy/windows/*.ps1
+go test ./internal/hostdisk/
+# em janela supervisionada:
+schtasks /run /tn civm-vhdx-optimize        # aborta sob baixo headroom; religa em erro; nunca deixa VM Off
 ```
 
-**Docs**
+**Integração (na VM, com sudo NOPASSWD para o wrapper)**
 
 ```bash
-yarn docs:merge
-yarn docs:types
-yarn docs:validate
+go test -tags=integration -run TestIntegration ./internal/safedelete/
+civmctl parity                              # paridade com ubuntu-latest
 ```
 
 ---
@@ -893,7 +924,7 @@ Só avance se:
 
 - houver uma opção recomendada clara
 - os requisitos funcionais estiverem fechados
-- os riscos estruturais estiverem explícitos
+- os riscos estruturais (VM/VHDX, headroom, privilégio, concorrência) estiverem explícitos
 - o fora de escopo estiver definido
 
 ### SPEC → Implementação
@@ -902,51 +933,44 @@ Só avance se:
 
 - cada requisito do PRD estiver rastreado
 - a ordem de implementação estiver fechada
-- arquivos a criar/modificar estiverem explícitos
+- arquivos a criar/modificar (Go + `.ps1` + constantes) estiverem explícitos
 - plano de testes e docs estiverem definidos
 - etapas críticas estiverem mapeadas para `disciplines/KAHNEMAN-DISCIPLINES.md`
 - cada etapa crítica tiver pergunta obrigatória, evidência mínima e abort trigger
-- se o risco for alto, o Passo 2.5 tiver resultado em `go`
+- se o risco for alto, o Passo 2.5 tiver resultado em `go` (e os no-go anteriores estiverem registrados)
 
 ### Implementação → Commit
 
 Só avance se:
 
 - código, testes e docs estiverem consistentes com o SPEC
-- validações finais tiverem sido executadas
-- não houver drift entre contrato, types, handlers e frontend
+- validações finais (Go `-race`/cobertura/lint/govulncheck/build + lint host) tiverem sido executadas
+- não houver drift entre contrato, constantes, subcomandos, `.ps1` e runbook (sync rule)
 - não houver drift entre o que foi implementado e os guardrails cognitivos descritos no SPEC
+- cada commit não-trivial (`feat`/`fix`/`refactor`/`perf`) carregue `Rollback trigger:` numérico e cite os requirement IDs cobertos
 
 ---
 
-## Referência rápida — Stack de exemplo (ilustrativo)
+## Referência rápida — Stack do `civm`
 
-> Stack do produto-exemplo usado nos prompts. **Não é o stack do `civm`** (Go stdlib-first, sem frontend/DB). Troque pela tabela do seu repo.
-
-| Camada          | Tecnologia                            | Versão           |
-| --------------- | ------------------------------------- | ---------------- |
-| Frontend        | Next.js (App Router)                  | 16               |
-| UI              | React                                 | 19               |
-| Styling         | StyleX                                | latest           |
-| State (server)  | TanStack Query                        | v5               |
-| State (client)  | Zustand                               | latest           |
-| Forms           | React Hook Form + Zod                 | latest           |
-| Types           | TypeScript                            | 5.9              |
-| Backend         | Go                                    | 1.26             |
-| Router          | chi/v5                                | v5               |
-| Database driver | pgx                                   | v5               |
-| Cache/Pub-Sub   | go-redis                              | v9               |
-| Migrations      | goose (SQL only)                      | latest           |
-| Metrics         | Prometheus client_golang              | latest           |
-| Logging         | slog                                  | stdlib           |
-| Database        | PostgreSQL                            | 18               |
-| Cache           | Redis                                 | 8.6              |
-| Connection pool | PgBouncer                             | transaction mode |
-| Proxy           | Nginx                                 | 1.27             |
-| Containers      | Docker                                | latest           |
-| Testing (Go)    | testing + testify + testcontainers-go | —                |
-| Testing (TS)    | Vitest + Testing Library              | —                |
-| Testing (E2E)   | Playwright                            | —                |
+| Camada                  | Tecnologia                                            | Versão / detalhe     |
+| ----------------------- | ----------------------------------------------------- | -------------------- |
+| Linguagem (guest)       | Go (stdlib-first)                                     | 1.26                 |
+| CLI                     | `cmd/civmctl/` + dispatch por `switch`                | —                    |
+| Domínio                 | `internal/**` (capacity, hostdisk, diskdoctor, maintenance, idle, cleanup, …) | — |
+| Exec externo            | `os/exec` (`exec.CommandContext`, sem shell)          | stdlib               |
+| Logging                 | `log/slog` (JSON estruturado)                         | stdlib               |
+| Estado                  | arquivos JSON (`/var/lib/civm/*.json`) + locks (`flock`/`FileShare::None`) | — |
+| Disco / `Statfs`        | `golang.org/x/sys/unix`                               | —                    |
+| Camada host             | PowerShell em `deploy/windows/*.ps1` + `register-*.ps1` | —                  |
+| Hypervisor              | Hyper-V (`Get-VM`/`Stop-VM`/`Start-VM`, `Get-VHD`/`Optimize-VHD`/`Resize-VHD`) | — |
+| Agendamento (guest)     | systemd timers/units (`deploy/systemd/`)              | —                    |
+| Agendamento (host)      | `schtasks` Scheduled Tasks (SYSTEM, `/RL HIGHEST`)    | —                    |
+| Discard / reclaim       | `fstrim` / `discard`, `lsblk -D`, controlador SCSI vs IDE | —                |
+| Runner                  | GitHub Actions self-hosted runner (`actions.runner.*`, `gh api`) | 2.334.0   |
+| Lint / segurança        | `golangci-lint` (`.golangci.yml`), `gosec`, `govulncheck`, `go vet` | —      |
+| Testes                  | `testing` stdlib + `go test -race`; lint host `internal/hostdisk/ps1_safety_test.go` | — |
+| CI                      | `.github/workflows/ci.yml` (`validate-templates`, `build-civmctl`, `self-hosted-smoke`) | — |
 
 ---
 
@@ -960,5 +984,6 @@ Só avance se:
 
 - Se o Passo 3 achar um gap real, volte ao Passo 2
 - Se o Passo 2 achar ambiguidade insolúvel, volte ao Passo 1
+- Se o Passo 2.5 achar mecanismo de segurança que não funciona como descrito, é `no-go` → volte ao Passo 2 e gere a próxima versão (SPECv2/SPECv3)
 - Nunca resolva um gap estrutural só no código
-- Nunca crie `PRD.md` ou `SPEC.md` fora de `docs/{feature-slug}/`
+- Nunca crie `PRD.md` ou `SPEC.md` fora de `docs/specs/{feature-slug}/`
