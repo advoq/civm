@@ -18,7 +18,8 @@
           MinHeadroomGB, log abort_headroom and exit 2 WITHOUT ever
           zero-filling (DT-v2-3, DT-3). The temporary VHDX growth during
           Optimize-VHD needs that slack on V:.
-      2.  Drain the guest: ssh '... civmctl maintenance enter --execute'. A
+      2.  Drain the guest: ssh '... sudo -n civmctl maintenance enter --execute'.
+          (sudo: /var/lib/civm/maintenance.lock is root-owned.) A
           drain failure ($LASTEXITCODE != 0) throws and MUST NOT power the VM
           off (DT-v2-17).
       2b. Phase-2 headroom guard: re-loop the guest idle-check until idle, then
@@ -310,7 +311,7 @@ try {
 
     # 2. Drain the guest. A drain failure must NOT power off the VM (DT-v2-17).
     Write-CivmLog -Event 'drain_enter' -Data @{ target = $GuestSshTarget }
-    $enter = Invoke-GuestSsh -RemoteCommand 'civmctl maintenance enter --execute'
+    $enter = Invoke-GuestSsh -RemoteCommand 'sudo -n civmctl maintenance enter --execute'
     if ($enter.ExitCode -ne 0) {
         throw "maintenance enter failed (exit $($enter.ExitCode)): $($enter.Output)"
     }
@@ -457,7 +458,7 @@ try {
     } elseif ($drained) {
         # VM is Running: lift the drain so the runner accepts jobs again.
         Write-CivmLog -Event 'drain_exit' -Data @{ target = $GuestSshTarget }
-        $exit = Invoke-GuestSsh -RemoteCommand 'civmctl maintenance exit --execute'
+        $exit = Invoke-GuestSsh -RemoteCommand 'sudo -n civmctl maintenance exit --execute'
         if ($exit.ExitCode -ne 0) {
             Write-CivmLog -Event 'drain_exit_warn' -Level 'WARN' -Data @{
                 exit_code = $exit.ExitCode
