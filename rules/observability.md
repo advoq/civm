@@ -1,14 +1,18 @@
 ---
 name: observability
-description: slog estruturado, OTel, Prometheus, request_id propagation.
+description: Observabilidade do civm — civmctl read-only, slog estruturado, host-metrics, log de manutenção, Prometheus textfile.
 paths:
-  - services/api/**
-  - apps/web/instrumentation.ts
+  - "cmd/civmctl/**"
+  - "internal/**"
+  - "deploy/windows/*.ps1"
 ---
 
 # Observability rules
 
-## civm VM observability
+civm é infra Go (runner self-hosted + camada host Hyper-V). Observabilidade aqui
+é sobre **estado da VM/runner e da limpeza de disco**, não sobre HTTP/tenant/DB.
+
+## Estado da VM/runner (read-only)
 
 `civmctl doctor --repos=auto --json` e `civmctl capacity --json` são a rota
 read-only canônica para estado da VM/runner. `capacity` usa 90% de disco como
@@ -18,162 +22,50 @@ hard-fail para `accepting_jobs=false`; pressão antes do job começa em 60% via
 `civmctl disk-audit --json` reporta ownership seguro de disco: `_work`,
 `_work/_tool`, `_work/_actions`, `$HOME/.cache`, `$HOME/go/pkg`,
 `$HOME/codespace`, Docker reclaimable, `/var/log` e `/var/cache`. Clones em
-`$HOME/codespace` são observabilidade-only e não são removidos
-automaticamente.
+`$HOME/codespace` são observabilidade-only e não são removidos automaticamente.
 
-`civmctl-metrics.timer` deve ficar habilitado junto com cleanup,
-disk-watchdog, runner-watchdog e reverse-watchdog. Metrics missing é warning
-em `civmctl health`; cleanup e disk-watchdog missing continuam críticos.
+`civmctl health` agrega o estado dos timers. `civmctl-metrics.timer` deve ficar
+habilitado junto com cleanup, disk-watchdog, mem-watchdog, runner-watchdog e
+reverse-watchdog. Metrics missing é warning; cleanup e disk-watchdog missing
+continuam críticos.
 
 ## Logs estruturados
 
-### Backend (Go)
-
-`slog.JSONHandler` é o handler default. Nunca `fmt.Println` ou `log.Printf` em produção.
+**Go (civmctl):** `slog.JSONHandler` é o handler default. Nunca `fmt.Println` ou
+`log.Printf` em produção — sempre `slog` com contexto.
 
 ```go
-slog.InfoContext(ctx, "workspace created",
-    slog.String("workspace_id", ws.ID),
-    slog.String("workspace_slug", ws.Slug),
-    slog.String("user_id", actor.ID),
-    slog.String("request_id", middleware.GetReqID(ctx)),
+slog.InfoContext(ctx, "hook job-started",
+    slog.String("repo", repo),
+    slog.String("work_root", workRoot),
+    slog.Int("disk_pct", pct),
 )
 ```
 
-Atributos obrigatórios em qualquer log de operação:
+**Camada host (PowerShell):** as tasks `deploy/windows/*.ps1` emitem **uma linha
+JSON por evento** em `V:\civm-hyperv-maintenance.log` (campos `timestamp`,
+`level`, `event`, `vm`, + dados). Eventos: `autoreclaim_*`, `optimize_*`,
+`emergency_reclaim_*`, `watchdog_*`. ERROR/CRITICAL também vão pra stderr.
 
-- `request_id` (do middleware chi `RequestID`)
-- `trace_id`, `span_id` (M5 OTel)
-- `user_id` (quando autenticado)
-- `workspace_slug` (quando dentro de tenant)
+**Hooks de job:** registram em `hooks.jsonl` (uma linha por job-started/finished,
+com `WorkRoot`, disco, cleanup aplicado).
 
-### Frontend (Next.js)
+## Métricas
 
-Sem `console.log` em produção (invariante #2). Para debugging local, usar `console.debug` que stripa automaticamente em build de produção (eslint rule).
+`civmctl metrics dump --stdout` e o **Prometheus textfile collector** (via
+`civmctl-metrics.timer`) expõem contadores de capacidade/disco/cleanup para
+scrape local. `host-metrics.json` (no host, `V:\`) carrega `v_free_gb` e o gap do
+VHDX, consumido pelo guard de headroom do reclaim.
 
-Para erros user-facing, telemetria via Sentry/etc (M5+ ADR).
+## Não logar segredo
 
-## PII scrubbing (invariante #3)
-
-Nunca logar email/cpf/phone/password/token raw. Wrapper:
-
-```go
-slog.String("email", auth.MaskPII(email))   // -> "ad***@***.com"
-slog.String("cpf", auth.MaskPII(cpf))       // -> "***.***.***-**"
-slog.String("token", auth.MaskPII(token))   // -> "tk_a***"
-```
-
-## OpenTelemetry (M5)
-
-### Bootstrap Go
-
-```go
-// services/api/internal/platform/observability/otel.go
-func New(ctx context.Context, cfg Config) (shutdown func(context.Context) error, err error) {
-    exporter, err := otlptracegrpc.New(ctx, otlptracegrpc.WithEndpoint(cfg.OTLPEndpoint))
-    // ...
-    tp := trace.NewTracerProvider(
-        trace.WithBatcher(exporter),
-        trace.WithResource(resource.NewWithAttributes(
-            semconv.SchemaURL,
-            semconv.ServiceName("compexhub-api"),
-            semconv.ServiceVersion(cfg.Version),
-        )),
-    )
-    otel.SetTracerProvider(tp)
-    otel.SetTextMapPropagator(propagation.TraceContext{})
-    return tp.Shutdown, nil
-}
-```
-
-Middleware `otelchi` para spans HTTP automáticos. Spans manuais para operações importantes:
-
-```go
-ctx, span := tracer.Start(ctx, "auth.Login")
-defer span.End()
-span.SetAttributes(attribute.String("workspace_slug", slug))
-```
-
-### Frontend Next.js
-
-```ts
-// apps/web/instrumentation.ts
-import { registerOTel } from '@vercel/otel';
-
-export function register() {
-  registerOTel({
-    serviceName: 'compexhub-web',
-    spanProcessors: ['auto'],
-  });
-}
-```
-
-W3C Trace Context propagação automática para fetches via `@compexhub/api-client`.
-
-## Prometheus metrics
-
-### Endpoint
-
-```
-GET /metrics
-```
-
-Apenas internal network. **Nunca** proxy via Nginx público.
-
-### Métricas obrigatórias
-
-```go
-// services/api/internal/platform/observability/metrics.go
-http_requests_total{method, route, status}
-http_request_duration_seconds{method, route}
-auth_login_total{outcome}              // success|failure|lockout|error
-argon2_semaphore_acquisitions_total{operation}
-argon2_semaphore_wait_seconds{operation}
-db_pool_acquired_conns
-db_pool_idle_conns
-db_pool_total_conns
-db_pool_max_conns
-```
-
-### Dashboards
-
-`infra/grafana/provisioning/dashboards/`:
-
-- `auth.json` — login rate, p95 latency, argon2 queue depth
-- `api.json` — RPS, p50/p95/p99 latency, error rate
-- `tenant.json` — workspaces ativos, provisioning duration, schemas count
-- `db.json` — connection pool por schema, query duration
-
-## Tempo (traces) + Loki (logs) + Prometheus (metrics) + Grafana
-
-Stack `infra/`:
-
-```yaml
-# infra/docker-compose.yml (M5)
-services:
-  otel-collector:    # Recebe OTLP, forwards para Tempo/Prometheus/Loki
-  tempo:             # Traces
-  prometheus:        # Metrics scrape
-  loki:              # Logs aggregation
-  grafana:           # Visualização
-```
-
-Dashboards e dashboards via provisioning (Grafana Configuration as Code).
-
-## Runbooks
-
-Cada métrica/dashboard tem runbook em `docs/runbooks/`:
-
-- `RUNBOOK-AUTH-INCIDENT.md` — login spike, argon2 overload
-- `RUNBOOK-DB-DOWN.md` — failover, restore
-- `RUNBOOK-TENANT-PROVISIONING.md` — provisioner stuck, schema drift
+Nunca logar token/PAT/chave raw (GitHub App key, SSH key, `gh` token). Mascarar
+ou omitir. civm é infra: não há PII de usuário final no caminho.
 
 ## Don't
 
-- ❌ `fmt.Println` ou `log.Printf` em produção (use slog).
-- ❌ `console.log` em frontend produção (invariante #2).
-- ❌ Logar PII raw (invariante #3 — sempre `MaskPII`).
-- ❌ Métrica sem dashboard correspondente (orfã).
-- ❌ Métrica sem runbook quando virar página (alerta sem ação).
-- ❌ Trace sampling agressivo (>10% off) sem ADR — perde-se debugging.
-- ❌ `/metrics` exposto publicamente.
+- ❌ `fmt.Println` / `log.Printf` em produção (use `slog`).
+- ❌ Engolir erro sem log de contexto (`%w` + `slog`).
+- ❌ Logar token/chave/secret raw.
+- ❌ Métrica/evento órfão sem consumidor (`civmctl health`, runbook, scrape).
+- ❌ Task host que muta sem emitir evento em `civm-hyperv-maintenance.log`.

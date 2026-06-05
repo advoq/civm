@@ -14,12 +14,18 @@ SSDV3 (Spec-Driven Development V3) é a metodologia de spec do `civm` (cf. `docs
 
 SSDV3 é **mandatório** para mudanças em:
 
-1. `services/api/internal/platform/auth/**` — qualquer alteração em login, signup, JWT, sessions, password, OAuth.
-2. `services/api/internal/platform/rbac/**` — adição/remoção de papel ou ação no catalog.
-3. **Semântica de `workspace_id` ou schema-per-tenant** — qualquer migration que crie/altere coluna referenciando workspace, ou mudança em `tenancy/provisioner.go`.
-4. **Novo produto** em `apps/<slug>/` ou `services/api/internal/apps/<slug>/`.
-5. **Nova camada** em `internal/platform/` (ex.: `billing/`, `notifications/`).
-6. **Migration que `DROP COLUMN`, `RENAME COLUMN`, ou altera FK** — operações irreversíveis em produção.
+1. **Camada host que muta VM/VHDX** — `deploy/windows/*.ps1` (Stop-VM,
+   Optimize-VHD, reclaim, maintenance): risco de deixar a VM Off ou estourar `V:`.
+2. **Contrato de cleanup/reclaim** — o que `civmctl cleanup --execute` apaga, os
+   guards de headroom/admissão do reclaim, a ordem fail-closed.
+3. **Subcomando `civmctl` que muta** — `runner restart/remove/upgrade`,
+   `bootstrap`, `maintenance enter/exit`, `hook install`.
+4. **Superfície de privilégio** — `deploy/sudoers.d/*`, Scheduled Tasks SYSTEM,
+   o wrapper `civm-safedelete`.
+5. **Constantes que gateiam comportamento** em `internal/civm/civm.go` (headroom,
+   faixas de porta, pre-cleanup %, ScratchBudget).
+6. **Quebra de invariante documentado** (`docs/INVARIANTS.md`): sync rule,
+   anti-skynet, cobertura ≥80%.
 
 ## Opcional
 
@@ -80,7 +86,7 @@ Output: `docs/specs/<feature-slug>/IMPL.md` documentando o que foi feito (commit
 
 ## Regras duras
 
-1. **Reuso antes de criação.** Antes de propor código novo, prove que utilitário existente não atende. Reference: `services/shared/`, `apps/web/src/lib/`, `packages/*`.
+1. **Reuso antes de criação.** Antes de propor código novo, prove que utilitário existente não atende. Reference: `internal/**`, `cmd/civmctl/`.
 2. **Separação fato vs proposta.** Cada item do PRD é "Confirmado em codebase / Confirmado em docs / Inferência". Inferências precisam de validação em SPEC.
 3. **Zero criatividade no IMPL.** Code segue SPEC. Nova decisão → SPEC update → re-aprovação.
 4. **Rastreabilidade por requirement ID.** Cada commit cita `RF-3`, `RNF-2`, etc. PR de IMPL liga aos IDs cobertos.
@@ -111,5 +117,5 @@ PR description cita SPEC + requirement IDs cobertos.
 - ❌ "Vou só fazer um SPEC pequeno" — se a mudança cabe em SPEC sem PRD, ela provavelmente é opcional, não obrigatória; e se é obrigatória, PRD é passo 1.
 - ❌ IMPL sem SPEC aprovado.
 - ❌ "Inferência" no PRD em >30% dos itens — sinal de que a investigação foi rasa.
-- ❌ Criar utilitário novo sem checar `services/shared/` ou `apps/web/src/lib/`.
+- ❌ Criar utilitário novo sem checar `internal/**` ou `cmd/civmctl/`.
 - ❌ Commit no IMPL que não rastreia para requirement ID.
