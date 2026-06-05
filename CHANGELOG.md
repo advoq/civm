@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.17.1](https://github.com/advoq/civm/compare/v1.17.0...v1.17.1) (2026-06-05)
+
+
+### Documentation
+
+* purge discontinued compexhub peer from runbooks/specs ([#109](https://github.com/advoq/civm/issues/109)) ([11e46bf](https://github.com/advoq/civm/commit/11e46bf7908ca3c1192c830d7c4be6ea9eac9b73))
+* **rules:** purge web-app/compexhub content, make rules civm-native ([#107](https://github.com/advoq/civm/issues/107)) ([4e25e9e](https://github.com/advoq/civm/commit/4e25e9efd8c495c099f0df571ef8669c67c0e46c))
+
 ## [1.17.0](https://github.com/advoq/civm/compare/v1.16.0...v1.17.0) (2026-06-05)
 
 
