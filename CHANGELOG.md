@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.2](https://github.com/advoq/civm/compare/v1.17.1...v1.17.2) (2026-06-05)
+
+
+### Documentation
+
+* **disciplines:** rewrite SSDV3-PROMPTS civm-native ([#110](https://github.com/advoq/civm/issues/110)) ([c5e6edb](https://github.com/advoq/civm/commit/c5e6edbb3b6f6fe447238a14e3a26048ae0ff2dc))
+
 ## [1.17.1](https://github.com/advoq/civm/compare/v1.17.0...v1.17.1) (2026-06-05)
 
 
