@@ -52,7 +52,7 @@ issues: [3]
 |---|---|
 | `/usr/local/bin/civmctl` | instalado; sha256 `cbdc1534a3a89653eae7e5400309dbe39a0925720a8fcd408cdfe5875ff7e9bd` |
 | `civmctl health` | exit `1` por warning `LAST`; DISK/MEM/RUNNERS/TIMER_* OK |
-| `civmctl doctor --json` | exit `1` apenas por warning `LAST`; runners `civm-self`, `civm-compexhub`, `civm-vitae`, `civm-advoq` online e `busy=false` |
+| `civmctl doctor --json` | exit `1` apenas por warning `LAST`; runners `civm-self`, `civm-vitae`, `civm-advoq` online e `busy=false` |
 | `civmctl idle-check` | `idle`, exit `0`, revalidado em `2026-05-11T00:21:41Z` |
 | Cleanup preservando `_work/_tool` e `_work/_actions` | validado no rollout do PR `#2`; nenhum cleanup destrutivo novo executado nesta formalizacao |
 

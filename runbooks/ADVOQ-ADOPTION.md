@@ -80,7 +80,7 @@ adicional, sempre verde quando billing-block ativa fallback.
 ### Adoção avançada (Tier 2: rotear go.yml e web.yml)
 
 Editar `go.yml` e `web.yml` pra adicionar `runs-on:` dinâmico igual
-compexhub/vitae fazem:
+vitae faz:
 
 ```yaml
 runs-on: ${{ needs.ci-router.outputs.use_local == 'true' && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}

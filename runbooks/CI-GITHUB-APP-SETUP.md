@@ -35,7 +35,7 @@ App escala melhor.
 - Acessar `https://github.com/settings/apps/new` (user-level) OU
   `https://github.com/organizations/<org>/settings/apps/new` (org-level).
 - Preencher:
-  - **GitHub App name:** `compexhub-billing-detector` (ou similar)
+  - **GitHub App name:** `civm-billing-detector` (ou similar)
   - **Homepage URL:** URL do repo (cosmetico)
   - **Webhook:** desabilitar (este App nao recebe events)
   - **Permissions:**
