@@ -131,6 +131,7 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 | Arquivo | Função |
 |---|---|
 | `disciplines/KAHNEMAN-DISCIPLINES.md` | 12 disciplinas Sistema 1 vs 2 — referência metodológica |
+| `disciplines/SUPERPROMPT.md` | superprompt de auditoria de ruído arquitetural (Kahneman + DDD) — referência |
 | `disciplines/SSDV3-PROMPTS.md` | Spec-Driven Dev V3 — prompts copiáveis |
 | `disciplines/INVARIANTS.md` | catálogo de invariantes (cada peer escolhe quais adotar) |
 | `rules/ssdv3.md`, `rules/testing.md`, `rules/security.md`, `rules/governance.md`, `rules/observability.md` | granular rules `.claude/rules/*` portáveis |

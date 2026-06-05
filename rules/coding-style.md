@@ -58,3 +58,10 @@ segue [../disciplines/KAHNEMAN-DISCIPLINES.md](../disciplines/KAHNEMAN-DISCIPLIN
 - ❌ Shell/`.mjs` solto quando uma função Go testável resolve.
 - ❌ Erro engolido sem `%w` nem log de contexto.
 - ❌ Refatorar vários padrões/dezenas de arquivos num commit só.
+
+## Auditoria
+
+Para uma auditoria sistemática de ruído arquitetural sobre estas regras, use o
+superprompt [`../disciplines/SUPERPROMPT.md`](../disciplines/SUPERPROMPT.md)
+(Kahneman + DDD): diagnóstico de ruído → código de higiene → esteira SSDV3 se
+o ruído for estrutural.
