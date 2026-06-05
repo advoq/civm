@@ -19,11 +19,11 @@ func TestEmergencyAdmits(t *testing.T) {
 		{"budget zero disables even with ample free", 100, 0, false},
 		{"negative budget disables", 100, -1, false},
 		{"ample slack admits", 8, 3, true},
-		{"exact boundary admits (slack == budget)", 4, 3, true},   // 4-1 == 3
-		{"one below boundary refuses", 3, 3, false},               // 3-1 == 2 < 3
-		{"free below hard floor refuses", 1, 3, false},            // 1-1 == 0 < 3
+		{"exact boundary admits (slack == budget)", 4, 3, true},      // 4-1 == 3
+		{"one below boundary refuses", 3, 3, false},                  // 3-1 == 2 < 3
+		{"free below hard floor refuses", 1, 3, false},               // 1-1 == 0 < 3
 		{"free at hard floor with tiny budget refuses", 1, 1, false}, // 1-1 == 0 < 1
-		{"just enough with budget 1", 2, 1, true},                 // 2-1 == 1 >= 1
+		{"just enough with budget 1", 2, 1, true},                    // 2-1 == 1 >= 1
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -41,11 +41,11 @@ func TestEmergencyAdmits(t *testing.T) {
 // the pressure cadence triggers above the headroom. The scratch budget ships at
 // zero until the host measurement campaign (DT-v3-2) sets it by explicit commit.
 func TestReclaimConstantsOrdering(t *testing.T) {
-	if !(DefaultHostVolumeHardFloorGB < DefaultHostVolumeHeadroomGB) {
+	if DefaultHostVolumeHardFloorGB >= DefaultHostVolumeHeadroomGB {
 		t.Errorf("HardFloor (%d) must be < Headroom (%d)",
 			DefaultHostVolumeHardFloorGB, DefaultHostVolumeHeadroomGB)
 	}
-	if !(DefaultHostVolumeHeadroomGB < DefaultAutoreclaimPressureGB) {
+	if DefaultHostVolumeHeadroomGB >= DefaultAutoreclaimPressureGB {
 		t.Errorf("Headroom (%d) must be < Pressure (%d)",
 			DefaultHostVolumeHeadroomGB, DefaultAutoreclaimPressureGB)
 	}
