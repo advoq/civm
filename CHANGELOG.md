@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.0](https://github.com/advoq/civm/compare/v1.16.0...v1.17.0) (2026-06-05)
+
+
+### Features
+
+* **reclaim:** instrument autoreclaim with scratch high-water poll ([#104](https://github.com/advoq/civm/issues/104)) ([4e7e51c](https://github.com/advoq/civm/commit/4e7e51cde7835877c6d16a38aac4178ab4443bbd))
+
 ## [1.16.0](https://github.com/advoq/civm/compare/v1.15.0...v1.16.0) (2026-06-05)
 
 
