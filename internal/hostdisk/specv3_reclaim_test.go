@@ -77,6 +77,8 @@ func TestAutoreclaimAdmissionGate(t *testing.T) {
 		"emergency_reclaim_start",              // the admitted-run label
 		"$ScratchBudgetGB",                     // measured budget wired in
 		"$HardFloorGB",                         // absolute hard floor wired in
+		"scratch_high_water_gb",                // DT-v3-2 measurement on the working path
+		"Get-PSDrive V",                        // live V: poll, not the stale 10-min JSON
 	} {
 		if !strings.Contains(body, token) {
 			t.Errorf("civm-vhdx-autoreclaim.ps1 must contain %q for the SPECv3 admission gate (DT-v3-1)", token)

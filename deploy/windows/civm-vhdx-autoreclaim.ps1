@@ -332,15 +332,34 @@ try {
     }
 
     $vhdBefore = Get-VHD -Path $VhdxPath -ErrorAction Stop
+    $scratchHighWaterGB = $null
     if ($PSCmdlet.ShouldProcess($VhdxPath, 'Optimize-VHD -Mode Full')) {
-        Optimize-VHD -Path $VhdxPath -Mode Full -ErrorAction Stop
+        # SPECv3 DT-v3-2: mede o scratch high-water (poll de V: ao vivo a cada 1s
+        # durante a compactacao). Telemetria PURA — Optimize-VHD e ininterruptivel,
+        # o poll NAO aborta nada (sem Stop-Job); so alimenta o ScratchBudget da
+        # admissao de emergencia. Sem timeout-abort: igual ao comportamento
+        # sincrono anterior, que tambem bloqueava ate o fim.
+        $liveFreeBeforeGB = ConvertTo-GiB -Bytes ([double](Get-PSDrive V -ErrorAction Stop).Free)
+        $lowWaterGB = $liveFreeBeforeGB
+        $optJob = Start-Job -ScriptBlock {
+            param($path)
+            Optimize-VHD -Path $path -Mode Full -ErrorAction Stop
+        } -ArgumentList $VhdxPath
+        while ($null -eq (Wait-Job -Job $optJob -Timeout 1)) {
+            $nowFreeGB = ConvertTo-GiB -Bytes ([double](Get-PSDrive V -ErrorAction SilentlyContinue).Free)
+            if ($nowFreeGB -gt 0 -and $nowFreeGB -lt $lowWaterGB) { $lowWaterGB = $nowFreeGB }
+        }
+        Receive-Job -Job $optJob -ErrorAction Stop | Out-Null
+        Remove-Job -Job $optJob -Force -ErrorAction SilentlyContinue
+        $scratchHighWaterGB = [math]::Round($liveFreeBeforeGB - $lowWaterGB, 2)
     }
     $vhdAfter = Get-VHD -Path $VhdxPath -ErrorAction Stop
     Write-ReclaimLog -Event 'autoreclaim_optimized' -Data @{
-        file_size_gb_before = (ConvertTo-GiB -Bytes ([double]$vhdBefore.FileSize))
-        file_size_gb_after  = (ConvertTo-GiB -Bytes ([double]$vhdAfter.FileSize))
-        reclaimed_gb        = (ConvertTo-GiB -Bytes ([double]($vhdBefore.FileSize - $vhdAfter.FileSize)))
-        v_free_gb_after     = (Get-VFreeGB)
+        file_size_gb_before   = (ConvertTo-GiB -Bytes ([double]$vhdBefore.FileSize))
+        file_size_gb_after    = (ConvertTo-GiB -Bytes ([double]$vhdAfter.FileSize))
+        reclaimed_gb          = (ConvertTo-GiB -Bytes ([double]($vhdBefore.FileSize - $vhdAfter.FileSize)))
+        v_free_gb_after       = (Get-VFreeGB)
+        scratch_high_water_gb = $scratchHighWaterGB
     }
 } catch {
     $exitCode = 1
