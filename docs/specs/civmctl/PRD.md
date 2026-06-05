@@ -25,8 +25,8 @@ cleanup e watchdogs automatizados via systemd timers.
 | GitHub CLI | 2.89.0 | **Confirmado em docs** |
 | git | 2.53.0 | **Confirmado em docs** |
 | Hardware GitHub-hosted | 4 vCPU, 16 GB RAM, 14 GB SSD | **Confirmado em docs** |
-| Hardware VM dono | superior (128 GB SSD, mais CPU/RAM) | **Confirmado em codebase** (CLAUDE.md compexhub) |
-| Build/lang stack civmctl | Go 1.26 stdlib-only | **Inferência** (estilo de compexhub) |
+| Hardware VM dono | superior (128 GB SSD, mais CPU/RAM) | **Confirmado em docs** (`AGENTS.md`, `runbooks/MULTI-PROJECT-RUNNER.md`) |
+| Build/lang stack civmctl | Go 1.26 stdlib-only | **Confirmado em codebase** (`cmd/civmctl/`, `internal/**`) |
 
 ### WYSIATI — o que NÃO foi visto
 

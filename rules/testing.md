@@ -46,11 +46,11 @@ go tool cover -func=/tmp/civm-coverage.out
 
 ## Disciplina (Kahneman)
 
-1. **Test cobre positivo E negativo.** "Login com password correta" + "login com password errada returna 401 + audit log".
+1. **Test cobre positivo E negativo.** Ex.: "reclaim roda quando gap ≥ threshold" + "reclaim aborta com exit 2 quando headroom < floor".
 2. **Tabela-driven para >2 cenários.** Reference class evita bias.
 3. **Sem `t.Skip`** sem motivo documentado e issue rastreável.
 4. **Sem `Sleep`** para sincronizar — use channels/contextos/eventos.
-5. **Schemas-per-tenant: 2 tenants no mesmo teste**. Garante isolamento de cross-tenant.
+5. **Injeção hermética** (`RunFn`/`ReadFileFn`/`NowFn`) em vez de mock pesado — padrão dos packages `internal/**`; lint Go guarda a camada host (ex.: `internal/hostdisk`).
 
 ## Don't
 

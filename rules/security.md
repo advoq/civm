@@ -1,100 +1,77 @@
 ---
 name: security
-description: Secrets, gitleaks, RLS, PII, no-console-log, CSP nonce, CSRF.
+description: Segurança do civm — gitleaks, segredos do runner/host, runner self-hosted, privilégio mínimo, anti-skynet.
 paths:
   - "**/*"
 ---
 
 # Security rules
 
+civm é infra operacional (runner self-hosted + camada host Hyper-V). A superfície
+de segurança é **segredo, privilégio do host e código de PR não-confiável em
+runner self-hosted** — não há web/HTTP/tenant/DB. Detalhe em `SECURITY.md` e
+`docs/INVARIANTS.md`.
+
 ## Invariantes (CI gates)
 
-1. **Sem secrets hardcoded** (gitleaks pre-commit + pre-push + CI).
-2. **Sem `console.log`** em `apps/web/src/**` (eslint rule + grep CI).
-3. **PII scrubbing** em logs Go via `slog.MaskPII()` wrapper.
+1. **Sem secrets hardcoded** — gitleaks em pre-commit + pre-push + CI.
+2. **`govulncheck` limpo** + `go vet` + `go test -race` verdes.
+3. **Nunca logar token/chave/secret raw** (ver `rules/observability.md`).
 
-Detalhes em `docs/INVARIANTS.md`.
+## Segredos do civm
 
-## Secrets management
+- **Nunca** commitar segredo; `.env` no `.gitignore`.
+- Os segredos do civm são: o **GitHub App de release** (`RELEASE_APP_ID` +
+  `RELEASE_APP_PRIVATE_KEY`, no Secrets do repo), a **chave SSH host→guest**
+  (`C:\ProgramData\civm\ssh`, dona/legível só por SYSTEM) e o **token `gh`**
+  (`GH_CONFIG_DIR`/PAT de contingência). Nenhum vive no repo.
+- Validar na inicialização que o segredo requerido existe; rotacionar qualquer
+  um exposto.
 
-- **Nunca** commitar `.env` (em `.gitignore`).
-- `.env.example` documenta cada variável (sem valores reais).
-- Secrets de runtime: variáveis de ambiente lidas em `services/api/internal/platform/config/`.
-- **AI provider keys**: nunca client-side. API Go expõe rotas `/api/v1/apps/<slug>/ai/*` que internamente lêem keys do registry encriptado.
-- **AES-256-GCM** para secrets at-rest no DB (`services/shared/crypto`).
-- Rotação obrigatória: Ed25519 keystore (30 dias), ENCRYPTION_KEY (anual), ASAAS_WEBHOOK_TOKEN (90 dias).
-- Runbook: `docs/runbooks/SECRETS.md` (M5).
+## Runner self-hosted
 
-## SQL safety
-
-- **Sempre** parametrize queries via `pgx`. Nunca `fmt.Sprintf("SELECT ... %s", input)`.
-- sqlc gera código tipado por padrão. Usar.
-- Schema-per-tenant + `SET search_path` é defense-in-depth, não única barreira. Plus RLS policy onde possível em tabelas sensíveis.
-
-## XSS prevention
-
-- React escapa por padrão. Nunca usar `dangerouslySetInnerHTML` com input user — sanitizar primeiro.
-- Sanitização HTML server-side via `bluemonday` quando precisar.
-- StyleX e CSS variables não comem JS — seguro.
-
-## CSRF
-
-- BFF endpoints `/api/session/*` validam Origin header contra `process.env.NEXT_PUBLIC_APP_ORIGIN`.
-- SameSite=Lax em cookies de auth.
-- Forms POST sempre via `<form action="/api/session" method="POST">` ou fetch com `credentials: 'include'` + Origin check no BFF.
-
-## CSP (M5+)
-
-CSP nonce em todo response Next.js. Bloquear:
-
-- `script-src 'self' 'nonce-<random>'`
-- `style-src 'self' 'unsafe-inline'` (StyleX precisa inline)
-- `connect-src 'self' <api-origin>`
-- `frame-ancestors 'none'`
-
-## Rate limiting
-
-- Login: 5 / 15min por email + IP. Lockout 30min após 10 falhas.
-- Signup: 3 / 60min por IP.
-- AI assist: por workspace + plan limit (M3+).
-- `chi/httprate` para HTTP global rate limit (60 req/min default).
-- Detalhes em `services/shared/ratelimit`.
-
-## Audit
-
-- Toda mutação em auth/tenancy/RBAC emite evento em `{slug}_core.audit_logs` (futuro: `audit_logs_global` para mudanças no `public`).
-- Campos obrigatórios: `actor_user_id`, `workspace_id`, `action`, `target`, `outcome`, `ip_address`, `ua_hash`, `request_id`, `payload_redacted`.
-- Auditoria é **append-only** com triggers BLOCK UPDATE/DELETE/TRUNCATE.
-
-## Self-hosted runners
-
-- Jobs em `runs-on: [self-hosted, civm]` devem rodar apenas PR confiavel
-  ou same-repo.
+- Jobs em `runs-on: [self-hosted, civm]` devem rodar apenas PR confiável ou
+  same-repo.
 - Evitar `pull_request_target` quando qualquer step faz checkout ou executa
-  codigo da branch do PR.
-- Nunca expor secrets a codigo vindo de fork em runner self-hosted.
-- Runners legacy/offline são removidos manualmente via `gh api -X DELETE`
-  depois de revisao humana; `civmctl doctor` apenas reporta.
+  código da branch do PR.
+- **Nunca** expor secrets a código vindo de fork em runner self-hosted.
+- Runners legacy/offline são removidos **manualmente** via `gh api -X DELETE`
+  após revisão humana; `civmctl doctor` apenas reporta.
 
-## LGPD
+## Privilégio mínimo (host)
 
-- Soft-delete por padrão (`status = 'archived'`).
-- Hard-delete (drop schema) só após 90d em `pending_deletion` + ausência de legal hold.
-- Endpoint `GET /api/v1/me/export` retorna ZIP com NDJSON dos dados do usuário (M5+).
-- Endpoint `POST /api/v1/me/delete` agenda deletion request com 30d janela de cancelamento.
+- As tasks `deploy/windows/*.ps1` rodam como **SYSTEM** com o direito Hyper-V
+  (Optimize-VHD/Start-VM/Get-VM), acesso a `V:` e SSH ao guest — sem segredo de
+  repo embutido. Reversíveis por `schtasks /delete`.
+- No guest, o único wrapper NOPASSWD com caminho validado é
+  `civm-safedelete` (`deploy/sudoers.d/civm-cleanup`) — preferido a `NOPASSWD`
+  em `rm`/`chown` crus.
+
+## Validação de entrada
+
+- Todo `owner/repo` vindo de input externo passa por `ValidateRepo`
+  (`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$`) antes de virar
+  argumento de `gh api`. Nunca interpolar input não-validado em comando.
+
+## Anti-skynet
+
+civm **detecta, nunca corrige automaticamente**. Nunca: auto-commit/revert/push/
+merge sem aprovação humana; trigger de deploy/rollback; mutar workspace de peer
+sem confirmação; persistir secret em qualquer arquivo do repo; executar comando
+de input externo sem validação.
 
 ## Reportar vulnerabilidade
 
-Ver `SECURITY.md`. Email `security@compexhub.app`. Timeline: 48h ack / 5d assess / 30d fix.
+Ver `SECURITY.md`: reportar **privadamente ao mantenedor** (canal privado, não
+issue pública) antes de divulgar.
 
 ## Don't
 
-- ❌ Hardcode secrets em qualquer arquivo do repo.
-- ❌ Logs com email/cpf/phone/password/token raw.
-- ❌ `console.log` em produção (use telemetria).
-- ❌ String concat em SQL.
-- ❌ `dangerouslySetInnerHTML` sem sanitização.
-- ❌ Cookies sem HttpOnly+Secure+SameSite.
+- ❌ Hardcode de secret em qualquer arquivo do repo.
+- ❌ Logar token/chave/secret raw.
+- ❌ Rodar fork não-confiável em self-hosted com secrets acessíveis.
+- ❌ `pull_request_target` executando código de PR de fork.
+- ❌ `NOPASSWD` em comando cru destrutivo (use wrapper validado).
+- ❌ Interpolar `owner/repo` não-validado em `gh api`.
 - ❌ Pular gitleaks via `--no-verify`.
-- ❌ Hard-delete sem janela LGPD.
-- ❌ Rodar fork nao confiavel em self-hosted com secrets.
+- ❌ Auto-mutar peer repo / VM sem aprovação humana.
