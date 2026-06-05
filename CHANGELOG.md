@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.16.0](https://github.com/advoq/civm/compare/v1.15.0...v1.16.0) (2026-06-05)
+
+
+### Features
+
+* **reclaim:** SPECv3 admission gate breaks host headroom deadlock ([#100](https://github.com/advoq/civm/issues/100)) ([25bb84c](https://github.com/advoq/civm/commit/25bb84c0caebece89961f7b751e9b7bf8d8631fb))
+
+
+### Bug Fixes
+
+* **optimize:** sudo the maintenance drain (root-owned lock) ([#103](https://github.com/advoq/civm/issues/103)) ([6d535be](https://github.com/advoq/civm/commit/6d535be3389dd05781305cd77c853a53304520db))
+
 ## [1.15.0](https://github.com/advoq/civm/compare/v1.14.2...v1.15.0) (2026-06-05)
 
 
