@@ -125,3 +125,65 @@ compactação manual da §1.
 - Warm set: 18/18 imagens, 0 falhas.
 - CI #1092 re-run (Web CI attempt 3 + Go CI attempt 2) em validação no runner
   saudável + cache quente.
+
+## Causa-raiz durável do footprint (2026-06-06, segunda iteração)
+
+A primeira intervenção quebrou a espiral, mas um run full-stack fresco voltou a
+zerar o `V:` (0.02 GB → Hyper-V `PausedCritical`, guest inalcançável). A
+investigação por dentro do guest achou a causa-raiz **real** do footprint, que
+não era o docker:
+
+| Consumidor (guest 66 GB usados) | Tamanho | Natureza |
+| --- | --- | --- |
+| `~/.cache/go-build-advoq-services` | 13 GB | cache de build regenerável |
+| `~/.cache/yarn-advoq-{web,gates,tenant-isolation-smoke}` | 4.3 GB cada | cache de deps |
+| `~/.cache/go-build-advoq{,-devctl}` | 3.6 GB | cache de build |
+| `~/.cache/golangci-lint` | 1.1 GB | cache de lint |
+| docker | **0 B** | (não era o vilão) |
+
+Os workflows do advoq apontam `GOCACHE`/yarn cache-folder para dirs **nomeados
+por workflow** (isolamento de cache-key). O `cacheCaps()` do hook só casava os
+paths **default** (`~/.cache/go-build`, `~/.yarn/cache`), então os dirs nomeados
+**nunca casavam nenhum cap e cresciam sem limite** (.cache somou 31 GB; VHDX 105
+GB num volume V: de 119 GB ≈ 14 GB de headroom).
+
+### Fixes (commits nesta branch)
+
+1. **`fix(hook): cap named CI cache dirs` (`c05fbf2`).** `cacheCaps()` agora faz
+   glob das famílias (`go-build*`, `yarn*`, `golangci-lint*`) e **divide o budget
+   por família** entre os dirs achados — limite por família independente de
+   quantos dirs nomeados existam. Acrescenta cap para `golangci-lint`.
+   `cachePaths()` (modo wipe / disk-pressure) deriva de `cacheCaps()`, então
+   passa a varrer os nomeados também. **Deployado + provado no binário do guest:**
+   `civmctl hook job-started --json --pre-cleanup-pct 1` → `cache_trim` com
+   `path=~/.cache/go-build-advoq-probe found=83886080` (antes: 0 ações).
+2. **`feat(hook): host-aware job-started gate` (`5252efb`).** O gate só via a % do
+   filesystem do **guest**; o guest podia estar em 69% (confortável) enquanto o
+   `V:` do host já estava em 88% (crítico). Agora o hook lê o snapshot
+   `host-metrics` entregue ao guest (`hostdisk.Check`): host `warn/crit` dispara
+   cleanup mesmo com guest confortável; host `crit` **fresco** rejeita o job
+   (exit 75) antes de cair em `PausedCritical`; snapshot `stale`/ausente força
+   cleanup mas **não** bloqueia (telemetria ausente ≠ disco cheio — não
+   auto-sabotar a CI). Semântica no domínio (`Report.WantsCleanup()/Blocks()`),
+   não em strings mágicas no hook.
+
+### Evidência empírica do reclaim durável
+
+| Marcador | Valor |
+| --- | --- |
+| guest usado, antes do prune dos caches | 66 GB |
+| guest usado, depois (prune dos `.cache` nomeados) | 36 GB |
+| `fstrim` liberou | 68.3 GiB |
+| VHDX após `Optimize-VHD -Mode Full` (457s) | 105 → **44.8 GB** |
+| `V:` livre após Start | ~5.7 → **66 GB** |
+| `gap_gb` (VHDX − guest usado) | 2 |
+
+### Lacuna conhecida (follow-up)
+
+O cache-trim vive **só** no `internal/hook` (dispara em `job-started`). O
+`civmctl cleanup` e o `civmctl disk-watchdog` (`internal/cleanup`) **não** podam
+caches — só `_work`/`tmp`/docker/apt. Isso cobre o incidente (jobs rodando, disco
+> `PreCleanupPct`), mas **não** o caso "runner ocioso com disco cheio de cache".
+Fechar a lacuna exige extrair `cacheCaps()`/`trimCacheByAge` para um pacote
+compartilhado e chamá-los também do `internal/cleanup` (disk-watchdog). Não feito
+nesta iteração — registrado como follow-up Day-0 honesto.
