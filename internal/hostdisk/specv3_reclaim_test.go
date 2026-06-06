@@ -62,23 +62,29 @@ func TestReclaimersShareCanonicalLock(t *testing.T) {
 	}
 }
 
-// SPECv3 DT-v3-1 (red-team Findings 1+2): the below-headroom emergency reclaim is
-// admission-gated, not floored by a guess, and the Optimize-VHD it runs is
-// UNINTERRUPTIBLE. The autoreclaim must (a) gate on the measured scratch budget
-// vs the hard floor (abort_insufficient_slack), (b) label the admitted run
-// emergency_reclaim_start, and (c) NEVER contain a Stop-Job — Stop-Job does not
-// abort CompactVirtualDisk, so trying to abort mid-flight is the exact unsafe
-// mechanism the red-team killed.
+// RF-2/DT-1 (#106) refines SPECv3 DT-v3-1: the below-headroom emergency reclaim is
+// admission-gated in TWO PHASES, not floored by a pre-stop guess, and the
+// Optimize-VHD it runs is UNINTERRUPTIBLE. Phase 1 only checks the budget is
+// enabled; the AUTHORITATIVE gate is Phase 2 — after Stop-VM/Wait-VMState Off (when
+// the ~8 GB VMRS is freed) the autoreclaim re-measures Get-PSDrive V and admits the
+// Optimize only when liveFreeAfterOff − HardFloor ≥ ScratchBudget, else it skips and
+// the finally re-starts the VM. It must (a) re-measure post-Off
+// (autoreclaim_post_off_remeasure), (b) carry the post-Off refusal
+// (autoreclaim_skip_insufficient_slack_post_off), (c) label the admitted run
+// emergency_reclaim_start, and (d) NEVER contain a Stop-Job — Stop-Job does not
+// abort CompactVirtualDisk, the exact unsafe mechanism the red-team killed.
 func TestAutoreclaimAdmissionGate(t *testing.T) {
 	body := readWindowsScript(t, "civm-vhdx-autoreclaim.ps1")
 
 	for _, token := range []string{
-		"autoreclaim_abort_insufficient_slack", // the gate refusal
-		"emergency_reclaim_start",              // the admitted-run label
-		"$ScratchBudgetGB",                     // measured budget wired in
-		"$HardFloorGB",                         // absolute hard floor wired in
-		"scratch_high_water_gb",                // DT-v3-2 measurement on the working path
-		"Get-PSDrive V",                        // live V: poll, not the stale 10-min JSON
+		"autoreclaim_post_off_remeasure",               // RF-2/DT-1: re-measure after Off (VMRS freed)
+		"autoreclaim_skip_insufficient_slack_post_off", // the post-Off gate refusal
+		"vmrs_release_gb",                              // empirical VMRS-on-Off measurement
+		"emergency_reclaim_start",                      // the admitted-run label
+		"$ScratchBudgetGB",                            // measured budget wired in
+		"$HardFloorGB",                                // absolute hard floor wired in
+		"scratch_high_water_gb",                       // DT-v3-2 measurement on the working path
+		"Get-PSDrive V",                               // live V: poll, not the stale 10-min JSON
 	} {
 		if !strings.Contains(body, token) {
 			t.Errorf("civm-vhdx-autoreclaim.ps1 must contain %q for the SPECv3 admission gate (DT-v3-1)", token)
@@ -98,6 +104,28 @@ func TestAutoreclaimAdmissionGate(t *testing.T) {
 				"uninterruptible (red-team Finding 2); the emergency path is admission-gated, "+
 				"never aborted mid-compaction: %s", i+1, strings.TrimSpace(line))
 		}
+	}
+}
+
+// RF-4 / red-team BLOQUEANTE-1 (Passo 2.5): the autoreclaim's pre-Stop-VM fstrim is
+// OPPORTUNISTIC discard, not a reclaim pre-requisite — Optimize-VHD -Mode Full
+// compacts freed blocks offline regardless of online trim. A fail-hard `throw` on
+// fstrim (EPERM, missing NOPASSWD sudoers, controller without UNMAP) would abort
+// BEFORE Stop-VM and leave Phase 2 (the #106 fix) un-run — a silent spiral
+// (Kahneman #13: looks deployed, does not work). It must be best-effort (WARN +
+// continue), like civm-vhdx-optimize.ps1's fstrim_warn.
+func TestAutoreclaimFstrimBestEffort(t *testing.T) {
+	body := readWindowsScript(t, "civm-vhdx-autoreclaim.ps1")
+	// Positive: the best-effort WARN path exists and the run continues to Stop-VM.
+	if !strings.Contains(body, "autoreclaim_fstrim_warn") {
+		t.Error("civm-vhdx-autoreclaim.ps1 must log 'autoreclaim_fstrim_warn' and continue " +
+			"when fstrim fails (best-effort), not abort before Stop-VM")
+	}
+	// Regression guard: the old fail-hard throw must be gone, else fstrim failure
+	// (e.g. missing NOPASSWD sudoers) makes the #106 fix inert and silent.
+	if strings.Contains(body, `throw "fstrim failed`) {
+		t.Error(`civm-vhdx-autoreclaim.ps1 must NOT fail-hard on fstrim ('throw "fstrim failed') — ` +
+			"that aborts before Stop-VM and makes the #106 fix inert (red-team BLOQUEANTE-1)")
 	}
 }
 

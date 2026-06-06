@@ -15,7 +15,10 @@
       - single-instance lock on V:\civm-autoreclaim.lock;
       - V: must be below ThresholdGB but above MinHeadroomGB;
       - VM must be Running before the operation starts;
-      - guest SSH, idle-check, and sudo -n fstrim must succeed before Stop-VM;
+      - guest SSH and idle-check must succeed before Stop-VM; fstrim is
+        best-effort (discard is opportunistic — Optimize-VHD -Mode Full compacts
+        free blocks offline regardless; a fstrim failure logs autoreclaim_fstrim_warn
+        and proceeds, never blocks the #106 post-Off reclaim);
       - estimated VHDX slack must be >= MinReclaimableGB;
       - Start-VM is attempted up to 3 times in finally.
 
@@ -47,7 +50,10 @@ param(
 
     [Parameter()]
     [ValidateRange(0, 4096)]
-    [int]$ScratchBudgetGB = 0,
+    # Day-0 default = DefaultHostVolumeScratchBudgetGB (internal/civm/civm.go): p100
+    # scratch high-water observado (10) + 1. Emergencia HABILITADA; segura via gate
+    # de duas fases (re-medicao pos-Stop-VM, RF-2/DT-1, #106). 0 desabilitaria.
+    [int]$ScratchBudgetGB = 11,
 
     [Parameter()]
     [ValidateRange(1, 4096)]
@@ -242,12 +248,14 @@ try {
         }
         exit 0
     }
-    # SPECv3 DT-v3-1 admission gate. Abaixo do headroom normal, o caminho de
-    # EMERGENCIA so pode rodar se a folga ao vivo menos o piso duro cobrir o
-    # ScratchBudget MEDIDO. Optimize-VHD e ininterruptivel (sem Stop-Job), entao
-    # a unica alavanca segura e recusar comecar. ScratchBudget=0 => emergencia
-    # DESABILITADA: identico ao abort antigo, sem regressao, sem realocar o
-    # deadlock para um piso adivinhado.
+    # RF-2 / DT-1 (issue #106): admission de emergencia em DUAS FASES.
+    # Fase 1 (aqui, pre-stop): decide apenas se a emergencia esta HABILITADA
+    # (ScratchBudget>0). NAO faz o gate de folga com $beforeFreeGB porque o VMRS
+    # (~8GB de saved-state) so e liberado no Stop-VM — medir a folga ANTES do Off
+    # a SUBESTIMA, e foi exatamente isso que travou a espiral a 6.6GB
+    # (5.6 < 11 => abort eterno 'autoreclaim_abort_insufficient_slack').
+    # ScratchBudget=0 => emergencia DESABILITADA (sem realocar o deadlock para um
+    # piso adivinhado). A folga real e re-medida na Fase 2, pos-Wait-VMState Off.
     $emergency = $false
     if ($beforeFreeGB -lt $MinHeadroomGB) {
         if ($ScratchBudgetGB -le 0) {
@@ -255,15 +263,6 @@ try {
                 v_free_gb   = $beforeFreeGB
                 headroom_gb = $MinHeadroomGB
                 reason      = 'emergency_disabled_no_budget'
-            }
-            $exitCode = 2
-            exit 2
-        }
-        if (($beforeFreeGB - $HardFloorGB) -lt $ScratchBudgetGB) {
-            Write-ReclaimLog -Event 'autoreclaim_abort_insufficient_slack' -Level 'ERROR' -Data @{
-                v_free_gb         = $beforeFreeGB
-                hard_floor_gb     = $HardFloorGB
-                scratch_budget_gb = $ScratchBudgetGB
             }
             $exitCode = 2
             exit 2
@@ -304,7 +303,17 @@ try {
     Write-ReclaimLog -Event 'autoreclaim_fstrim_start' -Data @{ target = $GuestSshTarget }
     $trim = Invoke-Guest -RemoteCommand 'sudo -n fstrim -av'
     if ($trim.ExitCode -ne 0) {
-        throw "fstrim failed (exit $($trim.ExitCode)): $($trim.Output)"
+        # RF-4 / red-team BLOQUEANTE-1 (Passo 2.5): fstrim e DISCARD OPORTUNISTICO, nao
+        # pre-requisito do reclaim. Optimize-VHD -Mode Full compacta os blocos livres
+        # offline por conta propria, independente do trim online. Um fstrim fail-hard
+        # aqui (EPERM/EOPNOTSUPP, controlador sem UNMAP, ou falta de NOPASSWD no sudoers)
+        # abortava ANTES do Stop-VM e deixava a Fase 2 (o fix #106) SEM rodar — espiral
+        # silenciosa (Kahneman #13: parece deployado, nao funciona). Best-effort como em
+        # civm-vhdx-optimize.ps1 (fstrim_warn): registra WARN e segue para Stop-VM/Optimize.
+        Write-ReclaimLog -Event 'autoreclaim_fstrim_warn' -Level 'WARN' -Data @{
+            exit_code = $trim.ExitCode
+            output    = $trim.Output
+        }
     }
 
     $startEvent = if ($emergency) { 'emergency_reclaim_start' } else { 'autoreclaim_start' }
@@ -321,6 +330,32 @@ try {
         Stop-VM -Name $VMName -ErrorAction Stop
         if (-not (Wait-VMState -State 'Off' -TimeoutSeconds 180)) {
             throw 'VM did not reach Off within 180s'
+        }
+    }
+
+    # RF-2 / DT-1 (issue #106): gate AUTORITATIVO pos-Off. O VMRS (~8GB) so e
+    # liberado quando a VM chega a Off; a folga real para o Optimize e medida
+    # AGORA (nao com $beforeFreeGB pre-stop). vmrs_release_gb registra
+    # empiricamente quanto o Off liberou (valida a premissa do DT-2, sem
+    # adivinhar). Se nem com o VMRS liberado a folga cobre ScratchBudget, pula o
+    # Optimize ininterruptivel; o bloco finally religa a VM (operationStarted=true).
+    if ($operationStarted) {
+        $liveFreeAfterOff = Get-VFreeGB
+        Write-ReclaimLog -Event 'autoreclaim_post_off_remeasure' -Data @{
+            v_free_gb_before_stop  = $beforeFreeGB
+            live_free_after_off_gb = $liveFreeAfterOff
+            vmrs_release_gb        = [math]::Round($liveFreeAfterOff - $beforeFreeGB, 2)
+            hard_floor_gb          = $HardFloorGB
+            scratch_budget_gb      = $ScratchBudgetGB
+        }
+        if ($emergency -and (($liveFreeAfterOff - $HardFloorGB) -lt $ScratchBudgetGB)) {
+            Write-ReclaimLog -Event 'autoreclaim_skip_insufficient_slack_post_off' -Level 'WARN' -Data @{
+                live_free_after_off_gb = $liveFreeAfterOff
+                hard_floor_gb          = $HardFloorGB
+                scratch_budget_gb      = $ScratchBudgetGB
+            }
+            $exitCode = 0
+            exit 0
         }
     }
 
