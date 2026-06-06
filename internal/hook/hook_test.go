@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/hostdisk"
 	"github.com/advoq/civm/internal/safedelete"
 )
 
@@ -1117,6 +1118,90 @@ func TestJobStartedDockerPruneErrorIsNonFatal(t *testing.T) {
 	if res.Decision == DecisionError || res.ExitCode != 0 {
 		t.Fatalf("docker prune error at job-started must not fail the hook, got %+v", res)
 	}
+}
+
+// TestJobStartedHostAwareGate prova a metade host-aware do gate (alavanca 3 do
+// fix de footprint): com o guest CONFORTÁVEL (30% < PreCleanupPct), a pressão do
+// volume V: do host ainda dispara cleanup (warn) e rejeita o job (crit fresco) —
+// exatamente o cenário do incidente 2026-06 (guest 69%, host V: 88%) que o gate
+// guest-% sozinho não pegava. Snapshot stale força cleanup mas nunca bloqueia.
+func TestJobStartedHostAwareGate(t *testing.T) {
+	base := func() Options {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("RUNNER_TEMP", "")
+		t.Setenv("GITHUB_WORKSPACE", "")
+		t.Setenv("GITHUB_REPOSITORY", "")
+		t.Setenv("GITHUB_RUN_ID", "")
+		o := DefaultOptionsFromEnv(EventJobStarted)
+		o.Execute = true
+		o.PreCleanupPct = 60
+		o.HardFailPct = 95
+		// guest 30% usado → o gate guest-% NÃO dispara; isola o efeito do host.
+		o.StatfsFn = func(string) (uint64, uint64, error) { return 100, 70, nil }
+		o.RemoveAllFn = func(string) error { return nil }
+		o.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+		o.MkdirAllFn = func(string, os.FileMode) error { return nil }
+		o.LogPath = ""
+		o.WorkRoot = "/home/civm-test/actions-runner/_work"
+		o.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+		return o
+	}
+	report := func(level string, vFree int64, stale bool) func() (hostdisk.Report, error) {
+		return func() (hostdisk.Report, error) {
+			return hostdisk.Report{Metrics: hostdisk.Metrics{VFreeGB: vFree}, Level: level, Stale: stale}, nil
+		}
+	}
+
+	t.Run("host ok: guest confortável => sem cleanup, sem reject", func(t *testing.T) {
+		o := base()
+		o.HostDiskFn = report("ok", 66, false)
+		res := Run(context.Background(), o)
+		if res.Decision == DecisionCleanupApplied {
+			t.Errorf("host ok + guest 30%% não deve rodar cleanup; decision=%v", res.Decision)
+		}
+		if res.Decision == DecisionRejected {
+			t.Errorf("host ok não pode rejeitar")
+		}
+		if res.HostLevel != "ok" || res.HostVFreeGB != 66 {
+			t.Errorf("campos host não propagados: level=%q vfree=%d", res.HostLevel, res.HostVFreeGB)
+		}
+	})
+
+	t.Run("host warn: cleanup apesar do guest confortável", func(t *testing.T) {
+		o := base()
+		o.HostDiskFn = report("warn", 25, false)
+		res := Run(context.Background(), o)
+		if res.Decision != DecisionCleanupApplied {
+			t.Errorf("host warn deve disparar cleanup mesmo com guest 30%%; got %v", res.Decision)
+		}
+		if res.ExitCode == 75 {
+			t.Errorf("host warn não pode rejeitar")
+		}
+	})
+
+	t.Run("host crit fresco: cleanup E reject", func(t *testing.T) {
+		o := base()
+		o.HostDiskFn = report("crit", 6, false)
+		res := Run(context.Background(), o)
+		if res.Decision != DecisionRejected {
+			t.Errorf("host crit fresco deve rejeitar; got %v", res.Decision)
+		}
+		if res.ExitCode != 75 {
+			t.Errorf("exit code do reject = %d, want 75", res.ExitCode)
+		}
+	})
+
+	t.Run("host crit STALE: cleanup mas SEM reject (gap de infra != disco cheio)", func(t *testing.T) {
+		o := base()
+		o.HostDiskFn = report("crit", 0, true)
+		res := Run(context.Background(), o)
+		if res.Decision == DecisionRejected {
+			t.Errorf("crit stale NÃO pode rejeitar (não auto-sabotar CI); err=%s", res.Error)
+		}
+		if res.Decision != DecisionCleanupApplied {
+			t.Errorf("crit stale deve ainda disparar cleanup; got %v", res.Decision)
+		}
+	})
 }
 
 // FuzzSafeWorkRoot enforces the safety invariant of safeWorkRoot for arbitrary

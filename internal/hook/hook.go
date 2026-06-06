@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/hostdisk"
 	"github.com/advoq/civm/internal/safedelete"
 )
 
@@ -62,6 +63,13 @@ type Result struct {
 	WorkRoot string   `json:"work_root,omitempty"`
 	Actions  []Action `json:"actions,omitempty"`
 	Error    string   `json:"error,omitempty"`
+	// HostLevel/HostVFreeGB carry the Hyper-V host volume state read from the
+	// delivered host-metrics snapshot. The guest-% gate above (DiskUsedPct) does
+	// not see host pressure: the guest can be comfortable while the host V: volume
+	// already crossed a floor (the 2026-06 PausedCritical incident). Surfaced on
+	// hooks.jsonl for the watchdog/observability.
+	HostLevel   string `json:"host_level,omitempty"`
+	HostVFreeGB int64  `json:"host_v_free_gb,omitempty"`
 }
 
 type Options struct {
@@ -92,6 +100,11 @@ type Options struct {
 	DiscoverRootsFn  func() ([]string, error)
 	ReadDirFn        func(path string) ([]os.DirEntry, error)
 	WalkDirFn        func(root string, fn fs.WalkDirFunc) error
+	// HostDiskFn reads the Hyper-V host volume snapshot delivered to the guest and
+	// classifies it (ok/warn/crit). The job-started gate uses it so host V:
+	// pressure triggers cleanup/rejection even when the guest filesystem % alone
+	// would not. Injected so unit tests never touch the metrics file.
+	HostDiskFn func() (hostdisk.Report, error)
 }
 
 func DefaultOptionsFromEnv(event Event) Options {
@@ -113,7 +126,16 @@ func DefaultOptionsFromEnv(event Event) Options {
 		DiscoverRootsFn: discoverRunnerWorkRoots,
 		ReadDirFn:       os.ReadDir,
 		WalkDirFn:       filepath.WalkDir,
+		HostDiskFn:      defaultHostDisk,
 	}
+}
+
+// defaultHostDisk reads + classifies the delivered host-metrics snapshot. A read
+// error is never fatal to the hook: hostdisk.Check folds an absent/unreadable
+// file into a fail-safe crit Report (Stale=true), which WantsCleanup but does
+// NOT Block — so a missing metrics file forces cleanup without wedging CI.
+func defaultHostDisk() (hostdisk.Report, error) {
+	return hostdisk.Check(hostdisk.DefaultOptions())
 }
 
 // newSafeWorkDelete builds the hook-scoped safedelete closure. It routes the
@@ -157,7 +179,16 @@ func Run(ctx context.Context, opts Options) Result {
 
 	switch opts.Event {
 	case EventJobStarted:
-		if usedPct >= opts.PreCleanupPct {
+		// Host-aware (Bug A do incidente 2026-06): o gate guest-% não vê a pressão
+		// do volume V: do host. Lê o snapshot de host-metrics entregue ao guest; um
+		// erro de leitura vira um Report crit fail-safe (Stale=true) — força
+		// cleanup, mas não bloqueia (telemetria ausente != disco cheio).
+		host, _ := opts.HostDiskFn()
+		res.HostLevel = host.Level
+		res.HostVFreeGB = host.VFreeGB
+		// Cleanup dispara por pressão do guest-% OU do host V: (warn/crit). A
+		// metade host-aware pega o caso que o guest-% perde: guest enxuto, V: cheio.
+		if usedPct >= opts.PreCleanupPct || host.WantsCleanup() {
 			res.Decision = DecisionCleanupApplied
 			// Disk pressure mode: purga caches ($HOME/.cache/go-build, npm, etc.)
 			// para liberar espaço suficiente.
@@ -173,10 +204,20 @@ func Run(ctx context.Context, opts Options) Result {
 				}
 			}
 		}
-		if res.DiskUsedPct >= opts.HardFailPct {
+		// Rejeita por hard-fail do guest OU host crit FRESCO (Blocks): V: realmente
+		// cheio com telemetria atual. Snapshot stale nunca bloqueia (gap de infra,
+		// não prova) — só forçou cleanup acima. O cleanup do guest ajuda o próximo
+		// Optimize do host a recuperar; o block evita iniciar run e cair em
+		// PausedCritical antes disso.
+		switch {
+		case res.DiskUsedPct >= opts.HardFailPct:
 			res.Decision = DecisionRejected
 			res.ExitCode = 75
 			res.Error = fmt.Sprintf("disk usage %d%% >= hard fail threshold %d%%", res.DiskUsedPct, opts.HardFailPct)
+		case host.Blocks():
+			res.Decision = DecisionRejected
+			res.ExitCode = 75
+			res.Error = fmt.Sprintf("host V: free %dGB at crit floor (level=%s) — refusing job to avoid PausedCritical", host.VFreeGB, host.Level)
 		}
 	case EventJobCompleted:
 		res.Decision = DecisionCleanupApplied
@@ -744,6 +785,9 @@ func applyDefaults(opts *Options) {
 	}
 	if opts.WalkDirFn == nil {
 		opts.WalkDirFn = filepath.WalkDir
+	}
+	if opts.HostDiskFn == nil {
+		opts.HostDiskFn = defaultHostDisk
 	}
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()

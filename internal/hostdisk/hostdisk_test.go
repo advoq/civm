@@ -264,3 +264,32 @@ func TestRenderText(t *testing.T) {
 		t.Fatalf("text render must surface VHDX block size: %s", out)
 	}
 }
+
+// TestReportWantsCleanupAndBlocks valida a semântica host-aware do gate
+// job-started: warn/crit pedem cleanup; só crit FRESCO bloqueia o job. crit por
+// staleness (telemetria ausente) NÃO bloqueia — não auto-sabotar a CI.
+func TestReportWantsCleanupAndBlocks(t *testing.T) {
+	tests := []struct {
+		name        string
+		level       string
+		stale       bool
+		wantCleanup bool
+		wantBlocks  bool
+	}{
+		{"ok host: no cleanup, no block", levelOK, false, false, false},
+		{"warn host: cleanup, no block", levelWarn, false, true, false},
+		{"fresh crit host: cleanup AND block", levelCrit, false, true, true},
+		{"stale crit (metrics absent): cleanup but NO block", levelCrit, true, true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := Report{Level: tt.level, Stale: tt.stale}
+			if got := r.WantsCleanup(); got != tt.wantCleanup {
+				t.Errorf("WantsCleanup()=%v, want %v", got, tt.wantCleanup)
+			}
+			if got := r.Blocks(); got != tt.wantBlocks {
+				t.Errorf("Blocks()=%v, want %v", got, tt.wantBlocks)
+			}
+		})
+	}
+}

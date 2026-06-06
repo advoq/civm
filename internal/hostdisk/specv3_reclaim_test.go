@@ -81,10 +81,10 @@ func TestAutoreclaimAdmissionGate(t *testing.T) {
 		"autoreclaim_skip_insufficient_slack_post_off", // the post-Off gate refusal
 		"vmrs_release_gb",                              // empirical VMRS-on-Off measurement
 		"emergency_reclaim_start",                      // the admitted-run label
-		"$ScratchBudgetGB",                            // measured budget wired in
-		"$HardFloorGB",                                // absolute hard floor wired in
-		"scratch_high_water_gb",                       // DT-v3-2 measurement on the working path
-		"Get-PSDrive V",                               // live V: poll, not the stale 10-min JSON
+		"$ScratchBudgetGB",                             // measured budget wired in
+		"$HardFloorGB",                                 // absolute hard floor wired in
+		"scratch_high_water_gb",                        // DT-v3-2 measurement on the working path
+		"Get-PSDrive V",                                // live V: poll, not the stale 10-min JSON
 	} {
 		if !strings.Contains(body, token) {
 			t.Errorf("civm-vhdx-autoreclaim.ps1 must contain %q for the SPECv3 admission gate (DT-v3-1)", token)
