@@ -982,11 +982,46 @@ func TestRunWithTimeoutCancelsHungCommand(t *testing.T) {
 	}
 }
 
-func TestCacheCapsUsesCivmConstants(t *testing.T) {
-	t.Setenv("HOME", "/home/test")
+// TestCacheCapsGlobsNamedDirsAndDividesFamilyBudget é a regressão do incidente
+// 2026-06 (VHDX -> PausedCritical): os workflows do advoq apontam GOCACHE/yarn
+// cache-folder para dirs NOMEADOS (~/.cache/go-build-advoq-services, ...) que o
+// cap antigo (path fixo ~/.cache/go-build) NÃO casava — então cresciam sem
+// limite (go-build-advoq-services chegou a 13GB num cap de 5GB). cacheCaps agora
+// faz glob das variantes e divide o budget da família entre os dirs achados.
+func TestCacheCapsGlobsNamedDirsAndDividesFamilyBudget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mk := func(parts ...string) string {
+		p := filepath.Join(append([]string{home}, parts...)...)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// dois dirs go-build nomeados (dividem o budget), um yarn nomeado, lint, npm, pnpm.
+	gb1 := mk(".cache", "go-build-advoq-services")
+	gb2 := mk(".cache", "go-build-advoq-devctl")
+	yarnNamed := mk(".cache", "yarn-advoq-web")
+	lint := mk(".cache", "golangci-lint")
+	npm := mk(".npm", "_cacache")
+	pnpm := mk(".pnpm-store")
+
 	caps := cacheCaps()
-	if len(caps) != 4 {
-		t.Fatalf("expected 4 caps, got %d", len(caps))
+	byPath := make(map[string]cacheCap, len(caps))
+	for _, c := range caps {
+		byPath[c.path] = c
+	}
+	// Regressão: TODO dir nomeado deve estar coberto (antes eram invisíveis ao trim).
+	for _, p := range []string{gb1, gb2, yarnNamed, lint, npm, pnpm} {
+		if _, ok := byPath[p]; !ok {
+			t.Errorf("cacheCaps() não cobre %s — dir nomeado ficaria sem trim (o bug do VHDX 13GB)", p)
+		}
+	}
+	// Budget da família dividido: 2 dirs go-build => cada um recebe family/2.
+	const giB = int64(1) << 30
+	wantPerGoBuild := int64(civm.DefaultCacheGoBuildMaxGB) * giB / 2
+	if got := byPath[gb1].maxBytes; got != wantPerGoBuild {
+		t.Errorf("go-build per-dir cap=%d, want family/2=%d", got, wantPerGoBuild)
 	}
 	wantProtect := time.Duration(civm.DefaultCacheTrimMinProtectHours) * time.Hour
 	for _, c := range caps {

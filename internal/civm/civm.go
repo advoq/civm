@@ -52,11 +52,19 @@ const (
 	// Per-cache size budgets enforced by hook routine cleanup (job-completed).
 	// Excedente é removido por mtime ascendente; arquivos com mtime mais novo
 	// que DefaultCacheTrimMinProtectHours são preservados.
+	//
+	// Cada budget é FAMILY-WIDE: cacheCaps() faz glob das variantes nomeadas que
+	// os workflows criam (ex. GOCACHE=~/.cache/go-build-advoq-services,
+	// YARN cache-folder=~/.cache/yarn-advoq-web) e divide o budget entre os dirs
+	// encontrados. Antes, os caps casavam só os paths default (~/.cache/go-build,
+	// ~/.yarn/cache) e os dirs nomeados cresciam SEM LIMITE — go-build-advoq-services
+	// chegou a 13GB num cap de 5GB, enchendo o VHDX até o host dar PausedCritical.
 	DefaultCacheTrimMinProtectHours = 24
 	DefaultCacheGoBuildMaxGB        = 5
 	DefaultCacheNPMMaxGB            = 3
 	DefaultCacheYarnMaxGB           = 3
 	DefaultCachePNPMMaxGB           = 5
+	DefaultCacheGolangciLintMaxGB   = 2
 
 	// Filtros do docker prune em modo rotineiro. Mantêm layers quentes < 24h
 	// e imagens unused < 7 dias, em vez do agressivo system prune --volumes.

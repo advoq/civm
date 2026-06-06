@@ -349,6 +349,15 @@ type cacheCap struct {
 // Em cleanup rotineiro (job-completed) usamos trim por idade/tamanho em vez de
 // wipe total: preserva Go build cache até X GB, depois descarta os mais velhos.
 // Constantes vivem em internal/civm/civm.go para uma fonte única de verdade.
+//
+// Cada budget é FAMILY-WIDE: os workflows do advoq apontam GOCACHE/yarn
+// cache-folder para dirs NOMEADOS (~/.cache/go-build-advoq-services,
+// ~/.cache/yarn-advoq-web, ...) para isolar cache-key por workflow. Os caps
+// antigos casavam só os paths default (~/.cache/go-build, ~/.yarn/cache) e os
+// dirs nomeados cresciam SEM LIMITE (go-build-advoq-services chegou a 13GB num
+// cap de 5GB) até encher o VHDX e o host dar PausedCritical. cacheCaps faz glob
+// das variantes e divide o budget da família entre os dirs encontrados, então o
+// total da família fica limitado independente de quantos dirs nomeados existam.
 func cacheCaps() []cacheCap {
 	home := os.Getenv("HOME")
 	if home == "" {
@@ -356,12 +365,60 @@ func cacheCaps() []cacheCap {
 	}
 	const giB = int64(1) << 30
 	protect := time.Duration(civm.DefaultCacheTrimMinProtectHours) * time.Hour
-	return []cacheCap{
-		{filepath.Join(home, ".cache", "go-build"), int64(civm.DefaultCacheGoBuildMaxGB) * giB, protect},
-		{filepath.Join(home, ".npm", "_cacache"), int64(civm.DefaultCacheNPMMaxGB) * giB, protect},
-		{filepath.Join(home, ".yarn", "cache"), int64(civm.DefaultCacheYarnMaxGB) * giB, protect},
-		{filepath.Join(home, ".pnpm-store"), int64(civm.DefaultCachePNPMMaxGB) * giB, protect},
+	var caps []cacheCap
+	// family expande um glob (mais extras fixos) em um cacheCap por dir existente,
+	// dividando o budget igualmente para limitar o total da família.
+	family := func(familyMaxGB int, glob string, extras ...string) {
+		dirs := existingDirs(append(cacheGlob(glob), extras...))
+		if len(dirs) == 0 {
+			return
+		}
+		per := int64(familyMaxGB) * giB / int64(len(dirs))
+		if per < 1 {
+			per = 1
+		}
+		for _, d := range dirs {
+			caps = append(caps, cacheCap{d, per, protect})
+		}
 	}
+	family(civm.DefaultCacheGoBuildMaxGB, filepath.Join(home, ".cache", "go-build*"))
+	family(civm.DefaultCacheYarnMaxGB, filepath.Join(home, ".cache", "yarn*"), filepath.Join(home, ".yarn", "cache"))
+	family(civm.DefaultCacheGolangciLintMaxGB, filepath.Join(home, ".cache", "golangci-lint*"))
+	// npm/pnpm usam um único dir fixo bem-conhecido (sem variantes nomeadas), e o
+	// cap não é dividido entre dirs — então não há skew de divisão e eles entram
+	// incondicionalmente (trim/wipe em dir ausente é no-op).
+	caps = append(caps,
+		cacheCap{filepath.Join(home, ".npm", "_cacache"), int64(civm.DefaultCacheNPMMaxGB) * giB, protect},
+		cacheCap{filepath.Join(home, ".pnpm-store"), int64(civm.DefaultCachePNPMMaxGB) * giB, protect},
+	)
+	return caps
+}
+
+// cacheGlob retorna os matches de um padrão glob (vazio em erro de padrão).
+func cacheGlob(pattern string) []string {
+	m, _ := filepath.Glob(pattern)
+	return m
+}
+
+// existingDirs filtra paths mantendo só diretórios existentes, deduplicando por
+// path limpo. Glob já retorna existentes; os extras fixos (ex. ~/.yarn/cache)
+// passam pelo mesmo filtro para não inflar a divisão do budget com dirs ausentes.
+func existingDirs(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		clean := filepath.Clean(p)
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		fi, err := os.Stat(clean)
+		if err != nil || !fi.IsDir() {
+			continue
+		}
+		seen[clean] = struct{}{}
+		out = append(out, clean)
+	}
+	return out
 }
 
 // trimCacheByAge walks root, sorts arquivos por mtime asc, e remove os mais
