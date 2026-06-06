@@ -994,7 +994,7 @@ func TestCacheCapsGlobsNamedDirsAndDividesFamilyBudget(t *testing.T) {
 	t.Setenv("HOME", home)
 	mk := func(parts ...string) string {
 		p := filepath.Join(append([]string{home}, parts...)...)
-		if err := os.MkdirAll(p, 0o755); err != nil {
+		if err := os.MkdirAll(p, 0o750); err != nil {
 			t.Fatal(err)
 		}
 		return p

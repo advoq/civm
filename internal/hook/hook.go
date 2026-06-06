@@ -6,7 +6,6 @@ package hook
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -19,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/advoq/civm/internal/cachetrim"
 	"github.com/advoq/civm/internal/civm"
 	"github.com/advoq/civm/internal/hostdisk"
 	"github.com/advoq/civm/internal/safedelete"
@@ -378,159 +378,42 @@ func removePath(opts Options, path, name string) Action {
 }
 
 // cacheCap describes a per-cache size budget for routine trim.
+// cacheCap mirrors cachetrim.Cap with this package's field names so the existing
+// hook cleanup flow and tests keep their shape; the policy itself lives in the
+// shared internal/cachetrim (one source of truth, also used by internal/cleanup).
 type cacheCap struct {
-	path     string
-	maxBytes int64
-	// minProtect protege arquivos com mtime > Now-minProtect contra remoção,
-	// para não invalidar cache quente de um job que acabou de gravar.
+	path       string
+	maxBytes   int64
 	minProtect time.Duration
 }
 
-// cacheCaps lista os caches sob $HOME com seus limites de tamanho.
-// Em cleanup rotineiro (job-completed) usamos trim por idade/tamanho em vez de
-// wipe total: preserva Go build cache até X GB, depois descarta os mais velhos.
-// Constantes vivem em internal/civm/civm.go para uma fonte única de verdade.
-//
-// Cada budget é FAMILY-WIDE: os workflows do advoq apontam GOCACHE/yarn
-// cache-folder para dirs NOMEADOS (~/.cache/go-build-advoq-services,
-// ~/.cache/yarn-advoq-web, ...) para isolar cache-key por workflow. Os caps
-// antigos casavam só os paths default (~/.cache/go-build, ~/.yarn/cache) e os
-// dirs nomeados cresciam SEM LIMITE (go-build-advoq-services chegou a 13GB num
-// cap de 5GB) até encher o VHDX e o host dar PausedCritical. cacheCaps faz glob
-// das variantes e divide o budget da família entre os dirs encontrados, então o
-// total da família fica limitado independente de quantos dirs nomeados existam.
+// cacheCaps delegates to the shared cachetrim policy for the runner user's home.
+// The hook runs AS the runner user, so $HOME is the right (single) home. The
+// disk-pressure cleanup (internal/cleanup, runs as root) applies the SAME policy
+// across every /home/* runner home — both go through internal/cachetrim, so the
+// named-dir glob + family budget live in exactly one place.
 func cacheCaps() []cacheCap {
-	home := os.Getenv("HOME")
-	if home == "" {
-		return nil
-	}
-	const giB = int64(1) << 30
-	protect := time.Duration(civm.DefaultCacheTrimMinProtectHours) * time.Hour
-	var caps []cacheCap
-	// family expande um glob (mais extras fixos) em um cacheCap por dir existente,
-	// dividando o budget igualmente para limitar o total da família.
-	family := func(familyMaxGB int, glob string, extras ...string) {
-		dirs := existingDirs(append(cacheGlob(glob), extras...))
-		if len(dirs) == 0 {
-			return
-		}
-		per := int64(familyMaxGB) * giB / int64(len(dirs))
-		if per < 1 {
-			per = 1
-		}
-		for _, d := range dirs {
-			caps = append(caps, cacheCap{d, per, protect})
-		}
-	}
-	family(civm.DefaultCacheGoBuildMaxGB, filepath.Join(home, ".cache", "go-build*"))
-	family(civm.DefaultCacheYarnMaxGB, filepath.Join(home, ".cache", "yarn*"), filepath.Join(home, ".yarn", "cache"))
-	family(civm.DefaultCacheGolangciLintMaxGB, filepath.Join(home, ".cache", "golangci-lint*"))
-	// npm/pnpm usam um único dir fixo bem-conhecido (sem variantes nomeadas), e o
-	// cap não é dividido entre dirs — então não há skew de divisão e eles entram
-	// incondicionalmente (trim/wipe em dir ausente é no-op).
-	caps = append(caps,
-		cacheCap{filepath.Join(home, ".npm", "_cacache"), int64(civm.DefaultCacheNPMMaxGB) * giB, protect},
-		cacheCap{filepath.Join(home, ".pnpm-store"), int64(civm.DefaultCachePNPMMaxGB) * giB, protect},
-	)
-	return caps
-}
-
-// cacheGlob retorna os matches de um padrão glob (vazio em erro de padrão).
-func cacheGlob(pattern string) []string {
-	m, _ := filepath.Glob(pattern)
-	return m
-}
-
-// existingDirs filtra paths mantendo só diretórios existentes, deduplicando por
-// path limpo. Glob já retorna existentes; os extras fixos (ex. ~/.yarn/cache)
-// passam pelo mesmo filtro para não inflar a divisão do budget com dirs ausentes.
-func existingDirs(paths []string) []string {
-	seen := make(map[string]struct{}, len(paths))
-	out := make([]string, 0, len(paths))
-	for _, p := range paths {
-		clean := filepath.Clean(p)
-		if _, ok := seen[clean]; ok {
-			continue
-		}
-		fi, err := os.Stat(clean)
-		if err != nil || !fi.IsDir() {
-			continue
-		}
-		seen[clean] = struct{}{}
-		out = append(out, clean)
+	shared := cachetrim.Caps([]string{os.Getenv("HOME")}, cachetrim.Deps{})
+	out := make([]cacheCap, len(shared))
+	for i, c := range shared {
+		out[i] = cacheCap{path: c.Path, maxBytes: c.MaxBytes, minProtect: c.MinProtect}
 	}
 	return out
 }
 
-// trimCacheByAge walks root, sorts arquivos por mtime asc, e remove os mais
-// velhos até total <= maxBytes. Arquivos com mtime > Now-minProtect são
-// preservados — protege cache quente do job atual contra invalidação.
-// No-op se cache não existe ou já está abaixo da tampa.
+// trimCacheByAge delegates one cache dir's age/size trim to cachetrim and maps
+// the result to a hook Action.
 func trimCacheByAge(opts Options, root string, maxBytes int64, minProtect time.Duration) Action {
-	a := Action{Name: "cache_trim", Path: root, Executed: opts.Execute}
-	if strings.TrimSpace(root) == "" || root == "/" || root == os.Getenv("HOME") {
-		a.Error = "unsafe cache path"
-		return a
+	r := cachetrim.TrimByAge(cachetrim.Options{
+		Execute:     opts.Execute,
+		Now:         opts.Now,
+		WalkDirFn:   opts.WalkDirFn,
+		RemoveAllFn: opts.RemoveAllFn,
+	}, cachetrim.Cap{Path: root, MaxBytes: maxBytes, MinProtect: minProtect})
+	a := Action{Name: "cache_trim", Path: r.Path, BytesFound: r.BytesFound, BytesFreed: r.BytesFreed, Executed: r.Executed}
+	if r.Err != nil {
+		a.Error = r.Err.Error()
 	}
-	type entry struct {
-		path  string
-		size  int64
-		mtime time.Time
-	}
-	var entries []entry
-	var total int64
-	walkErr := opts.WalkDirFn(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			return err
-		}
-		entries = append(entries, entry{path: p, size: info.Size(), mtime: info.ModTime()})
-		total += info.Size()
-		return nil
-	})
-	if walkErr != nil {
-		if errors.Is(walkErr, fs.ErrNotExist) {
-			return a
-		}
-		a.Error = walkErr.Error()
-		return a
-	}
-	a.BytesFound = total
-	if total <= maxBytes {
-		return a
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].mtime.Before(entries[j].mtime) })
-	protectCutoff := opts.Now.Add(-minProtect)
-	target := total - maxBytes
-	var freed int64
-	for _, e := range entries {
-		if freed >= target {
-			break
-		}
-		if minProtect > 0 && e.mtime.After(protectCutoff) {
-			continue
-		}
-		if opts.Execute {
-			if err := opts.RemoveAllFn(e.path); err != nil {
-				if errors.Is(err, fs.ErrNotExist) {
-					continue
-				}
-				a.Error = err.Error()
-				return a
-			}
-		}
-		freed += e.size
-	}
-	a.BytesFreed = freed
 	return a
 }
 
