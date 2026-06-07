@@ -28,7 +28,7 @@ Operacional (gates de ci.yml: go vet/lint/govulncheck/test -race/cobertura ≥80
 
 ---
 
-## As 13 disciplinas
+## As 16 disciplinas
 
 | # | Disciplina | Regra (1 linha) | Exemplo civm | Status no civm |
 |---|---|---|---|---|
@@ -45,6 +45,9 @@ Operacional (gates de ci.yml: go vet/lint/govulncheck/test -race/cobertura ≥80
 | 11 | Halo effect em libs | Dep nova exige justificativa explícita | civm é stdlib-first (`go.mod` mínimo, só `testify` em teste); toda dep nova precisa de razão registrada no PR (alternativas, custo, rollback) | Manual (PR review); `govulncheck` cobre CVE (INVARIANTS #4) |
 | 12 | Priming em prompts | Framing adversarial em PR review e SSDV3 | "qual problema esse código tem?" / "liste 3 cenários de falha do watchdog" — não "está OK?" | Manual (cultural) |
 | 13 | Ilusão de validade | Valide o propósito, não a existência (existe ≠ funciona); pareie recusa com "legítimo passa?" | safedelete recusava root-owned e teste verde afirmava a recusa (#59); fix = teste de integração contra o modo de falha real | **Teste de integração obrigatório** (`internal/safedelete`, INVARIANTS #9) |
+| 14 | Retry calibrado | Re-tentar só com assinatura transitória PROVADA (rate-limit, lease, rede); falha determinística (migrate, build, teste) falha-rápido — nunca mascarada por re-tentativa. Um retry que "às vezes passa" esconde bug determinístico (corolário de #13) e reage à explicação disponível "é flake de infra" sem investigar (#1/#5) | `admit.go` re-tenta heavy só quando `tryAcquireHeavy` devolve `retry=true` (contenção de slot), não em erro real; `dockerlock` faz backoff só em lock contido. Anti-padrão evitado: loop `for 1 2 3` que trata QUALQUER `exit≠0` como flake (visto em `advoq/.github/workflows/web.yml` re-tentando `migrate exit 1` 3× como "transient" — corrigido 2026-06: `web.yml` passou a chamar `devctl ci classify` (classificador tipado, advoq ADR-088); `go.yml` ainda usa grep das mesmas assinaturas, follow-up) | Confirmado em `internal/admit`, `internal/dockerlock` (classificam); gate de CI no peer (`go.yml`/`web.yml`) |
+| 15 | Fail-safe default + curador independente | Modo de falha seguro é o DEFAULT (esquecer = falhar barulhento, nunca mascarar); o curador (reclaim/admissão/breaker) não morre junto com o recurso que cura nem decide por medição stale. "Código existe" ≠ "proteção ativa": o artefato corrente tem que estar de fato rodando no alvo | death-spiral do disco (#106): o autoreclaim abortava a `V:`<8GB — o curador morria com o recurso — e o `.ps1` corrigido no repo rodava STALE em `C:\civm-deploy`; fix = gate de duas fases (`autoreclaim_post_off_remeasure`; abort-threshold ≠ trigger-threshold) + re-medição VIVA pós-`Stop-VM` (`Get-PSDrive V`, não JSON de 10 min) + `EmergencyAdmits` fail-closed; `admit.go` fail-closed (CheckFn err → backoff, nunca admite); `fstrim` best-effort não bloqueia o reclaim | Confirmado em `deploy/windows/civm-vhdx-autoreclaim.ps1` (gate 2 fases), `internal/civm` (`EmergencyAdmits`), `internal/admit` (fail-closed); lint `internal/hostdisk/specv3_reclaim_test.go` + `internal/civm/reclaim_test.go` (INVARIANTS #5/#6) |
+| 16 | Idempotência de efeitos replayáveis | Todo efeito atrás de retry/replay/re-registro é idempotente (aplicar 2× = aplicar 1×); só assim retry (#14) e fail-safe (#15) são SEGUROS | `deploy/bin/setup-registry-cache.sh` reconcilia o estado ("rodar de novo nunca duplica"); `register-*.ps1` re-registra via `schtasks /delete /f` + `/create` (idempotente); reclaim re-disparado acima do threshold = `autoreclaim_skip_threshold` no-op. Peer (advoq): `idempotency_keys`, outbox, goose versionado + validação de efeito em `run-migrations.sh` | Confirmado em `deploy/bin/setup-registry-cache.sh`, `deploy/windows/register-*.ps1`; Manual (PR review) |
 
 ---
 
@@ -91,7 +94,8 @@ Rules granulares por domínio em `rules/`:
 | #5/#9 Worst-case (race) | #5 `go test -race` | detector de race no job `build-civmctl` | Sim (CI) |
 | #13 Ilusão de validade | #9 Integração safedelete | `go test -tags=integration` contra fixture root-owned real | Sim (CI self-hosted) |
 | #7 Hindsight (postmortem → gate) | #17 Int32 clamp ps1 | `ps1_safety_test.go` varre `deploy/windows/*.ps1` | Sim (CI) |
-| #1, #4, #6, #8, #10, #11, #12 | — | manual em PR review + SSDV3 | Manual |
+| #15 Fail-safe + curador | reclaim gate de duas fases | `internal/hostdisk/specv3_reclaim_test.go` (tokens do gate pós-Off) + `internal/civm/reclaim_test.go` (`EmergencyAdmits` + valor medido travado) | Sim (CI `build-civmctl`) |
+| #1, #4, #6, #8, #10, #11, #12, #16 | — | manual em PR review + SSDV3 | Manual |
 
 **Várias disciplinas com gate CI hard; o resto exige humano consciente.** Não é teatro.
 

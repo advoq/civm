@@ -205,6 +205,26 @@ func staleReport(m Metrics, reason string) Report {
 	return Report{Metrics: m, Stale: true, Level: levelCrit, Reason: reason}
 }
 
+// WantsCleanup reports whether the host volume is under enough pressure (warn or
+// crit) that a guest-side consumer should run aggressive disk cleanup, even when
+// the GUEST filesystem percentage alone would not trigger it. This is the
+// host-aware half of the job-started gate: the guest can sit at a comfortable
+// percentage while the host V: volume already crossed a floor (the 2026-06
+// PausedCritical incident — guest 69%, host V: 88%).
+func (r Report) WantsCleanup() bool {
+	return r.Level == levelWarn || r.Level == levelCrit
+}
+
+// Blocks reports whether a job MUST be rejected: the host is genuinely critical
+// AND the snapshot is fresh. A stale/absent snapshot is Level=crit by fail-safe
+// (DT-v2-9) but does NOT block here — missing telemetry is an infra gap, not
+// proof the disk is full, and blocking every job on a missing metrics file would
+// be a self-inflicted CI outage. Cleanup still runs on stale (WantsCleanup), but
+// only fresh evidence of a full host stops the job.
+func (r Report) Blocks() bool {
+	return r.Level == levelCrit && !r.Stale
+}
+
 // RenderJSON emits the report as indented machine-readable JSON.
 func RenderJSON(w io.Writer, r Report) error {
 	enc := json.NewEncoder(w)

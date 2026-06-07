@@ -110,6 +110,31 @@ func Remove(ctx context.Context, opts Options, path string) Result {
 	return opts.escalate(ctx, target)
 }
 
+// Chown recursively chowns path back to the runner user (OwnerUIDFn) via the
+// privileged wrapper, after the SAME validation + guard + owner re-check as
+// Remove. It is non-destructive: only ownership changes, no file is removed.
+//
+// Used at job-started to reclaim a REUSED checkout dir that a prior job's
+// containerized (root) step left partially root-owned: actions/checkout deletes
+// the previous checkout before fetching, and a root-owned file makes that delete
+// fail with EACCES, killing the job at checkout. A plain rmdir by the runner
+// user cannot fix it; a recursive chown to the runner user lets checkout clean
+// it normally. Chowning a tree owned by the runner OR root is exactly the
+// allowed case (resolveAndAffirmOwner); a third user's files are still refused.
+func Chown(ctx context.Context, opts Options, path string) Result {
+	applyDefaults(&opts)
+
+	target, err := opts.resolveSafeTarget(path)
+	if err != nil {
+		return Result{Err: err}
+	}
+	uidgid := fmt.Sprintf("%d:%d", opts.OwnerUIDFn(), opts.OwnerUIDFn())
+	if err := opts.runWrapper(ctx, "chown", uidgid, target); err != nil {
+		return Result{Escalated: true, Err: fmt.Errorf("wrapper chown failed: %w", err)}
+	}
+	return Result{Escalated: true}
+}
+
 // resolveSafeTarget runs the three independent guards and returns the resolved
 // real path that any privileged delete must target. Any failure returns
 // ErrUnsafePath and guarantees no sudo runs.

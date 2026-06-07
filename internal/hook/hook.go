@@ -6,7 +6,6 @@ package hook
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -19,7 +18,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/advoq/civm/internal/cachetrim"
 	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/hostdisk"
 	"github.com/advoq/civm/internal/safedelete"
 )
 
@@ -62,6 +63,13 @@ type Result struct {
 	WorkRoot string   `json:"work_root,omitempty"`
 	Actions  []Action `json:"actions,omitempty"`
 	Error    string   `json:"error,omitempty"`
+	// HostLevel/HostVFreeGB carry the Hyper-V host volume state read from the
+	// delivered host-metrics snapshot. The guest-% gate above (DiskUsedPct) does
+	// not see host pressure: the guest can be comfortable while the host V: volume
+	// already crossed a floor (the 2026-06 PausedCritical incident). Surfaced on
+	// hooks.jsonl for the watchdog/observability.
+	HostLevel   string `json:"host_level,omitempty"`
+	HostVFreeGB int64  `json:"host_v_free_gb,omitempty"`
 }
 
 type Options struct {
@@ -87,11 +95,21 @@ type Options struct {
 	// scopes the escalation to a direct child of a safeWorkRoot. Injected so
 	// unit tests never call real sudo (DT-v2-1/3/9).
 	SafeWorkDeleteFn func(ctx context.Context, path string) safedelete.Result
-	MkdirAllFn       func(path string, perm os.FileMode) error
-	StatfsFn         func(path string) (totalBytes, freeBytes uint64, err error)
-	DiscoverRootsFn  func() ([]string, error)
-	ReadDirFn        func(path string) ([]os.DirEntry, error)
-	WalkDirFn        func(root string, fn fs.WalkDirFunc) error
+	// SafeWorkChownFn recursively chowns a reused checkout dir back to the runner
+	// user at job-started, so actions/checkout can clean a prior job's root-owned
+	// (Docker-as-root) leftover instead of dying with EACCES. Non-destructive.
+	// Injected so unit tests never call real sudo.
+	SafeWorkChownFn func(ctx context.Context, path string) safedelete.Result
+	MkdirAllFn      func(path string, perm os.FileMode) error
+	StatfsFn        func(path string) (totalBytes, freeBytes uint64, err error)
+	DiscoverRootsFn func() ([]string, error)
+	ReadDirFn       func(path string) ([]os.DirEntry, error)
+	WalkDirFn       func(root string, fn fs.WalkDirFunc) error
+	// HostDiskFn reads the Hyper-V host volume snapshot delivered to the guest and
+	// classifies it (ok/warn/crit). The job-started gate uses it so host V:
+	// pressure triggers cleanup/rejection even when the guest filesystem % alone
+	// would not. Injected so unit tests never touch the metrics file.
+	HostDiskFn func() (hostdisk.Report, error)
 }
 
 func DefaultOptionsFromEnv(event Event) Options {
@@ -113,7 +131,16 @@ func DefaultOptionsFromEnv(event Event) Options {
 		DiscoverRootsFn: discoverRunnerWorkRoots,
 		ReadDirFn:       os.ReadDir,
 		WalkDirFn:       filepath.WalkDir,
+		HostDiskFn:      defaultHostDisk,
 	}
+}
+
+// defaultHostDisk reads + classifies the delivered host-metrics snapshot. A read
+// error is never fatal to the hook: hostdisk.Check folds an absent/unreadable
+// file into a fail-safe crit Report (Stale=true), which WantsCleanup but does
+// NOT Block — so a missing metrics file forces cleanup without wedging CI.
+func defaultHostDisk() (hostdisk.Report, error) {
+	return hostdisk.Check(hostdisk.DefaultOptions())
 }
 
 // newSafeWorkDelete builds the hook-scoped safedelete closure. It routes the
@@ -127,6 +154,15 @@ func newSafeWorkDelete(removeAllFn func(string) error) func(context.Context, str
 			GuardFn:     workChildGuard,
 			RemoveAllFn: removeAllFn,
 		}, path)
+	}
+}
+
+// newSafeWorkChown builds the hook-scoped privileged chown closure used to
+// reclaim ownership of a reused checkout dir at job-started (same workChildGuard
+// scope as the delete closure). Non-destructive — it never removes files.
+func newSafeWorkChown() func(context.Context, string) safedelete.Result {
+	return func(ctx context.Context, path string) safedelete.Result {
+		return safedelete.Chown(ctx, safedelete.Options{GuardFn: workChildGuard}, path)
 	}
 }
 
@@ -157,7 +193,20 @@ func Run(ctx context.Context, opts Options) Result {
 
 	switch opts.Event {
 	case EventJobStarted:
-		if usedPct >= opts.PreCleanupPct {
+		// Host-aware (Bug A do incidente 2026-06): o gate guest-% não vê a pressão
+		// do volume V: do host. Lê o snapshot de host-metrics entregue ao guest; um
+		// erro de leitura vira um Report crit fail-safe (Stale=true) — força
+		// cleanup, mas não bloqueia (telemetria ausente != disco cheio).
+		host, _ := opts.HostDiskFn()
+		res.HostLevel = host.Level
+		res.HostVFreeGB = host.VFreeGB
+		// Reclaim the reused checkout dir's ownership BEFORE actions/checkout runs,
+		// so a prior job's root-owned (Docker-as-root) leftover does not make
+		// checkout fail with EACCES. Unconditional + non-destructive.
+		res.Actions = append(res.Actions, reclaimWorkspaceOwnership(ctx, opts)...)
+		// Cleanup dispara por pressão do guest-% OU do host V: (warn/crit). A
+		// metade host-aware pega o caso que o guest-% perde: guest enxuto, V: cheio.
+		if usedPct >= opts.PreCleanupPct || host.WantsCleanup() {
 			res.Decision = DecisionCleanupApplied
 			// Disk pressure mode: purga caches ($HOME/.cache/go-build, npm, etc.)
 			// para liberar espaço suficiente.
@@ -173,10 +222,20 @@ func Run(ctx context.Context, opts Options) Result {
 				}
 			}
 		}
-		if res.DiskUsedPct >= opts.HardFailPct {
+		// Rejeita por hard-fail do guest OU host crit FRESCO (Blocks): V: realmente
+		// cheio com telemetria atual. Snapshot stale nunca bloqueia (gap de infra,
+		// não prova) — só forçou cleanup acima. O cleanup do guest ajuda o próximo
+		// Optimize do host a recuperar; o block evita iniciar run e cair em
+		// PausedCritical antes disso.
+		switch {
+		case res.DiskUsedPct >= opts.HardFailPct:
 			res.Decision = DecisionRejected
 			res.ExitCode = 75
 			res.Error = fmt.Sprintf("disk usage %d%% >= hard fail threshold %d%%", res.DiskUsedPct, opts.HardFailPct)
+		case host.Blocks():
+			res.Decision = DecisionRejected
+			res.ExitCode = 75
+			res.Error = fmt.Sprintf("host V: free %dGB at crit floor (level=%s) — refusing job to avoid PausedCritical", host.VFreeGB, host.Level)
 		}
 	case EventJobCompleted:
 		res.Decision = DecisionCleanupApplied
@@ -322,6 +381,37 @@ func activeWorkspaceEntry(root, workspace string) string {
 	return parts[0]
 }
 
+// reclaimWorkspaceOwnership runs at job-started, BEFORE actions/checkout, and
+// chowns the active job's REUSED checkout dir back to the runner user. A prior
+// job's containerized (root) step can leave root-owned files in the same _work
+// checkout path on this shared runner; actions/checkout then dies with "EACCES
+// rmdir" cleaning the old tree. Previously a chronically-full disk ran the gated
+// cleanup every job and masked this; with a healthy disk (the cache-cap fix) the
+// gated cleanup is rare and the latent leftover surfaces. chown is
+// non-destructive (the dir survives; checkout cleans it), so it runs EVERY
+// job-started regardless of disk pressure — unlike the disk-gated,
+// workspace-preserving cleanWorkRoot. Best-effort: a chown failure is a warning,
+// never a wedge (it leaves us no worse than the checkout EACCES it prevents).
+func reclaimWorkspaceOwnership(ctx context.Context, opts Options) []Action {
+	if !opts.Execute {
+		return nil
+	}
+	var actions []Action
+	for _, root := range workRoots(opts) {
+		ws := activeWorkspaceEntry(root, opts.GitHubWorkspace)
+		if ws == "" {
+			continue
+		}
+		path := filepath.Join(root, ws)
+		a := Action{Name: "workspace_chown", Path: path, Executed: true}
+		if res := opts.SafeWorkChownFn(ctx, path); res.Err != nil {
+			a.Warning = res.Err.Error()
+		}
+		actions = append(actions, a)
+	}
+	return actions
+}
+
 func removePath(opts Options, path, name string) Action {
 	a := Action{Name: name, Path: path, Executed: opts.Execute}
 	if strings.TrimSpace(path) == "" || path == "/" || path == os.Getenv("HOME") {
@@ -337,102 +427,42 @@ func removePath(opts Options, path, name string) Action {
 }
 
 // cacheCap describes a per-cache size budget for routine trim.
+// cacheCap mirrors cachetrim.Cap with this package's field names so the existing
+// hook cleanup flow and tests keep their shape; the policy itself lives in the
+// shared internal/cachetrim (one source of truth, also used by internal/cleanup).
 type cacheCap struct {
-	path     string
-	maxBytes int64
-	// minProtect protege arquivos com mtime > Now-minProtect contra remoção,
-	// para não invalidar cache quente de um job que acabou de gravar.
+	path       string
+	maxBytes   int64
 	minProtect time.Duration
 }
 
-// cacheCaps lista os caches sob $HOME com seus limites de tamanho.
-// Em cleanup rotineiro (job-completed) usamos trim por idade/tamanho em vez de
-// wipe total: preserva Go build cache até X GB, depois descarta os mais velhos.
-// Constantes vivem em internal/civm/civm.go para uma fonte única de verdade.
+// cacheCaps delegates to the shared cachetrim policy for the runner user's home.
+// The hook runs AS the runner user, so $HOME is the right (single) home. The
+// disk-pressure cleanup (internal/cleanup, runs as root) applies the SAME policy
+// across every /home/* runner home — both go through internal/cachetrim, so the
+// named-dir glob + family budget live in exactly one place.
 func cacheCaps() []cacheCap {
-	home := os.Getenv("HOME")
-	if home == "" {
-		return nil
+	shared := cachetrim.Caps([]string{os.Getenv("HOME")}, cachetrim.Deps{})
+	out := make([]cacheCap, len(shared))
+	for i, c := range shared {
+		out[i] = cacheCap{path: c.Path, maxBytes: c.MaxBytes, minProtect: c.MinProtect}
 	}
-	const giB = int64(1) << 30
-	protect := time.Duration(civm.DefaultCacheTrimMinProtectHours) * time.Hour
-	return []cacheCap{
-		{filepath.Join(home, ".cache", "go-build"), int64(civm.DefaultCacheGoBuildMaxGB) * giB, protect},
-		{filepath.Join(home, ".npm", "_cacache"), int64(civm.DefaultCacheNPMMaxGB) * giB, protect},
-		{filepath.Join(home, ".yarn", "cache"), int64(civm.DefaultCacheYarnMaxGB) * giB, protect},
-		{filepath.Join(home, ".pnpm-store"), int64(civm.DefaultCachePNPMMaxGB) * giB, protect},
-	}
+	return out
 }
 
-// trimCacheByAge walks root, sorts arquivos por mtime asc, e remove os mais
-// velhos até total <= maxBytes. Arquivos com mtime > Now-minProtect são
-// preservados — protege cache quente do job atual contra invalidação.
-// No-op se cache não existe ou já está abaixo da tampa.
+// trimCacheByAge delegates one cache dir's age/size trim to cachetrim and maps
+// the result to a hook Action.
 func trimCacheByAge(opts Options, root string, maxBytes int64, minProtect time.Duration) Action {
-	a := Action{Name: "cache_trim", Path: root, Executed: opts.Execute}
-	if strings.TrimSpace(root) == "" || root == "/" || root == os.Getenv("HOME") {
-		a.Error = "unsafe cache path"
-		return a
+	r := cachetrim.TrimByAge(cachetrim.Options{
+		Execute:     opts.Execute,
+		Now:         opts.Now,
+		WalkDirFn:   opts.WalkDirFn,
+		RemoveAllFn: opts.RemoveAllFn,
+	}, cachetrim.Cap{Path: root, MaxBytes: maxBytes, MinProtect: minProtect})
+	a := Action{Name: "cache_trim", Path: r.Path, BytesFound: r.BytesFound, BytesFreed: r.BytesFreed, Executed: r.Executed}
+	if r.Err != nil {
+		a.Error = r.Err.Error()
 	}
-	type entry struct {
-		path  string
-		size  int64
-		mtime time.Time
-	}
-	var entries []entry
-	var total int64
-	walkErr := opts.WalkDirFn(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			return err
-		}
-		entries = append(entries, entry{path: p, size: info.Size(), mtime: info.ModTime()})
-		total += info.Size()
-		return nil
-	})
-	if walkErr != nil {
-		if errors.Is(walkErr, fs.ErrNotExist) {
-			return a
-		}
-		a.Error = walkErr.Error()
-		return a
-	}
-	a.BytesFound = total
-	if total <= maxBytes {
-		return a
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].mtime.Before(entries[j].mtime) })
-	protectCutoff := opts.Now.Add(-minProtect)
-	target := total - maxBytes
-	var freed int64
-	for _, e := range entries {
-		if freed >= target {
-			break
-		}
-		if minProtect > 0 && e.mtime.After(protectCutoff) {
-			continue
-		}
-		if opts.Execute {
-			if err := opts.RemoveAllFn(e.path); err != nil {
-				if errors.Is(err, fs.ErrNotExist) {
-					continue
-				}
-				a.Error = err.Error()
-				return a
-			}
-		}
-		freed += e.size
-	}
-	a.BytesFreed = freed
 	return a
 }
 
@@ -673,6 +703,9 @@ func applyDefaults(opts *Options) {
 	if opts.SafeWorkDeleteFn == nil {
 		opts.SafeWorkDeleteFn = newSafeWorkDelete(opts.RemoveAllFn)
 	}
+	if opts.SafeWorkChownFn == nil {
+		opts.SafeWorkChownFn = newSafeWorkChown()
+	}
 	if opts.MkdirAllFn == nil {
 		opts.MkdirAllFn = os.MkdirAll
 	}
@@ -687,6 +720,9 @@ func applyDefaults(opts *Options) {
 	}
 	if opts.WalkDirFn == nil {
 		opts.WalkDirFn = filepath.WalkDir
+	}
+	if opts.HostDiskFn == nil {
+		opts.HostDiskFn = defaultHostDisk
 	}
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()

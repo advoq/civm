@@ -38,8 +38,13 @@ func TestEmergencyAdmits(t *testing.T) {
 
 // The SPECv3 constants must keep the safety ordering: a run can never be admitted
 // below the hard floor, the emergency path lives under the normal headroom, and
-// the pressure cadence triggers above the headroom. The scratch budget ships at
-// zero until the host measurement campaign (DT-v3-2) sets it by explicit commit.
+// the pressure cadence triggers above the headroom. The scratch budget was
+// COMMITTED from the host measurement campaign (DT-2, #106): observed p100 scratch
+// high-water = 10 GB + 1 margin = 11, emergency now ENABLED. Enabling is safe via
+// RF-2/DT-1 (autoreclaim.ps1 re-measures Get-PSDrive V post-Wait-VMState Off, when
+// the ~8 GB VMRS is freed, before the uninterruptible Optimize) — the budget is a
+// coarse pre-filter, post-Off free is authoritative. Changing it REQUIRES a new
+// measurement + updating this guard.
 func TestReclaimConstantsOrdering(t *testing.T) {
 	if DefaultHostVolumeHardFloorGB >= DefaultHostVolumeHeadroomGB {
 		t.Errorf("HardFloor (%d) must be < Headroom (%d)",
@@ -49,9 +54,13 @@ func TestReclaimConstantsOrdering(t *testing.T) {
 		t.Errorf("Headroom (%d) must be < Pressure (%d)",
 			DefaultHostVolumeHeadroomGB, DefaultAutoreclaimPressureGB)
 	}
-	if DefaultHostVolumeScratchBudgetGB != 0 {
-		t.Errorf("ScratchBudget must ship at 0 (emergency disabled until measured), got %d",
+	if DefaultHostVolumeScratchBudgetGB != 11 {
+		t.Errorf("ScratchBudget must be the committed measured value 11 (p100 high-water 10 + 1); changing it requires re-measurement, got %d",
 			DefaultHostVolumeScratchBudgetGB)
+	}
+	if DefaultHostVolumeScratchBudgetGB <= DefaultHostVolumeHardFloorGB {
+		t.Errorf("ScratchBudget (%d) must exceed the hard floor (%d) so an admitted emergency leaves usable scratch",
+			DefaultHostVolumeScratchBudgetGB, DefaultHostVolumeHardFloorGB)
 	}
 	if DefaultReclaimMinIntervalMin <= 0 {
 		t.Errorf("ReclaimMinIntervalMin must be positive, got %d", DefaultReclaimMinIntervalMin)

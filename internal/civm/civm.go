@@ -52,11 +52,19 @@ const (
 	// Per-cache size budgets enforced by hook routine cleanup (job-completed).
 	// Excedente é removido por mtime ascendente; arquivos com mtime mais novo
 	// que DefaultCacheTrimMinProtectHours são preservados.
+	//
+	// Cada budget é FAMILY-WIDE: cacheCaps() faz glob das variantes nomeadas que
+	// os workflows criam (ex. GOCACHE=~/.cache/go-build-advoq-services,
+	// YARN cache-folder=~/.cache/yarn-advoq-web) e divide o budget entre os dirs
+	// encontrados. Antes, os caps casavam só os paths default (~/.cache/go-build,
+	// ~/.yarn/cache) e os dirs nomeados cresciam SEM LIMITE — go-build-advoq-services
+	// chegou a 13GB num cap de 5GB, enchendo o VHDX até o host dar PausedCritical.
 	DefaultCacheTrimMinProtectHours = 24
 	DefaultCacheGoBuildMaxGB        = 5
 	DefaultCacheNPMMaxGB            = 3
 	DefaultCacheYarnMaxGB           = 3
 	DefaultCachePNPMMaxGB           = 5
+	DefaultCacheGolangciLintMaxGB   = 2
 
 	// Filtros do docker prune em modo rotineiro. Mantêm layers quentes < 24h
 	// e imagens unused < 7 dias, em vez do agressivo system prune --volumes.
@@ -81,13 +89,16 @@ const (
 	DefaultMaintenanceStatePath      = "/var/lib/civm/maintenance.json"  // snapshot de drain idempotente
 	DefaultMaintenanceLockPath       = "/var/lib/civm/maintenance.lock"  // flock anti-concorrência de enter/exit
 
-	// SPECv3 (host-volume-reclamation/SPECv3.md): resiliência do reclaim.
-	// Optimize-VHD é ININTERRUPTÍVEL (Stop-Job não aborta a compactação nativa),
-	// então o caminho de emergência (V: abaixo do headroom) só é admitido por
-	// EmergencyAdmits quando a folga ao vivo cobre o pior scratch MEDIDO — nunca
-	// por um piso adivinhado, nunca abortando no meio.
+	// SPECv3 (host-volume-reclamation/SPECv3.md) + RF-2/DT-1 (civm-self-cleaning-runner, #106).
+	// Optimize-VHD é ININTERRUPTÍVEL (Stop-Job não aborta a compactação nativa).
+	// O caminho de emergência (V: abaixo do headroom) é admitido em DUAS FASES:
+	// Fase 1 (pré-stop) só checa se o budget está habilitado; Fase 2 (autoreclaim.ps1,
+	// após Wait-VMState Off) re-mede Get-PSDrive V com o VMRS (~8GB) já liberado e
+	// admite via EmergencyAdmits(liveFreeAfterOff, ...). O budget é pré-filtro
+	// grosseiro; a folga real pós-Off é o gate AUTORITATIVO — nunca um piso
+	// adivinhado, nunca abortando no meio. vmrs_release medido = 8.02GB (06/2026).
 	DefaultHostVolumeHardFloorGB     = 1  // piso duro absoluto; nunca operar abaixo
-	DefaultHostVolumeScratchBudgetGB = 0  // pior scratch high-water medido + margem; 0 = emergência DESABILITADA
+	DefaultHostVolumeScratchBudgetGB = 11 // p100 scratch high-water observado (10, logs do host) + 1; emergência HABILITADA (segura via gate pós-Off RF-2/DT-1)
 	DefaultAutoreclaimPressureGB     = 25 // abaixo disso, cadência de DETECÇÃO curta (não de ação)
 	DefaultReclaimMinIntervalMin     = 30 // mínimo entre eventos reais de Stop-VM+Optimize
 

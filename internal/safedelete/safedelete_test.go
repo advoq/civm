@@ -3,6 +3,7 @@ package safedelete
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"strings"
 	"testing"
@@ -101,6 +102,61 @@ func TestRemoveUnprivilegedSuccessNeverEscalates(t *testing.T) {
 	}
 	if len(rec.calls) != 0 {
 		t.Fatalf("sudo invoked %d times for a clean delete: %v", len(rec.calls), rec.calls)
+	}
+}
+
+// TestChownInvokesWrapperChownNonDestructive proves Chown calls ONLY the
+// wrapper chown (uid:gid = runner), never rm — it reclaims ownership without
+// deleting (the job-started fix for a reused root-owned checkout dir).
+func TestChownInvokesWrapperChownNonDestructive(t *testing.T) {
+	rec := &recorder{}
+	opts := baseOptions(rec)
+	res := Chown(context.Background(), opts, safeChild)
+	if res.Err != nil {
+		t.Fatalf("Err = %v, want nil", res.Err)
+	}
+	if got := rec.ops(); len(got) != 1 || got[0] != "chown" {
+		t.Fatalf("ops = %v, want [chown] only (non-destructive, never rm)", got)
+	}
+	call := rec.calls[0]
+	if call[0] != "sudo" || call[1] != "-n" || call[2] != wrapperPath || call[3] != "chown" {
+		t.Fatalf("argv prefix = %v, want [sudo -n %s chown ...]", call[:4], wrapperPath)
+	}
+	if want := fmt.Sprintf("%d:%d", runnerUID, runnerUID); call[4] != want {
+		t.Fatalf("uid:gid = %q, want %q", call[4], want)
+	}
+	if call[len(call)-1] != safeChild {
+		t.Fatalf("path is not the final argv element: %v", call)
+	}
+}
+
+// TestChownRootOwnedTargetAllowed: the whole point — a root-owned reused checkout
+// (Docker-as-root leftover) must be chownable back to the runner.
+func TestChownRootOwnedTargetAllowed(t *testing.T) {
+	rec := &recorder{}
+	opts := baseOptions(rec)
+	opts.FileOwnerUIDFn = func(fs.FileInfo) (int, bool) { return rootUID, true }
+	res := Chown(context.Background(), opts, safeChild)
+	if res.Err != nil {
+		t.Fatalf("root-owned target must be chownable, got %v", res.Err)
+	}
+	if got := rec.ops(); len(got) != 1 || got[0] != "chown" {
+		t.Fatalf("ops = %v, want [chown]", got)
+	}
+}
+
+// TestChownGuardRejectionNeverInvokesWrapper: a path failing the guard never
+// reaches sudo (same hard-reject contract as Remove).
+func TestChownGuardRejectionNeverInvokesWrapper(t *testing.T) {
+	rec := &recorder{}
+	opts := baseOptions(rec)
+	opts.GuardFn = func(string) error { return errors.New("not a safe child") }
+	res := Chown(context.Background(), opts, safeChild)
+	if res.Err == nil {
+		t.Fatalf("expected guard rejection error")
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("wrapper invoked despite guard rejection: %v", rec.calls)
 	}
 }
 

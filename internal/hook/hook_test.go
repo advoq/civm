@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/hostdisk"
 	"github.com/advoq/civm/internal/safedelete"
 )
 
@@ -982,11 +983,46 @@ func TestRunWithTimeoutCancelsHungCommand(t *testing.T) {
 	}
 }
 
-func TestCacheCapsUsesCivmConstants(t *testing.T) {
-	t.Setenv("HOME", "/home/test")
+// TestCacheCapsGlobsNamedDirsAndDividesFamilyBudget é a regressão do incidente
+// 2026-06 (VHDX -> PausedCritical): os workflows do advoq apontam GOCACHE/yarn
+// cache-folder para dirs NOMEADOS (~/.cache/go-build-advoq-services, ...) que o
+// cap antigo (path fixo ~/.cache/go-build) NÃO casava — então cresciam sem
+// limite (go-build-advoq-services chegou a 13GB num cap de 5GB). cacheCaps agora
+// faz glob das variantes e divide o budget da família entre os dirs achados.
+func TestCacheCapsGlobsNamedDirsAndDividesFamilyBudget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mk := func(parts ...string) string {
+		p := filepath.Join(append([]string{home}, parts...)...)
+		if err := os.MkdirAll(p, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// dois dirs go-build nomeados (dividem o budget), um yarn nomeado, lint, npm, pnpm.
+	gb1 := mk(".cache", "go-build-advoq-services")
+	gb2 := mk(".cache", "go-build-advoq-devctl")
+	yarnNamed := mk(".cache", "yarn-advoq-web")
+	lint := mk(".cache", "golangci-lint")
+	npm := mk(".npm", "_cacache")
+	pnpm := mk(".pnpm-store")
+
 	caps := cacheCaps()
-	if len(caps) != 4 {
-		t.Fatalf("expected 4 caps, got %d", len(caps))
+	byPath := make(map[string]cacheCap, len(caps))
+	for _, c := range caps {
+		byPath[c.path] = c
+	}
+	// Regressão: TODO dir nomeado deve estar coberto (antes eram invisíveis ao trim).
+	for _, p := range []string{gb1, gb2, yarnNamed, lint, npm, pnpm} {
+		if _, ok := byPath[p]; !ok {
+			t.Errorf("cacheCaps() não cobre %s — dir nomeado ficaria sem trim (o bug do VHDX 13GB)", p)
+		}
+	}
+	// Budget da família dividido: 2 dirs go-build => cada um recebe family/2.
+	const giB = int64(1) << 30
+	wantPerGoBuild := int64(civm.DefaultCacheGoBuildMaxGB) * giB / 2
+	if got := byPath[gb1].maxBytes; got != wantPerGoBuild {
+		t.Errorf("go-build per-dir cap=%d, want family/2=%d", got, wantPerGoBuild)
 	}
 	wantProtect := time.Duration(civm.DefaultCacheTrimMinProtectHours) * time.Hour
 	for _, c := range caps {
@@ -1081,6 +1117,148 @@ func TestJobStartedDockerPruneErrorIsNonFatal(t *testing.T) {
 	res := Run(context.Background(), opts)
 	if res.Decision == DecisionError || res.ExitCode != 0 {
 		t.Fatalf("docker prune error at job-started must not fail the hook, got %+v", res)
+	}
+}
+
+// TestJobStartedHostAwareGate prova a metade host-aware do gate (alavanca 3 do
+// fix de footprint): com o guest CONFORTÁVEL (30% < PreCleanupPct), a pressão do
+// volume V: do host ainda dispara cleanup (warn) e rejeita o job (crit fresco) —
+// exatamente o cenário do incidente 2026-06 (guest 69%, host V: 88%) que o gate
+// guest-% sozinho não pegava. Snapshot stale força cleanup mas nunca bloqueia.
+func TestJobStartedHostAwareGate(t *testing.T) {
+	base := func() Options {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("RUNNER_TEMP", "")
+		t.Setenv("GITHUB_WORKSPACE", "")
+		t.Setenv("GITHUB_REPOSITORY", "")
+		t.Setenv("GITHUB_RUN_ID", "")
+		o := DefaultOptionsFromEnv(EventJobStarted)
+		o.Execute = true
+		o.PreCleanupPct = 60
+		o.HardFailPct = 95
+		// guest 30% usado → o gate guest-% NÃO dispara; isola o efeito do host.
+		o.StatfsFn = func(string) (uint64, uint64, error) { return 100, 70, nil }
+		o.RemoveAllFn = func(string) error { return nil }
+		o.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+		o.MkdirAllFn = func(string, os.FileMode) error { return nil }
+		o.LogPath = ""
+		o.WorkRoot = "/home/civm-test/actions-runner/_work"
+		o.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+		return o
+	}
+	report := func(level string, vFree int64, stale bool) func() (hostdisk.Report, error) {
+		return func() (hostdisk.Report, error) {
+			return hostdisk.Report{Metrics: hostdisk.Metrics{VFreeGB: vFree}, Level: level, Stale: stale}, nil
+		}
+	}
+
+	t.Run("host ok: guest confortável => sem cleanup, sem reject", func(t *testing.T) {
+		o := base()
+		o.HostDiskFn = report("ok", 66, false)
+		res := Run(context.Background(), o)
+		if res.Decision == DecisionCleanupApplied {
+			t.Errorf("host ok + guest 30%% não deve rodar cleanup; decision=%v", res.Decision)
+		}
+		if res.Decision == DecisionRejected {
+			t.Errorf("host ok não pode rejeitar")
+		}
+		if res.HostLevel != "ok" || res.HostVFreeGB != 66 {
+			t.Errorf("campos host não propagados: level=%q vfree=%d", res.HostLevel, res.HostVFreeGB)
+		}
+	})
+
+	t.Run("host warn: cleanup apesar do guest confortável", func(t *testing.T) {
+		o := base()
+		o.HostDiskFn = report("warn", 25, false)
+		res := Run(context.Background(), o)
+		if res.Decision != DecisionCleanupApplied {
+			t.Errorf("host warn deve disparar cleanup mesmo com guest 30%%; got %v", res.Decision)
+		}
+		if res.ExitCode == 75 {
+			t.Errorf("host warn não pode rejeitar")
+		}
+	})
+
+	t.Run("host crit fresco: cleanup E reject", func(t *testing.T) {
+		o := base()
+		o.HostDiskFn = report("crit", 6, false)
+		res := Run(context.Background(), o)
+		if res.Decision != DecisionRejected {
+			t.Errorf("host crit fresco deve rejeitar; got %v", res.Decision)
+		}
+		if res.ExitCode != 75 {
+			t.Errorf("exit code do reject = %d, want 75", res.ExitCode)
+		}
+	})
+
+	t.Run("host crit STALE: cleanup mas SEM reject (gap de infra != disco cheio)", func(t *testing.T) {
+		o := base()
+		o.HostDiskFn = report("crit", 0, true)
+		res := Run(context.Background(), o)
+		if res.Decision == DecisionRejected {
+			t.Errorf("crit stale NÃO pode rejeitar (não auto-sabotar CI); err=%s", res.Error)
+		}
+		if res.Decision != DecisionCleanupApplied {
+			t.Errorf("crit stale deve ainda disparar cleanup; got %v", res.Decision)
+		}
+	})
+}
+
+// TestJobStartedReclaimsWorkspaceOwnership proves the EACCES fix: at job-started
+// the active reused checkout dir is chowned back to the runner (so a prior job's
+// root-owned Docker leftover does not make actions/checkout die with EACCES). It
+// runs UNCONDITIONALLY — here the disk is healthy (PreCleanupPct not met) and the
+// host is ok, so NO disk-pressure cleanup runs, yet the chown still happens.
+func TestJobStartedReclaimsWorkspaceOwnership(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RUNNER_TEMP", "")
+	t.Setenv("GITHUB_REPOSITORY", "")
+	t.Setenv("GITHUB_RUN_ID", "")
+	ws := "/home/emdev/actions-runner-advoq/_work/advoq/advoq"
+	t.Setenv("GITHUB_WORKSPACE", ws)
+
+	var chowned []string
+	opts := DefaultOptionsFromEnv(EventJobStarted)
+	opts.Execute = true
+	opts.PreCleanupPct = 99 // healthy disk -> no gated cleanup
+	opts.HardFailPct = 100
+	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 70, nil } // 30% used
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.RemoveAllFn = func(string) error { return nil }
+	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+	opts.LogPath = ""
+	opts.HostDiskFn = func() (hostdisk.Report, error) {
+		return hostdisk.Report{Metrics: hostdisk.Metrics{VFreeGB: 66}, Level: "ok"}, nil
+	}
+	opts.SafeWorkChownFn = func(_ context.Context, p string) safedelete.Result {
+		chowned = append(chowned, p)
+		return safedelete.Result{}
+	}
+
+	res := Run(context.Background(), opts)
+
+	want := "/home/emdev/actions-runner-advoq/_work/advoq"
+	found := false
+	for _, p := range chowned {
+		if p == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("active workspace entry %q not chowned; chowned=%v", want, chowned)
+	}
+	var hasAction bool
+	for _, a := range res.Actions {
+		if a.Name == "workspace_chown" {
+			hasAction = true
+		}
+	}
+	if !hasAction {
+		t.Errorf("no workspace_chown action; actions=%+v", res.Actions)
+	}
+	if res.Decision == DecisionCleanupApplied {
+		t.Errorf("no disk-pressure cleanup expected on a healthy disk; decision=%v", res.Decision)
 	}
 }
 

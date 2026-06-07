@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/advoq/civm/internal/cachetrim"
 	"github.com/advoq/civm/internal/civm"
 	"github.com/advoq/civm/internal/dockerlock"
 	"github.com/advoq/civm/internal/idle"
@@ -91,6 +92,11 @@ type Options struct {
 	GlobFn     func(pattern string) ([]string, error)
 	RunFn      func(ctx context.Context, name string, args ...string) ([]byte, error)
 	ActivityFn func(ctx context.Context) ([]Activity, error)
+	// RemoveAllFn removes one regenerable cache file during the cache-trim step.
+	// Caches live under the runner user's home and cleanup runs as root, so a
+	// plain os.RemoveAll suffices (no safedelete escalation, unlike root-owned
+	// _work leftovers). Injected so tests never touch disk.
+	RemoveAllFn func(path string) error
 	// LockActiveFn reports whether a docker-heavy job holds the serialization
 	// lock right now; ReclaimStaleFn removes a stale (.hb of a dead holder) lock;
 	// LockHolderFn labels the current holder. All injected so unit tests never
@@ -123,6 +129,7 @@ func DefaultOptions() Options {
 		WalkFn:         filepath.WalkDir,
 		StatFn:         defaultStat,
 		GlobFn:         filepath.Glob,
+		RemoveAllFn:    os.RemoveAll,
 		RunFn:          defaultRun,
 		ActivityFn:     defaultActivities,
 		LockActiveFn:   defaultLockActive,
@@ -198,6 +205,12 @@ func Run(ctx context.Context, opts Options) []Action {
 	var out []Action
 	out = append(out, scanAndMaybeDelete(ctx, opts, "tmp_old", opts.TmpDir, opts.TmpThreshold))
 	out = append(out, scanWorkAndMaybeDelete(ctx, opts))
+	// Bound the regenerable CI caches (the named-dir gap). The job hook trims
+	// these at job-started, but a disk-watchdog tick (idle runner, disk filled by
+	// caches) must trim them too — same cachetrim policy, applied as root across
+	// all /home/* runner homes. Reached only past ensureIdle, so it never trims a
+	// cache a live build is using; cachetrim's MinProtect double-guards hot files.
+	out = append(out, cacheTrimActions(opts)...)
 	if opts.DockerPrune {
 		out = append(out, dockerPrune(ctx, opts))
 	}
@@ -216,6 +229,9 @@ func applyDefaults(opts *Options) {
 	}
 	if opts.GlobFn == nil {
 		opts.GlobFn = filepath.Glob
+	}
+	if opts.RemoveAllFn == nil {
+		opts.RemoveAllFn = os.RemoveAll
 	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
@@ -269,6 +285,46 @@ func workCleanupRoots(opts Options) []string {
 	}
 	sort.Strings(matches)
 	return matches
+}
+
+// cacheHomeRoots derives the runner user home(s) from the discovered _work roots
+// (/home/<user>/actions-runner-X/_work -> /home/<user>). cleanup runs as root, so
+// os.Getenv("HOME") is /root, not the user whose caches we must bound — the
+// caches live next to the runner installs.
+func cacheHomeRoots(opts Options) []string {
+	roots := workCleanupRoots(opts)
+	seen := make(map[string]struct{}, len(roots))
+	var homes []string
+	for _, r := range roots {
+		home := filepath.Dir(filepath.Dir(r)) // strip /_work then /actions-runner-X
+		if home == "" || home == "/" || home == "." {
+			continue
+		}
+		if _, ok := seen[home]; ok {
+			continue
+		}
+		seen[home] = struct{}{}
+		homes = append(homes, home)
+	}
+	return homes
+}
+
+// cacheTrimActions trims the regenerable CI caches across the runner homes to
+// their family budgets, via the shared cachetrim policy (same source as the job
+// hook). One Action per cache dir.
+func cacheTrimActions(opts Options) []Action {
+	caps := cachetrim.Caps(cacheHomeRoots(opts), cachetrim.Deps{GlobFn: opts.GlobFn, StatFn: opts.StatFn})
+	if len(caps) == 0 {
+		return nil
+	}
+	trimOpts := cachetrim.Options{Execute: opts.Execute, Now: opts.Now, WalkDirFn: opts.WalkFn, RemoveAllFn: opts.RemoveAllFn}
+	out := make([]Action, 0, len(caps))
+	for _, c := range caps {
+		r := cachetrim.TrimByAge(trimOpts, c)
+		a := Action{Name: "cache_trim", Path: r.Path, BytesFound: r.BytesFound, BytesFreed: r.BytesFreed, Executed: r.Executed, Err: r.Err}
+		out = append(out, a)
+	}
+	return out
 }
 
 func scanAndMaybeDelete(ctx context.Context, opts Options, name, root string, threshold time.Duration) Action {

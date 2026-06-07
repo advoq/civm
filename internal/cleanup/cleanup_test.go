@@ -173,25 +173,32 @@ func TestRun_DefaultWorkDirDiscoversRunnerWorkDirs(t *testing.T) {
 	opts.Now = now
 	opts.WalkFn = walkFS(mfs)
 	opts.GlobFn = func(pattern string) ([]string, error) {
-		if pattern != "/home/*/actions-runner-*/_work" {
-			t.Fatalf("glob pattern = %q", pattern)
+		if pattern == "/home/*/actions-runner-*/_work" {
+			return []string{
+				"home/emdev/actions-runner-b/_work",
+				"home/emdev/actions-runner-a/_work",
+			}, nil
 		}
-		return []string{
-			"home/emdev/actions-runner-b/_work",
-			"home/emdev/actions-runner-a/_work",
-		}, nil
+		// cacheTrimActions globs cache families per discovered home; none exist in
+		// this MapFS, so an empty match is correct.
+		return nil, nil
 	}
 	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
 	opts.DockerPrune = false
 	opts.AptClean = false
 
 	actions := Run(context.Background(), opts)
-	if len(actions) != 2 {
-		t.Fatalf("len(actions) = %d, want 2", len(actions))
+	// Run now also emits cache_trim actions (npm/pnpm per discovered home, no-op
+	// when absent here), so locate work_old by name rather than by index.
+	var work *Action
+	for i := range actions {
+		if actions[i].Name == "work_old" {
+			work = &actions[i]
+			break
+		}
 	}
-	work := actions[1]
-	if work.Name != "work_old" {
-		t.Fatalf("second action = %s, want work_old", work.Name)
+	if work == nil {
+		t.Fatalf("no work_old action in %+v", actions)
 	}
 	if work.Err != nil {
 		t.Fatalf("work_old err = %v", work.Err)
@@ -201,6 +208,55 @@ func TestRun_DefaultWorkDirDiscoversRunnerWorkDirs(t *testing.T) {
 	}
 	if !strings.Contains(work.Path, "actions-runner-a/_work") || !strings.Contains(work.Path, "actions-runner-b/_work") {
 		t.Fatalf("work_old Path omitiu roots descobertos: %s", work.Path)
+	}
+}
+
+// TestRunCacheTrimCoversNamedDirsUnderRunnerHome proves the disk-watchdog gap
+// fix: cleanup.Run (used by civmctl cleanup AND the disk-watchdog) now trims the
+// NAMED CI cache dirs (~/.cache/go-build-advoq-services, yarn-advoq-web) under
+// the discovered runner home — not just _work/tmp/docker/apt. Before, an idle
+// runner with disk full of caches got no cache reclaim from the watchdog.
+func TestRunCacheTrimCoversNamedDirsUnderRunnerHome(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-72 * time.Hour)
+	mfs := fstest.MapFS{
+		"home/emdev/actions-runner-a/_work/x":             {Data: []byte("x"), ModTime: old},
+		"home/emdev/.cache/go-build-advoq-services/big.o": {Data: []byte("data"), ModTime: old},
+		"home/emdev/.cache/yarn-advoq-web/dep.tgz":        {Data: []byte("data"), ModTime: old},
+	}
+	opts := testExecuteOptions()
+	opts.Now = now
+	opts.TmpDir = "tmp" // relative, absent in mfs → no-op
+	opts.DockerPrune = false
+	opts.AptClean = false
+	opts.WalkFn = walkFS(mfs)
+	opts.StatFn = func(p string) (fs.FileInfo, error) { return fs.Stat(mfs, p) }
+	opts.GlobFn = func(pattern string) ([]string, error) {
+		if pattern == "/home/*/actions-runner-*/_work" {
+			return []string{"home/emdev/actions-runner-a/_work"}, nil
+		}
+		return fs.Glob(mfs, pattern) // cache family globs are relative → MapFS
+	}
+	opts.RemoveAllFn = func(string) error { return nil } // under cap → not called
+
+	actions := Run(context.Background(), opts)
+
+	covered := map[string]bool{
+		"home/emdev/.cache/go-build-advoq-services": false,
+		"home/emdev/.cache/yarn-advoq-web":          false,
+	}
+	for _, a := range actions {
+		if a.Name == "cache_trim" {
+			if _, ok := covered[a.Path]; ok {
+				covered[a.Path] = true
+			}
+		}
+	}
+	for p, ok := range covered {
+		if !ok {
+			t.Errorf("cleanup did not cover named cache dir %s — the disk-watchdog gap", p)
+		}
 	}
 }
 
