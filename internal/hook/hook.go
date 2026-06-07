@@ -95,11 +95,16 @@ type Options struct {
 	// scopes the escalation to a direct child of a safeWorkRoot. Injected so
 	// unit tests never call real sudo (DT-v2-1/3/9).
 	SafeWorkDeleteFn func(ctx context.Context, path string) safedelete.Result
-	MkdirAllFn       func(path string, perm os.FileMode) error
-	StatfsFn         func(path string) (totalBytes, freeBytes uint64, err error)
-	DiscoverRootsFn  func() ([]string, error)
-	ReadDirFn        func(path string) ([]os.DirEntry, error)
-	WalkDirFn        func(root string, fn fs.WalkDirFunc) error
+	// SafeWorkChownFn recursively chowns a reused checkout dir back to the runner
+	// user at job-started, so actions/checkout can clean a prior job's root-owned
+	// (Docker-as-root) leftover instead of dying with EACCES. Non-destructive.
+	// Injected so unit tests never call real sudo.
+	SafeWorkChownFn func(ctx context.Context, path string) safedelete.Result
+	MkdirAllFn      func(path string, perm os.FileMode) error
+	StatfsFn        func(path string) (totalBytes, freeBytes uint64, err error)
+	DiscoverRootsFn func() ([]string, error)
+	ReadDirFn       func(path string) ([]os.DirEntry, error)
+	WalkDirFn       func(root string, fn fs.WalkDirFunc) error
 	// HostDiskFn reads the Hyper-V host volume snapshot delivered to the guest and
 	// classifies it (ok/warn/crit). The job-started gate uses it so host V:
 	// pressure triggers cleanup/rejection even when the guest filesystem % alone
@@ -152,6 +157,15 @@ func newSafeWorkDelete(removeAllFn func(string) error) func(context.Context, str
 	}
 }
 
+// newSafeWorkChown builds the hook-scoped privileged chown closure used to
+// reclaim ownership of a reused checkout dir at job-started (same workChildGuard
+// scope as the delete closure). Non-destructive — it never removes files.
+func newSafeWorkChown() func(context.Context, string) safedelete.Result {
+	return func(ctx context.Context, path string) safedelete.Result {
+		return safedelete.Chown(ctx, safedelete.Options{GuardFn: workChildGuard}, path)
+	}
+}
+
 // workChildGuard rejects any path that is not a direct child of a valid
 // safeWorkRoot. safeWorkRoot validates the ROOT (under /home, /actions-runner,
 // trailing /_work); this adapter derives that root from the candidate and
@@ -186,6 +200,10 @@ func Run(ctx context.Context, opts Options) Result {
 		host, _ := opts.HostDiskFn()
 		res.HostLevel = host.Level
 		res.HostVFreeGB = host.VFreeGB
+		// Reclaim the reused checkout dir's ownership BEFORE actions/checkout runs,
+		// so a prior job's root-owned (Docker-as-root) leftover does not make
+		// checkout fail with EACCES. Unconditional + non-destructive.
+		res.Actions = append(res.Actions, reclaimWorkspaceOwnership(ctx, opts)...)
 		// Cleanup dispara por pressão do guest-% OU do host V: (warn/crit). A
 		// metade host-aware pega o caso que o guest-% perde: guest enxuto, V: cheio.
 		if usedPct >= opts.PreCleanupPct || host.WantsCleanup() {
@@ -361,6 +379,37 @@ func activeWorkspaceEntry(root, workspace string) string {
 		return ""
 	}
 	return parts[0]
+}
+
+// reclaimWorkspaceOwnership runs at job-started, BEFORE actions/checkout, and
+// chowns the active job's REUSED checkout dir back to the runner user. A prior
+// job's containerized (root) step can leave root-owned files in the same _work
+// checkout path on this shared runner; actions/checkout then dies with "EACCES
+// rmdir" cleaning the old tree. Previously a chronically-full disk ran the gated
+// cleanup every job and masked this; with a healthy disk (the cache-cap fix) the
+// gated cleanup is rare and the latent leftover surfaces. chown is
+// non-destructive (the dir survives; checkout cleans it), so it runs EVERY
+// job-started regardless of disk pressure — unlike the disk-gated,
+// workspace-preserving cleanWorkRoot. Best-effort: a chown failure is a warning,
+// never a wedge (it leaves us no worse than the checkout EACCES it prevents).
+func reclaimWorkspaceOwnership(ctx context.Context, opts Options) []Action {
+	if !opts.Execute {
+		return nil
+	}
+	var actions []Action
+	for _, root := range workRoots(opts) {
+		ws := activeWorkspaceEntry(root, opts.GitHubWorkspace)
+		if ws == "" {
+			continue
+		}
+		path := filepath.Join(root, ws)
+		a := Action{Name: "workspace_chown", Path: path, Executed: true}
+		if res := opts.SafeWorkChownFn(ctx, path); res.Err != nil {
+			a.Warning = res.Err.Error()
+		}
+		actions = append(actions, a)
+	}
+	return actions
 }
 
 func removePath(opts Options, path, name string) Action {
@@ -653,6 +702,9 @@ func applyDefaults(opts *Options) {
 	}
 	if opts.SafeWorkDeleteFn == nil {
 		opts.SafeWorkDeleteFn = newSafeWorkDelete(opts.RemoveAllFn)
+	}
+	if opts.SafeWorkChownFn == nil {
+		opts.SafeWorkChownFn = newSafeWorkChown()
 	}
 	if opts.MkdirAllFn == nil {
 		opts.MkdirAllFn = os.MkdirAll

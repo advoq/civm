@@ -1204,6 +1204,64 @@ func TestJobStartedHostAwareGate(t *testing.T) {
 	})
 }
 
+// TestJobStartedReclaimsWorkspaceOwnership proves the EACCES fix: at job-started
+// the active reused checkout dir is chowned back to the runner (so a prior job's
+// root-owned Docker leftover does not make actions/checkout die with EACCES). It
+// runs UNCONDITIONALLY — here the disk is healthy (PreCleanupPct not met) and the
+// host is ok, so NO disk-pressure cleanup runs, yet the chown still happens.
+func TestJobStartedReclaimsWorkspaceOwnership(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RUNNER_TEMP", "")
+	t.Setenv("GITHUB_REPOSITORY", "")
+	t.Setenv("GITHUB_RUN_ID", "")
+	ws := "/home/emdev/actions-runner-advoq/_work/advoq/advoq"
+	t.Setenv("GITHUB_WORKSPACE", ws)
+
+	var chowned []string
+	opts := DefaultOptionsFromEnv(EventJobStarted)
+	opts.Execute = true
+	opts.PreCleanupPct = 99 // healthy disk -> no gated cleanup
+	opts.HardFailPct = 100
+	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 70, nil } // 30% used
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.RemoveAllFn = func(string) error { return nil }
+	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+	opts.LogPath = ""
+	opts.HostDiskFn = func() (hostdisk.Report, error) {
+		return hostdisk.Report{Metrics: hostdisk.Metrics{VFreeGB: 66}, Level: "ok"}, nil
+	}
+	opts.SafeWorkChownFn = func(_ context.Context, p string) safedelete.Result {
+		chowned = append(chowned, p)
+		return safedelete.Result{}
+	}
+
+	res := Run(context.Background(), opts)
+
+	want := "/home/emdev/actions-runner-advoq/_work/advoq"
+	found := false
+	for _, p := range chowned {
+		if p == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("active workspace entry %q not chowned; chowned=%v", want, chowned)
+	}
+	var hasAction bool
+	for _, a := range res.Actions {
+		if a.Name == "workspace_chown" {
+			hasAction = true
+		}
+	}
+	if !hasAction {
+		t.Errorf("no workspace_chown action; actions=%+v", res.Actions)
+	}
+	if res.Decision == DecisionCleanupApplied {
+		t.Errorf("no disk-pressure cleanup expected on a healthy disk; decision=%v", res.Decision)
+	}
+}
+
 // FuzzSafeWorkRoot enforces the safety invariant of safeWorkRoot for arbitrary
 // input. Anything safeWorkRoot accepts must, after filepath.Clean, contain
 // "/home/" and "/actions-runner", and end in "/_work" — i.e. no path the
