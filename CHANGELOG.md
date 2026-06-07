@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.1](https://github.com/advoq/civm/compare/v1.18.0...v1.18.1) (2026-06-07)
+
+
+### Bug Fixes
+
+* **runner:** self-cleaning runner — kill the V: disk death-spiral durably ([#115](https://github.com/advoq/civm/issues/115)) ([ff5d2b9](https://github.com/advoq/civm/commit/ff5d2b93fe223659eae442a11450f057dd108b18))
+
 ## [1.18.0](https://github.com/advoq/civm/compare/v1.17.2...v1.18.0) (2026-06-05)
 
 
