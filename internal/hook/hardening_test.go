@@ -181,6 +181,47 @@ func TestKillWorkRootContainersDockerDownIsWarningNeverFatal(t *testing.T) {
 	}
 }
 
+// TestDegradedEnvNeverSweepsForeignRoots guards the 2026-06-10 cross-runner
+// deletion: job-started hooks firing with a degraded env (empty
+// RUNNER_TEMP/GITHUB_WORKSPACE) used to fall back to discovering ALL
+// /home/*/actions-runner*/_work roots and — with no active workspace to
+// protect — deleted a sibling runner's checkout mid-job. With no env-derived
+// root the hook must clean NOTHING.
+func TestDegradedEnvNeverSweepsForeignRoots(t *testing.T) {
+	clearRunnerEnv(t)
+	var removed []string
+	opts := DefaultOptionsFromEnv(EventJobStarted)
+	opts.Execute = true
+	opts.PreCleanupPct = 50
+	opts.HardFailPct = 95
+	// 80% used → disk-pressure cleanup runs; with the old global fallback this
+	// would have swept every runner's root.
+	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 20, nil }
+	opts.RemoveAllFn = func(p string) error { removed = append(removed, p); return nil }
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.LogPath = ""
+	opts.ReadDirFn = func(path string) ([]os.DirEntry, error) {
+		t.Fatalf("hook with no env-derived work root must not read any root, got ReadDir(%q)", path)
+		return nil, nil
+	}
+	opts.SafeWorkDeleteFn = func(_ context.Context, path string) safedelete.Result {
+		t.Fatalf("hook with no env-derived work root must not delete anything, got %q", path)
+		return safedelete.Result{}
+	}
+
+	res := Run(context.Background(), opts)
+
+	for _, a := range res.Actions {
+		if a.Name == "work_root" || a.Name == "docker_kill_workroot" {
+			t.Fatalf("no work_root action may run without an env-derived root: %+v", a)
+		}
+	}
+	if len(removed) != 0 {
+		t.Fatalf("nothing may be removed: %v", removed)
+	}
+}
+
 func TestKillWorkRootContainersDryRunDoesNothing(t *testing.T) {
 	fake := &fakeDockerRunFn{psOut: "aaa\n"}
 	opts := Options{Execute: false, RunFn: fake.fn}

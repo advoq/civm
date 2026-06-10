@@ -108,7 +108,6 @@ type Options struct {
 	SafeWorkChownFn func(ctx context.Context, path string) safedelete.Result
 	MkdirAllFn      func(path string, perm os.FileMode) error
 	StatfsFn        func(path string) (totalBytes, freeBytes uint64, err error)
-	DiscoverRootsFn func() ([]string, error)
 	ReadDirFn       func(path string) ([]os.DirEntry, error)
 	WalkDirFn       func(root string, fn fs.WalkDirFunc) error
 	// HostDiskFn reads the Hyper-V host volume snapshot delivered to the guest and
@@ -134,7 +133,6 @@ func DefaultOptionsFromEnv(event Event) Options {
 		RemoveAllFn:     os.RemoveAll,
 		MkdirAllFn:      os.MkdirAll,
 		StatfsFn:        defaultStatfs,
-		DiscoverRootsFn: discoverRunnerWorkRoots,
 		ReadDirFn:       os.ReadDir,
 		WalkDirFn:       filepath.WalkDir,
 		HostDiskFn:      defaultHostDisk,
@@ -600,12 +598,14 @@ func workRoots(opts Options) []string {
 	if opts.GitHubWorkspace != "" {
 		add(filepath.Dir(filepath.Dir(opts.GitHubWorkspace)))
 	}
-	if len(roots) == 0 && opts.DiscoverRootsFn != nil {
-		discovered, _ := opts.DiscoverRootsFn()
-		for _, root := range discovered {
-			add(root)
-		}
-	}
+	// NO global fallback. A hook may only ever touch ITS OWN runner's root,
+	// derived from the job env above. On 2026-06-10, job-started hooks firing
+	// with a degraded env (empty RUNNER_TEMP/GITHUB_WORKSPACE) fell back to
+	// discovering ALL /home/*/actions-runner*/_work roots and — with no active
+	// workspace to protect — deleted a sibling runner's checkout MID-JOB
+	// (civm#117's go test lost its tree at 20:12:44Z). Sweeping every root
+	// belongs to civmctl cleanup/disk-watchdog (root, idle-gated), never to a
+	// per-job hook. Empty env → no roots → cleanup no-op (fail-safe).
 	sort.Strings(roots)
 	return roots
 }
@@ -795,9 +795,6 @@ func applyDefaults(opts *Options) {
 	if opts.StatfsFn == nil {
 		opts.StatfsFn = defaultStatfs
 	}
-	if opts.DiscoverRootsFn == nil {
-		opts.DiscoverRootsFn = discoverRunnerWorkRoots
-	}
 	if opts.ReadDirFn == nil {
 		opts.ReadDirFn = os.ReadDir
 	}
@@ -810,10 +807,6 @@ func applyDefaults(opts *Options) {
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()
 	}
-}
-
-func discoverRunnerWorkRoots() ([]string, error) {
-	return filepath.Glob(workRootGlob)
 }
 
 func defaultRun(ctx context.Context, name string, args ...string) ([]byte, error) {
