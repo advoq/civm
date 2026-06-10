@@ -359,6 +359,16 @@ func cleanWorkRoot(ctx context.Context, opts Options, root string, preserveActiv
 		if name == "_tool" || name == "_actions" {
 			continue
 		}
+		// At job-started the runner has ALREADY created the active job's file
+		// commands under _work/_temp/_runner_file_commands (save_state_*,
+		// set_output); every later step writes through them. Deleting _temp
+		// here killed actions/checkout with "Missing file at path ...
+		// save_state" (civm#117 smoke, 2026-06-10, surfaced once host V: warn
+		// began forcing cleanup on every job-started). job-completed still
+		// cleans it — the job is done.
+		if preserveActiveWorkspace && name == "_temp" {
+			continue
+		}
 		if protected != "" && name == protected {
 			continue
 		}

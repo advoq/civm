@@ -194,8 +194,11 @@ func TestJobStartedUnderPressureTrimsCachesByAge(t *testing.T) {
 // TestJobStartedPreservesActiveWorkspaceUnderDiskPressure valida que, sob disk
 // pressure em job-started, o cleanup NÃO apaga o GITHUB_WORKSPACE que o runner
 // acabou de criar para o job que está começando — senão o job falha com
-// "working directory ... No such file or directory". Outras entradas stale de
-// _work (ex.: _temp) ainda são limpas e os caches sob $HOME ainda purgados.
+// "working directory ... No such file or directory" — NEM o _temp, onde o
+// runner já criou os file commands (save_state_*/set_output) do job ativo:
+// apagá-lo mata o actions/checkout com "Missing file at path ... save_state"
+// (civm#117 smoke, 2026-06-10). Entradas stale de outros repos seguem limpas
+// e o _temp segue limpo no job-completed.
 func TestJobStartedPreservesActiveWorkspaceUnderDiskPressure(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -226,6 +229,7 @@ func TestJobStartedPreservesActiveWorkspaceUnderDiskPressure(t *testing.T) {
 			fakeDirEntry("_actions"),
 			fakeDirEntry("_temp"),
 			fakeDirEntry("advoq"),
+			fakeDirEntry("stale-repo"),
 		}, nil
 	}
 
@@ -235,8 +239,11 @@ func TestJobStartedPreservesActiveWorkspaceUnderDiskPressure(t *testing.T) {
 	if strings.Contains(joined, filepath.Join(workRoot, "advoq")) {
 		t.Fatalf("disk-pressure cleanup apagou o workspace ativo %q — quebra o job iniciando; removed=%v", filepath.Join(workRoot, "advoq"), removed)
 	}
-	if !strings.Contains(joined, filepath.Join(workRoot, "_temp")) {
-		t.Fatalf("esperava limpar _temp stale; removed=%v", removed)
+	if strings.Contains(joined, filepath.Join(workRoot, "_temp")) {
+		t.Fatalf("job-started apagou _temp do job ativo (file commands save_state/set_output); removed=%v", removed)
+	}
+	if !strings.Contains(joined, filepath.Join(workRoot, "stale-repo")) {
+		t.Fatalf("esperava limpar checkout stale de outro repo; removed=%v", removed)
 	}
 	if strings.Contains(joined, filepath.Join(workRoot, "_tool")) || strings.Contains(joined, filepath.Join(workRoot, "_actions")) {
 		t.Fatalf("removeu cache quente _tool/_actions; removed=%v", removed)
