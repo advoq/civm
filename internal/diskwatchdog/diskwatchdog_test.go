@@ -85,9 +85,13 @@ func TestCheck_ExecuteBusyReclaimsUnusedDockerAndDefersRest(t *testing.T) {
 	t.Parallel()
 	o := DefaultOptions()
 	o.StatfsFn = func(string) (uint64, uint64, error) {
-		return 100 * (1 << 30), 5 * (1 << 30), nil // 95% used
+		// 70% used: above the trigger threshold but BELOW the emergency-bypass
+		// level, so the busy-host deferral is still the expected behavior. At
+		// civm.DefaultEmergencyBypassPct+ the safe reclaim now runs even while
+		// busy (TestCheck_ExecuteBusyEmergencyRunsSafeReclaim).
+		return 100 * (1 << 30), 30 * (1 << 30), nil
 	}
-	o.ThresholdPct = 80
+	o.ThresholdPct = 60
 	o.Execute = true
 	o.ActivityFn = func(context.Context) ([]cleanup.Activity, error) {
 		return []cleanup.Activity{{PID: 4321, Command: "/home/emdev/actions-runner/bin/Runner.Worker run"}}, nil
@@ -132,9 +136,11 @@ func TestCheck_ExecuteBusyDockerPruneErrorSurfacesExit2(t *testing.T) {
 	t.Parallel()
 	o := DefaultOptions()
 	o.StatfsFn = func(string) (uint64, uint64, error) {
-		return 100 * (1 << 30), 5 * (1 << 30), nil // 95% used
+		// 70% used: below the emergency-bypass level so this test keeps
+		// exercising the original busy-deferral path with a real prune error.
+		return 100 * (1 << 30), 30 * (1 << 30), nil
 	}
-	o.ThresholdPct = 80
+	o.ThresholdPct = 60
 	o.Execute = true
 	o.ActivityFn = func(context.Context) ([]cleanup.Activity, error) {
 		return []cleanup.Activity{{PID: 4321, Command: "/home/emdev/actions-runner/bin/Runner.Worker run"}}, nil

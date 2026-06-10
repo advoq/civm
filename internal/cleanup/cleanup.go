@@ -76,16 +76,24 @@ type Action struct {
 
 // Options control which steps run.
 type Options struct {
-	Execute        bool
-	WorkDir        string
-	TmpDir         string
-	TmpThreshold   time.Duration
-	WorkThreshold  time.Duration
-	DockerPrune    bool
-	AptClean       bool
-	SkipIdleGuard  bool
-	IdleProbeDelay time.Duration
-	Now            time.Time
+	Execute       bool
+	WorkDir       string
+	TmpDir        string
+	TmpThreshold  time.Duration
+	WorkThreshold time.Duration
+	DockerPrune   bool
+	AptClean      bool
+	SkipIdleGuard bool
+	// EmergencyBypassIdle stops deferring the SAFE reclaim (old /tmp, cache
+	// trim) when the host is busy. Set by the disk-watchdog at
+	// civm.DefaultEmergencyBypassPct: a busy host filling its own disk is
+	// exactly when the deferral is wrong (2026-06-10: watchdog fired at 83%,
+	// deferred everything, guest ran to 0% free and wedged sshd). The
+	// privileged work-dir sweep and aggressive docker/apt prune stay deferred —
+	// they can break the live job.
+	EmergencyBypassIdle bool
+	IdleProbeDelay      time.Duration
+	Now                 time.Time
 
 	WalkFn     func(root string, fn fs.WalkDirFunc) error
 	StatFn     func(path string) (fs.FileInfo, error)
@@ -197,6 +205,17 @@ func Run(ctx context.Context, opts Options) []Action {
 			var out []Action
 			if opts.DockerPrune {
 				out = append(out, dockerPruneSafe(ctx, opts))
+			}
+			if opts.EmergencyBypassIdle {
+				// Disk at emergency level: the busy job is the thing filling
+				// the disk, so "wait for idle" never comes. Run only the safe
+				// reclaim — old /tmp entries (age-gated by TmpThreshold) and
+				// the cache trim (cachetrim MinProtect shields hot files a
+				// live build is using). The work-dir sweep stays deferred.
+				out = append(out, scanAndMaybeDelete(ctx, opts, "tmp_old", opts.TmpDir, opts.TmpThreshold))
+				out = append(out, cacheTrimActions(opts)...)
+				out = append(out, Action{Name: "emergency-bypass-idle", Path: "(disk emergency: safe reclaim while busy)"})
+				return out
 			}
 			out = append(out, Action{Name: deferredByHostBusy, Path: "(runner/build activity)"})
 			return out
@@ -377,9 +396,15 @@ func scanAndMaybeDelete(ctx context.Context, opts Options, name, root string, th
 	if !opts.Execute {
 		return a
 	}
-	if err := ensureIdle(ctx, opts); err != nil {
-		a.Err = err
-		return a
+	// Double-check idleness right before deleting — except under the disk
+	// emergency bypass: the candidates here are already age-gated (mtime older
+	// than the threshold AND >2h, never a live job's files), and at emergency
+	// usage waiting for idle is what let the disk run to 0 (2026-06-10).
+	if !opts.EmergencyBypassIdle {
+		if err := ensureIdle(ctx, opts); err != nil {
+			a.Err = err
+			return a
+		}
 	}
 	for _, candidate := range toDelete {
 		// safedelete tries an unprivileged remove first, escalating to the
