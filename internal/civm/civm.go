@@ -38,9 +38,16 @@ const (
 	DefaultHardFailPct                = 90
 	DefaultWatchdogThresholdPct       = DefaultPreCleanupPct
 	DefaultCapacityMaxDiskPct         = DefaultHardFailPct
-	DefaultReverseMaxAgeHours         = 2
-	DefaultRestartVerifySeconds       = 3
-	DefaultUpgradeVerifySeconds       = 5
+	// DefaultEmergencyBypassPct is the disk-usage level at which the
+	// disk-watchdog stops deferring SAFE reclaim (cache trim, old /tmp) to an
+	// idle tick. In the 2026-06-10 incident the watchdog fired at 83% while a
+	// job filled the disk, deferred everything by host-busy (freed=0) and the
+	// guest ran to 0% free → sshd wedge. Between this level and HardFailPct the
+	// busy-host deferral is the wrong trade.
+	DefaultEmergencyBypassPct   = 75
+	DefaultReverseMaxAgeHours   = 2
+	DefaultRestartVerifySeconds = 3
+	DefaultUpgradeVerifySeconds = 5
 	// DefaultRunnerAutoRestartPerHour caps watchdog auto-restarts per runner
 	// unit per rolling hour (anti restart-loop, RF-6 / ITEM-10 / DT-8).
 	DefaultRunnerAutoRestartPerHour = 3

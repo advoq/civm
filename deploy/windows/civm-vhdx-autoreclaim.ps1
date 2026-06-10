@@ -87,7 +87,25 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$LogPath = 'V:\civm-hyperv-maintenance.log'
+    [string]$LogPath = 'V:\civm-hyperv-maintenance.log',
+
+    # Escalacao guest-unreachable (incidente 2026-06-10): com o guest wedgeado
+    # (disco 0% livre, sshd sem banner) o autoreclaim falhava o guest df em TODO
+    # tick e nunca agia — a pre-condicao de SSH virou self-deadlock e os runners
+    # ficaram offline por dias. Apos GuestUnreachableLimit falhas CONSECUTIVAS
+    # de guest df, o host forca Stop-VM -TurnOff + Start-VM, limitado pelo
+    # cooldown (anti boot-loop). 0 desabilita a escalacao.
+    [Parameter()]
+    [ValidateRange(0, 100)]
+    [int]$GuestUnreachableLimit = 3,
+
+    [Parameter()]
+    [ValidateRange(0.5, 168)]
+    [double]$ForcedRebootCooldownHours = 6.0,
+
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$GuestFailStatePath = 'V:\civm-autoreclaim-guest-fail.json'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -174,6 +192,86 @@ function Get-GuestFreeBytes {
         throw "guest df returned an invalid value: $($result.Output)"
     }
     return $parsed
+}
+
+function Get-GuestFailState {
+    $state = @{ consecutiveFailures = 0; lastForcedRebootUtc = '' }
+    if (Test-Path -LiteralPath $GuestFailStatePath) {
+        try {
+            $raw = Get-Content -LiteralPath $GuestFailStatePath -Raw | ConvertFrom-Json
+            if ($raw.PSObject.Properties['consecutiveFailures']) {
+                $state.consecutiveFailures = [int]$raw.consecutiveFailures
+            }
+            if ($raw.PSObject.Properties['lastForcedRebootUtc']) {
+                $state.lastForcedRebootUtc = [string]$raw.lastForcedRebootUtc
+            }
+        } catch { }
+    }
+    return $state
+}
+
+function Save-GuestFailState {
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+    try {
+        ($State | ConvertTo-Json -Compress) | Set-Content -LiteralPath $GuestFailStatePath -Encoding UTF8
+    } catch { }
+}
+
+function Reset-GuestFailStreak {
+    $state = Get-GuestFailState
+    if ([int]$state.consecutiveFailures -ne 0) {
+        $state.consecutiveFailures = 0
+        Save-GuestFailState -State $state
+    }
+}
+
+function Add-GuestFailStreak {
+    $state = Get-GuestFailState
+    $state.consecutiveFailures = [int]$state.consecutiveFailures + 1
+    Save-GuestFailState -State $state
+    return [int]$state.consecutiveFailures
+}
+
+# Invoke-GuestUnreachableForcedReboot is the host-side backstop for a wedged
+# guest: in-guest watchdogs cannot run on a dead OS and every SSH-gated path
+# here fail-closes forever (the 2026-06-10 self-deadlock). A hard power-cycle
+# releases the VMRS, lets the guest boot clean (in-guest cleanup timers +
+# runner services auto-start) and restores SSH. Bounded: only after a
+# consecutive-failure streak and never more than once per cooldown window
+# (anti boot-loop).
+function Invoke-GuestUnreachableForcedReboot {
+    param([Parameter(Mandatory = $true)][int]$Streak)
+    $state = Get-GuestFailState
+    if (-not [string]::IsNullOrWhiteSpace([string]$state.lastForcedRebootUtc)) {
+        $last = [datetime]::MinValue
+        if ([datetime]::TryParse([string]$state.lastForcedRebootUtc, [ref]$last)) {
+            $sinceHours = ((Get-Date).ToUniversalTime() - $last.ToUniversalTime()).TotalHours
+            if ($sinceHours -lt $ForcedRebootCooldownHours) {
+                Write-ReclaimLog -Event 'autoreclaim_forced_reboot_capped' -Level 'CRITICAL' -Data @{
+                    streak           = $Streak
+                    since_last_hours = [math]::Round($sinceHours, 2)
+                    cooldown_hours   = $ForcedRebootCooldownHours
+                }
+                return $false
+            }
+        }
+    }
+    Write-ReclaimLog -Event 'autoreclaim_forced_reboot' -Level 'WARN' -Data @{
+        streak = $Streak
+        reason = 'guest ssh unreachable; wedged guest cannot honor the SSH precondition'
+    }
+    Stop-VM -Name $VMName -TurnOff -Force -ErrorAction Stop
+    if (-not (Wait-VMState -State 'Off' -TimeoutSeconds 120)) {
+        throw 'forced reboot: VM did not reach Off state'
+    }
+    Start-VM -Name $VMName -ErrorAction Stop
+    $state.consecutiveFailures = 0
+    $state.lastForcedRebootUtc = (Get-Date).ToUniversalTime().ToString('o')
+    Save-GuestFailState -State $state
+    Write-ReclaimLog -Event 'autoreclaim_forced_reboot_done' -Data @{
+        v_free_gb = (Get-VFreeGB)
+    }
+    return $true
 }
 
 function Wait-GuestIdle {
@@ -277,7 +375,28 @@ try {
     }
 
     $vhd = Get-VHD -Path $VhdxPath -ErrorAction Stop
-    $guestFreeBytes = Get-GuestFreeBytes
+    $guestFreeBytes = $null
+    try {
+        $guestFreeBytes = Get-GuestFreeBytes
+        Reset-GuestFailStreak
+    } catch {
+        # Guest SSH down: every SSH-gated step below would fail-close forever
+        # (the 2026-06-10 self-deadlock: wedged guest, runners offline for
+        # days). Track the consecutive streak host-side and escalate to a
+        # bounded forced power-cycle once it crosses the limit.
+        $streak = Add-GuestFailStreak
+        Write-ReclaimLog -Event 'autoreclaim_guest_unreachable' -Level 'WARN' -Data @{
+            streak = $streak
+            limit  = $GuestUnreachableLimit
+            error  = $_.Exception.Message
+        }
+        if ($GuestUnreachableLimit -gt 0 -and $streak -ge $GuestUnreachableLimit) {
+            if (Invoke-GuestUnreachableForcedReboot -Streak $streak) {
+                exit 0
+            }
+        }
+        throw
+    }
     # Force the Max(long, long) overload: a bare 0 is Int32, which pins both
     # args to Max(int, int) and overflows on any byte value > 2 GiB
     # (Int32.MaxValue). That was throwing every run and aborting the reclaim.

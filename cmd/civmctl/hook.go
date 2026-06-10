@@ -10,6 +10,7 @@ import (
 
 	"github.com/advoq/civm/internal/civm"
 	"github.com/advoq/civm/internal/hook"
+	"github.com/advoq/civm/internal/hostdisk"
 )
 
 func runHook(args []string) int {
@@ -31,6 +32,7 @@ func runHookEvent(args []string) int {
 	jsonOut := fs.Bool("json", false, "saida JSON")
 	preCleanupPct := fs.Int("pre-cleanup-pct", civm.DefaultPreCleanupPct, "job-started: limpar se disco usado >= pct")
 	hardFailPct := fs.Int("hard-fail-pct", civm.DefaultHardFailPct, "job-started: rejeitar job se disco usado >= pct apos limpeza")
+	hostMetricsPath := fs.String("host-metrics-path", civm.DefaultHostMetricsPath, "snapshot de host-metrics lido pelo gate host-aware")
 	timeoutMin := fs.Int("timeout", civm.DefaultCleanupTimeoutMinutes, "timeout em minutos")
 	if err := fs.Parse(args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "erro nos args de hook:", err)
@@ -42,6 +44,11 @@ func runHookEvent(args []string) int {
 	opts.Execute = *execute
 	opts.PreCleanupPct = *preCleanupPct
 	opts.HardFailPct = *hardFailPct
+	opts.HostDiskFn = func() (hostdisk.Report, error) {
+		o := hostdisk.DefaultOptions()
+		o.Path = *hostMetricsPath
+		return hostdisk.Check(o)
+	}
 	res := hook.Run(ctx, opts)
 	if *jsonOut {
 		if err := hook.RenderJSON(os.Stdout, res); err != nil {

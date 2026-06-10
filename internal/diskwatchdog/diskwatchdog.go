@@ -7,12 +7,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os/exec"
 	"syscall"
 	"time"
 
 	"github.com/advoq/civm/internal/civm"
 	"github.com/advoq/civm/internal/cleanup"
+	"github.com/advoq/civm/internal/safedelete"
 )
 
 // Decision is the watchdog outcome.
@@ -52,12 +54,23 @@ type Result struct {
 type Options struct {
 	Path         string // diretorio a monitorar (ex: "/")
 	ThresholdPct int    // disparar cleanup se usedPct > ThresholdPct (default 70)
+	// EmergencyPct: at/above this usage the triggered cleanup stops deferring
+	// the SAFE reclaim by host-busy (sets cleanup.EmergencyBypassIdle).
+	// Default civm.DefaultEmergencyBypassPct.
+	EmergencyPct int
 	Execute      bool   // false = dry-run (apenas verifica + reporta)
 	WorkDir      string // passado para cleanup.Options.WorkDir
 	TmpDir       string // passado para cleanup.Options.TmpDir
 	StatfsFn     func(path string) (totalBytes, freeBytes uint64, err error)
 	RunFn        func(ctx context.Context, name string, args ...string) ([]byte, error)
 	ActivityFn   func(ctx context.Context) ([]cleanup.Activity, error)
+	// Optional passthroughs to cleanup.Options so tests stay hermetic — the
+	// emergency bypass deletes age-gated files even while busy, which a test
+	// must never do against the real filesystem. nil keeps production defaults.
+	WalkFn       func(root string, fn fs.WalkDirFunc) error
+	GlobFn       func(pattern string) ([]string, error)
+	RemoveAllFn  func(path string) error
+	SafeDeleteFn func(ctx context.Context, path string) safedelete.Result
 }
 
 // DefaultOptions returns sane production defaults.
@@ -65,12 +78,47 @@ func DefaultOptions() Options {
 	return Options{
 		Path:         "/",
 		ThresholdPct: civm.DefaultWatchdogThresholdPct,
+		EmergencyPct: civm.DefaultEmergencyBypassPct,
 		Execute:      false,
 		WorkDir:      civm.DefaultWorkDir,
 		TmpDir:       civm.DefaultTmpDir,
 		StatfsFn:     defaultStatfs,
 		RunFn:        defaultRun,
 	}
+}
+
+// buildCleanupOptions maps the watchdog options to a triggered cleanup run.
+// Extracted so the emergency wiring is unit-testable without executing a real
+// cleanup (which would touch live caches).
+func buildCleanupOptions(opts Options, usedPct int) cleanup.Options {
+	cleanOpts := cleanup.DefaultOptions()
+	cleanOpts.Execute = opts.Execute
+	cleanOpts.WorkDir = opts.WorkDir
+	cleanOpts.TmpDir = opts.TmpDir
+	// Aggressive: shorter thresholds when disk pressure
+	cleanOpts.TmpThreshold = 1 * time.Hour
+	cleanOpts.WorkThreshold = 24 * time.Hour
+	cleanOpts.RunFn = opts.RunFn
+	cleanOpts.ActivityFn = opts.ActivityFn
+	if opts.WalkFn != nil {
+		cleanOpts.WalkFn = opts.WalkFn
+	}
+	if opts.GlobFn != nil {
+		cleanOpts.GlobFn = opts.GlobFn
+	}
+	if opts.RemoveAllFn != nil {
+		cleanOpts.RemoveAllFn = opts.RemoveAllFn
+	}
+	if opts.SafeDeleteFn != nil {
+		cleanOpts.SafeDeleteFn = opts.SafeDeleteFn
+	}
+	if opts.EmergencyPct == 0 {
+		opts.EmergencyPct = civm.DefaultEmergencyBypassPct
+	}
+	// At emergency usage the busy-host deferral is what let the disk run to 0
+	// in the 2026-06-10 wedge: the safe reclaim must run even mid-job.
+	cleanOpts.EmergencyBypassIdle = usedPct >= opts.EmergencyPct
+	return cleanOpts
 }
 
 // Check reads disk usage and triggers cleanup if above threshold.
@@ -116,15 +164,7 @@ func Check(ctx context.Context, opts Options) Result {
 		return r
 	}
 	// Above threshold: trigger cleanup
-	cleanOpts := cleanup.DefaultOptions()
-	cleanOpts.Execute = opts.Execute
-	cleanOpts.WorkDir = opts.WorkDir
-	cleanOpts.TmpDir = opts.TmpDir
-	// Aggressive: shorter thresholds when disk pressure
-	cleanOpts.TmpThreshold = 1 * time.Hour
-	cleanOpts.WorkThreshold = 24 * time.Hour
-	cleanOpts.RunFn = opts.RunFn
-	cleanOpts.ActivityFn = opts.ActivityFn
+	cleanOpts := buildCleanupOptions(opts, r.UsedPct)
 	r.CleanupActions = cleanup.Run(ctx, cleanOpts)
 	r.Decision = DecisionCleanupTriggered
 	for _, a := range r.CleanupActions {

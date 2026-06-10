@@ -3,14 +3,33 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/advoq/civm/internal/hook"
 )
+
+// writeHealthyHostMetrics writes a fresh, healthy host-metrics snapshot so the
+// host-aware gate never forces cleanup during a dispatch test. Without it the
+// test reads the REAL delivered snapshot (or its absence) and the asserted
+// decision flips with the live host V: pressure — an environmental assumption,
+// not what these tests prove (argv[0] dispatch).
+func writeHealthyHostMetrics(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "host-metrics.json")
+	snapshot := fmt.Sprintf(
+		`{"v_free_gb":100,"v_size_gb":200,"vhdx_file_size_gb":50,"vhdx_min_size_gb":50,"vhdx_max_size_gb":110,"guest_free_gb":80,"gap_gb":1,"vm_state":"Running","timestamp":%q}`,
+		time.Now().UTC().Format(time.RFC3339))
+	if err := os.WriteFile(path, []byte(snapshot), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 // civmctlBin is the path to a built civmctl binary, set up once per
 // package by TestMain. Integration tests use this binary plus symlinks
@@ -49,6 +68,7 @@ func TestIntegration_JobStartedSymlinkDispatch(t *testing.T) {
 	cmd := exec.Command(link,
 		"--pre-cleanup-pct=99",
 		"--hard-fail-pct=100",
+		"--host-metrics-path="+writeHealthyHostMetrics(t, dir),
 		"--json",
 	)
 	cmd.Env = []string{
@@ -114,6 +134,7 @@ func TestIntegration_ManagedHookScriptDispatchViaBash(t *testing.T) {
 	cmd := exec.Command("bash", script,
 		"--pre-cleanup-pct=99",
 		"--hard-fail-pct=100",
+		"--host-metrics-path="+writeHealthyHostMetrics(t, dir),
 		"--json",
 	)
 	cmd.Env = []string{
