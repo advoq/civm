@@ -38,6 +38,12 @@ const (
 	DecisionCleanupApplied Decision = "cleanup-applied"
 	DecisionRejected       Decision = "rejected"
 	DecisionError          Decision = "error"
+	// DecisionCleanupDegraded marks a job-completed whose post-job cleanup
+	// failed. The failure stays visible (action errors in hooks.jsonl feed the
+	// runner-watchdog broken-runner sentinel) but the hook exits 0: post-job
+	// hygiene must never flip a finished job's result — the 2026-06-10 incident
+	// turned a green Web CI red over a work_root leftover at "Complete runner".
+	DecisionCleanupDegraded Decision = "cleanup-degraded"
 )
 
 type Action struct {
@@ -246,7 +252,16 @@ func Run(ctx context.Context, opts Options) Result {
 		// concorrente quando outro PR estava em fila.
 		res.Actions = append(res.Actions, cleanup(opts, ctx, false)...)
 		if err := firstActionError(res.Actions); err != nil {
-			return finish(opts, errorResult(res, err))
+			// Post-job hygiene must never fail the job it follows: the runner
+			// marks the JOB failed when the completed-hook exits non-zero,
+			// turning a green build red over a leftover that job-started's
+			// chown and the runner-watchdog sentinel (work_root action error
+			// in hooks.jsonl) already recover. Keep the error fully visible —
+			// decision=cleanup-degraded, action errors preserved in the log —
+			// but exit 0. (Supersedes the DT-v2-12 "stays fatal" stance after
+			// the 2026-06-10 incident.)
+			res.Decision = DecisionCleanupDegraded
+			res.Error = err.Error()
 		}
 		if usedAfter, err := diskUsedPct(opts); err == nil {
 			res.DiskUsedPct = usedAfter
@@ -265,9 +280,18 @@ func Run(ctx context.Context, opts Options) Result {
 func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	roots := workRoots(opts)
 	caps := cacheCaps()
-	estCap := len(roots) + len(caps) + 8
+	estCap := 2*len(roots) + len(caps) + 8
 	actions := make([]Action, 0, estCap)
 	for _, root := range roots {
+		// Kill orphan containers BEFORE deleting the root: a cancelled job's
+		// compose stack keeps running after the job ends, bind-mounted into
+		// _work — it makes RemoveAll fail ENOTEMPTY (concurrent writer), fills
+		// the disk with logs, and holds deleted-but-open files (the 2026-06-10
+		// guest wedge freed ~44GB on reboot). Any running container mounted
+		// under THIS runner's root at a hook boundary is an orphan by
+		// definition: the runner executes one job at a time and sibling
+		// runners mount their own roots.
+		actions = append(actions, killWorkRootContainers(ctx, opts, root))
 		actions = append(actions, cleanWorkRoot(ctx, opts, root, purgeCaches))
 	}
 	// Cache trim is age-based in BOTH modes. A wholesale purge of the shared
@@ -379,6 +403,65 @@ func activeWorkspaceEntry(root, workspace string) string {
 		return ""
 	}
 	return parts[0]
+}
+
+// killWorkRootContainers kills running containers that still bind-mount a path
+// under this runner's _work root. They are orphans by definition: the runner
+// executes one job at a time, sibling runners mount their own roots, and at a
+// hook boundary the job that started them is over (typically a cancelled job's
+// docker compose stack, which the runner does not tear down). Orphans make
+// cleanWorkRoot fail ENOTEMPTY (live writer racing RemoveAll), fill the disk
+// with logs, and pin deleted-but-open files. Best-effort: every failure is a
+// warning, never fatal — docker being down must not wedge the hook.
+func killWorkRootContainers(ctx context.Context, opts Options, root string) Action {
+	a := Action{Name: "docker_kill_workroot", Path: root, Executed: opts.Execute}
+	if !opts.Execute {
+		return a
+	}
+	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(civm.DefaultRoutineCleanupCmdTimeoutSecs)*time.Second)
+	defer cancel()
+	out, err := opts.RunFn(cmdCtx, "docker", "ps", "-q")
+	if err != nil {
+		a.Warning = "docker ps: " + err.Error()
+		return a
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		return a
+	}
+	inspectArgs := append([]string{"inspect", "--format",
+		`{{.Id}}{{range .Mounts}} {{.Source}}{{end}}`}, ids...)
+	out, err = opts.RunFn(cmdCtx, "docker", inspectArgs...)
+	if err != nil {
+		a.Warning = "docker inspect: " + err.Error()
+		return a
+	}
+	prefix := filepath.Clean(root) + string(filepath.Separator)
+	var orphans []string
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		for _, src := range fields[1:] {
+			// Path-segment match (never substring): the mount source must be
+			// the root itself or live under it.
+			if clean := filepath.Clean(src); clean == filepath.Clean(root) ||
+				strings.HasPrefix(clean+string(filepath.Separator), prefix) {
+				orphans = append(orphans, fields[0])
+				break
+			}
+		}
+	}
+	if len(orphans) == 0 {
+		return a
+	}
+	if _, err := opts.RunFn(cmdCtx, "docker", append([]string{"kill"}, orphans...)...); err != nil {
+		a.Warning = fmt.Sprintf("docker kill %d orphan(s): %s", len(orphans), err.Error())
+		return a
+	}
+	a.Path = fmt.Sprintf("%s (killed %d orphan container(s))", root, len(orphans))
+	return a
 }
 
 // reclaimWorkspaceOwnership runs at job-started, BEFORE actions/checkout, and
@@ -642,7 +725,7 @@ func appendLog(opts Options, res Result) error {
 	switch res.Decision {
 	case DecisionError:
 		level = slog.LevelError
-	case DecisionRejected:
+	case DecisionRejected, DecisionCleanupDegraded:
 		level = slog.LevelWarn
 	}
 	logger.LogAttrs(context.Background(), level, "hook event",
