@@ -174,6 +174,29 @@ func TestScanRuleR4SuppressedByLockWrapper(t *testing.T) {
 	}
 }
 
+func TestScanRuleR4BareFlockDoesNotSuppress(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// Regression for the 2026-06-14 incident: a repo-local flock is NOT
+	// cross-repo protection — only `civmctl lock` makes the disk-watchdog
+	// cleanup defer. Before this hardening the step passed R4 silently and a
+	// concurrent prune tick swept an in-flight containerd overlayfs snapshot,
+	// corrupting the image extract. A bare flock must now still trip R4.
+	writeWorkflow(t, root, "env:\n  COMPOSE_PROJECT_NAME: civm\njobs:\n  e2e:\n    steps:\n      - run: flock \"$CI_LOCAL_LOCK\" -- make up-local\n")
+
+	result, err := Scan(DefaultOptions(root))
+	if err != nil {
+		t.Fatalf("Scan err = %v", err)
+	}
+	f, ok := findingForRule(result.Findings, RuleUnlockedHeavy)
+	if !ok {
+		t.Fatalf("bare repo-local flock must NOT suppress R4, got %+v", result.Findings)
+	}
+	if f.Severity != SeverityWarn {
+		t.Fatalf("R4 severity = %q, want warn", f.Severity)
+	}
+}
+
 func TestScanWaiverSuppressesFinding(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
