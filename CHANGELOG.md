@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.18.2](https://github.com/advoq/civm/compare/v1.18.1...v1.18.2) (2026-06-14)
+
+
+### Bug Fixes
+
+* **ciguard:** reject bare repo-local flock as docker-heavy protection ([#119](https://github.com/advoq/civm/issues/119)) ([d35b5d2](https://github.com/advoq/civm/commit/d35b5d2e57dbe0b80cd8049f88ff53c08b65a08c))
+* **runner:** harden the four failure layers behind the 2026-06-10 outage ([#117](https://github.com/advoq/civm/issues/117)) ([16a913a](https://github.com/advoq/civm/commit/16a913a873bfb6818d1518aa5c07cc1149c3dbae))
+
 ## [1.18.1](https://github.com/advoq/civm/compare/v1.18.0...v1.18.1) (2026-06-07)
 
 
