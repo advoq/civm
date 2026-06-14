@@ -49,7 +49,7 @@ const (
 	remediationContainerName  = "remova container_name: nomes fixos impedem co-residencia entre runners"
 	remediationStaticHostPort = "use ${CIVM_PORT_BASE}+N ou porta ephemeral em vez de host-port estatica"
 	remediationMissingProject = "passe -p/--project-name ou exporte COMPOSE_PROJECT_NAME no escopo do step"
-	remediationUnlockedHeavy  = "envolva o passo docker-heavy em civmctl lock --exec ou flock"
+	remediationUnlockedHeavy  = "envolva o passo docker-heavy em civmctl lock --exec; flock repo-local nao difere a cleanup"
 	remediationOrphanWaiver   = "remova o waiver: a regra citada nao casou nenhum finding na proxima linha"
 )
 
@@ -257,7 +257,15 @@ var (
 	composeInvokeRe  = regexp.MustCompile(`docker[\s-]compose\b|docker-compose\b`)
 	dockerHeavyUpRe  = regexp.MustCompile(`docker[\s-]compose\b.*\bup\b|--build\b|\bmake\s+up`)
 	projectNameRe    = regexp.MustCompile(`-p\b|--project-name\b|COMPOSE_PROJECT_NAME`)
-	lockWrapRe       = regexp.MustCompile(`civmctl\s+lock\b|\bflock\b`)
+	// lockWrapRe matches ONLY `civmctl lock` — the heartbeat-backed cross-repo
+	// docker-heavy lock the disk-watchdog cleanup honors via dockerlock.IsActive.
+	// A bare repo-local `flock` is intentionally NOT accepted: it serializes
+	// within one repo but is invisible to IsActive, so the cleanup still prunes
+	// the daemon mid-extract. Incident 2026-06-14: a consumer's
+	// `flock "$CI_LOCAL_LOCK" -- make up-local` passed R4, yet a cleanup tick
+	// swept an in-flight containerd overlayfs snapshot and corrupted the image
+	// extract. Counting bare flock as protection was the blind spot that shipped.
+	lockWrapRe = regexp.MustCompile(`civmctl\s+lock\b`)
 )
 
 type waiver struct {
