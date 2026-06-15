@@ -10,7 +10,7 @@ paths:
 civm é infra operacional (runner self-hosted + camada host Hyper-V). A superfície
 de segurança é **segredo, privilégio do host e código de PR não-confiável em
 runner self-hosted** — não há web/HTTP/tenant/DB. Detalhe em `SECURITY.md` e
-`docs/INVARIANTS.md`.
+`disciplines/INVARIANTS.md`.
 
 ## Invariantes (CI gates)
 

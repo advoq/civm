@@ -131,7 +131,7 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 
 | Arquivo | Função |
 |---|---|
-| `disciplines/KAHNEMAN-DISCIPLINES.md` | 12 disciplinas Sistema 1 vs 2 — referência metodológica |
+| `disciplines/KAHNEMAN-DISCIPLINES.md` | 16 disciplinas Sistema 1 vs 2 — referência metodológica |
 | `disciplines/SUPERPROMPT.md` | superprompt de auditoria de ruído arquitetural (Kahneman + DDD) — referência |
 | `disciplines/SSDV3-PROMPTS.md` | Spec-Driven Dev V3 — prompts copiáveis |
 | `disciplines/INVARIANTS.md` | catálogo de invariantes (cada peer escolhe quais adotar) |
@@ -269,5 +269,5 @@ relatório inclui `metrics.runs_considered`, `metrics.reruns_triggered` e
 
 ## Histórico
 
-- **2026-05-10** — bootstrap inicial. Estrutura: 4 runbooks + 3
-  templates + 4 disciplines + 5 rules + próprio CI.
+- **2026-05-10** — bootstrap inicial. Estrutura atual: 9 runbooks + 8
+  templates + 5 disciplines + 6 rules + próprio CI.

@@ -4,6 +4,15 @@
 > e thresholds. Links Kahneman nos passos críticos. Implementa estritamente os
 > RF-1..RF-4 / RNF-1..RNF-4 do PRD.
 
+> **Status: baseline pré-auditoria — NÃO é o escopo entregue.** O PASSO 2.5
+> deu **NO-GO** na RF-2 (drain-on-pressure): drenar ao WARN interrompe o job em
+> curso por ganho marginal (`SPECv2.md` §B1). A versão ativa é `SPECv2.md` e o
+> `IMPL.md` entregou apenas **RF-1 + RF-3 + backstop ExecutionTimeLimit**.
+> Logo, **RF-2/RF-4 NÃO foram implementados**: `internal/hostdisk/drain.go` e o
+> predicado `ShouldDrainForReclaim` descritos abaixo **não existem** no código —
+> são o plano original, preservado aqui como baseline histórico. Para o que de
+> fato foi feito, ver `SPECv2.md` + `IMPL.md`.
+
 ## Princípio de design
 
 As **DECISÕES** (é fantasma? deve drenar?) vão para Go puro e testável em
@@ -49,7 +58,11 @@ commit `6ffbfee`, branch `fix/autoreclaim-exec-time-limit`); o Windows mata uma
 presa em ≤2h mesmo se o watchdog falhar. RF-1 é o detector primário (≤5 min); o
 PT2H é o segundo nível.
 
-## RF-2 — Drain-on-pressure no autoreclaim
+## RF-2 — Drain-on-pressure no autoreclaim (NO-GO na 2.5 — NÃO implementado)
+
+> RF-2 saiu do escopo na auditoria 2.5 (`SPECv2.md` §B1). O `drain.go` e o
+> `ShouldDrainForReclaim` abaixo nunca foram criados; o trecho é o plano
+> original preservado como baseline.
 
 **Predicado Go** (novo, `internal/hostdisk/drain.go`):
 
@@ -93,7 +106,11 @@ gap=2.44GB`; com `docker_prune` (17.5GB liberados), o gap virou ~28GB e o
 Optimize procedeu. RF-3 é o que torna o reclaim EFETIVO sob carga real (Kahneman
 #13: validar por efeito — o gap reclamável).
 
-## RF-4 — Degradação graciosa
+## RF-4 — Degradação graciosa (fora de escopo na 2.5 — NÃO implementado)
+
+> RF-4 também saiu do escopo na 2.5 (`SPECv2.md`): o caso que ele cobria é F3
+> (working set ativo > capacidade do disco), que é limite de hardware. O piso
+> crítico de admissão existente já é o fail-safe correto; nada novo foi feito.
 
 Sem mudança no piso crítico de admissão (`hook.go` / `hostdisk.Blocks()` exit
 75). RF-2 age ANTES (no WARN, 25GB > piso 10GB), então a recusa vira último
@@ -106,10 +123,10 @@ permanece o fail-safe correto (RNF-3, Kahneman **#15/#16**).
 | --- | --- | --- |
 | `internal/hostdisk/phantom.go` (novo) | `IsPhantomReclaim` puro | RF-1 |
 | `internal/hostdisk/phantom_test.go` (novo) | table-driven (fantasma vs vivo vs idle-recém-iniciado) | RF-1 |
-| `internal/hostdisk/drain.go` (novo) | `ShouldDrainForReclaim` puro | RF-2 |
-| `internal/hostdisk/drain_test.go` (novo) | table-driven (WARN×idle-timeout) | RF-2 |
+| `internal/hostdisk/drain.go` (novo) | `ShouldDrainForReclaim` puro — **NÃO implementado (NO-GO 2.5)** | RF-2 |
+| `internal/hostdisk/drain_test.go` (novo) | table-driven (WARN×idle-timeout) — **NÃO implementado (NO-GO 2.5)** | RF-2 |
 | `deploy/windows/register-civm-vhdx-optimize.ps1` | watchdog: detector de fantasma + estado inicial Enabled | RF-1 |
-| `deploy/windows/civm-vhdx-autoreclaim.ps1` | guest-prune (RF-3) + drain-on-pressure (RF-2) + cooldown | RF-2, RF-3 |
+| `deploy/windows/civm-vhdx-autoreclaim.ps1` | guest-prune (RF-3) entregue; drain-on-pressure (RF-2) **NÃO** (NO-GO 2.5) | RF-3 |
 | `deploy/windows/register-civm-vhdx-autoreclaim.ps1` | `ExecutionTimeLimit=PT2H` (JÁ feito, `6ffbfee`) | RF-1 |
 
 ## Validação (critérios de sucesso do PRD → testes)
