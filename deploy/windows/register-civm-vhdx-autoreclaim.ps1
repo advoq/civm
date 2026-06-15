@@ -91,6 +91,16 @@ if ($PSCmdlet.ShouldProcess($target, 'Register Scheduled Task')) {
         /rl HIGHEST `
         /f
     if ($LASTEXITCODE -ne 0) { throw "schtasks /create failed for '$TaskName' (exit $LASTEXITCODE)" }
+    # schtasks /create defaults ExecutionTimeLimit to 72h (P3D). Shorten to 2h: a
+    # phantom instance (dead process, task stuck in Running) blocks every tick via
+    # MultipleInstances=IgnoreNew, so at 72h the stuck instance would only be killed
+    # after V: had long hit the critical floor (2026-06-15 incident: ~30h blocked,
+    # runner refused all jobs). 2h is a 9x margin over the real Optimize (~13 min);
+    # CompactVirtualDisk keeps running natively even if the wrapper is killed, so the
+    # VHDX is never left corrupt. Preserves MultipleInstances and the other settings.
+    $st = Get-ScheduledTask -TaskName $TaskName
+    $st.Settings.ExecutionTimeLimit = 'PT2H'
+    Set-ScheduledTask -TaskName $TaskName -Settings $st.Settings | Out-Null
     Write-Host "Registered Scheduled Task '$TaskName' running '$resolvedScript' every $IntervalMinutes min as SYSTEM."
     Write-Host "Verify: schtasks /query /tn $TaskName /v /fo LIST"
     Write-Host "Run now: schtasks /run /tn $TaskName"

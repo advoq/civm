@@ -404,10 +404,34 @@ try {
     $gapBytes = [math]::Max([int64]0, ([int64]$vhd.FileSize - $guestUsedBytes))
     $gapGB = ConvertTo-GiB -Bytes ([double]$gapBytes)
     if ($gapGB -lt $MinReclaimableGB) {
+        # RF-3 (SPEC host-volume-reclaim-liveness): gap baixo => o guest pode estar
+        # cheio de docker/cache PRUNAVEL (leftover de jobs). Pruna e RE-computa o
+        # gap ANTES de desistir. Confirmado 2026-06-15: o prune liberou ~13-17GB de
+        # docker, elevando o gap de <1GB para >20GB, e o Optimize entao liberou o V:.
+        # Roda antes do Wait-GuestIdle: o prune de docker UNUSED nao interrompe job.
+        $prune = Invoke-Guest -RemoteCommand 'civmctl disk-watchdog --threshold-pct=0 --execute'
+        Write-ReclaimLog -Event 'reclaim_liveness_guest_prune' -Data @{
+            exit_code     = $prune.ExitCode
+            gap_gb_before = $gapGB
+        }
+        try {
+            $guestFreeBytes = Get-GuestFreeBytes
+            $guestUsedBytes = [math]::Max([int64]0, ([int64]$vhd.Size - $guestFreeBytes))
+            $gapBytes = [math]::Max([int64]0, ([int64]$vhd.FileSize - $guestUsedBytes))
+            $gapGB = ConvertTo-GiB -Bytes ([double]$gapBytes)
+        } catch {
+            Write-ReclaimLog -Event 'reclaim_liveness_prune_remeasure_failed' -Level 'WARN' -Data @{ error = $_.Exception.Message }
+        }
+    }
+    if ($gapGB -lt $MinReclaimableGB) {
+        # Ainda baixo apos o prune => guest cheio de dados ATIVOS (F3, working set
+        # > disco = hardware). Pular e correto: nao ha slack reclamavel (Kahneman
+        # #15 — fail-fast no determinístico; o piso critico segue como fail-safe).
         Write-ReclaimLog -Event 'autoreclaim_skip_low_gap' -Data @{
             v_free_gb          = $beforeFreeGB
             gap_gb             = $gapGB
             min_reclaimable_gb = $MinReclaimableGB
+            after_prune        = $true
         }
         exit 0
     }

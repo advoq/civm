@@ -182,6 +182,33 @@ try {
     Write-WatchdogLog -Event 'watchdog_get_vm_failed' -Level 'WARN' -Data @{ error = `$_.Exception.Message }
     exit 1
 }
+
+# RF-1 (SPEC docs/specs/host-volume-reclaim-liveness/SPECv2.md): limpa um
+# autoreclaim FANTASMA antes da logica de VM-state — o fantasma ocorre com a VM
+# Running. Task em Running, SEM processo vivo do script E com o lock orfao =>
+# fantasma; o Stop-ScheduledTask libera o MultipleInstances=IgnoreNew para a
+# proxima cadencia. Incidente 2026-06-15: ~30h bloqueado. Kahneman #13 (Running
+# != funcao) e #16 (a cura nao pode morrer e auto-bloquear a ressurreicao).
+# Exigir AMBOS (sem processo E sem lock) evita matar uma instancia recem-iniciada.
+try {
+    `$arTask = Get-ScheduledTask -TaskName 'civm-vhdx-autoreclaim' -ErrorAction Stop
+    if (`$arTask.State -eq 'Running') {
+        `$arProcAlive = `$null -ne (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object { `$_.CommandLine -like '*civm-vhdx-autoreclaim.ps1*' })
+        `$arLockHeld = Test-LockHeld 'V:\civm-autoreclaim.lock'
+        if ((-not `$arProcAlive) -and (-not `$arLockHeld)) {
+            Stop-ScheduledTask -TaskName 'civm-vhdx-autoreclaim' -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath 'V:\civm-autoreclaim.lock', 'V:\civm-reclaim.lock' -Force -ErrorAction SilentlyContinue
+            Write-WatchdogLog -Event 'reclaim_liveness_phantom_cleared' -Level 'WARN' -Data @{
+                proc_alive = `$arProcAlive
+                lock_held  = `$arLockHeld
+            }
+        }
+    }
+} catch {
+    Write-WatchdogLog -Event 'reclaim_liveness_phantom_check_failed' -Level 'WARN' -Data @{ error = `$_.Exception.Message }
+}
+
 if (`$state -eq 'Running') { exit 0 }
 
 # Manutencao viva (civm-optimize.lock OU civm-autoreclaim.lock): o reclaim religa
