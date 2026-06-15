@@ -14,6 +14,7 @@ import (
 
 	"github.com/advoq/civm/internal/civm"
 	"github.com/advoq/civm/internal/hostdisk"
+	"github.com/advoq/civm/internal/idle"
 	"github.com/advoq/civm/internal/safedelete"
 )
 
@@ -134,6 +135,10 @@ func TestJobCompletedPreservesHotCachesUnderHome(t *testing.T) {
 	opts.LogPath = ""
 	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
 	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+	// Hermetico: sem isso, DefaultOptionsFromEnv usa o ps scan real e na box da
+	// CI (outros runners buildando) o cache trim defere -> o teste do trim falha.
+	// ActivityFn idle (nenhuma atividade) força o cenario idle.
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
 
 	res := Run(context.Background(), opts)
 	if res.Decision != DecisionCleanupApplied {
@@ -171,6 +176,10 @@ func TestJobStartedUnderPressureTrimsCachesByAge(t *testing.T) {
 	opts.LogPath = ""
 	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
 	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+	// Hermetico: sem isso, DefaultOptionsFromEnv usa o ps scan real e na box da
+	// CI (outros runners buildando) o cache trim defere -> o teste do trim falha.
+	// ActivityFn idle (nenhuma atividade) força o cenario idle.
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
 
 	res := Run(context.Background(), opts)
 
@@ -285,6 +294,10 @@ func TestJobStartedDemotesCacheDeleteRaceWhenDiskDropsBelowHardFail(t *testing.T
 	opts.LogPath = ""
 	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
 	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+	// Hermetico: sem isso, DefaultOptionsFromEnv usa o ps scan real e na box da
+	// CI (outros runners buildando) o cache trim defere -> o teste do trim falha.
+	// ActivityFn idle (nenhuma atividade) força o cenario idle.
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
 
 	res := Run(context.Background(), opts)
 	if res.Decision != DecisionCleanupApplied || res.ExitCode != 0 {
@@ -693,8 +706,8 @@ func TestTrimCacheByAge(t *testing.T) {
 			// crescia sem limite (o cache de CI sob carga continua chegou a 18GB).
 			name: "hard ceiling trims oldest hot when cold cannot meet the cap",
 			files: []cacheFile{
-				{path: "/cache/hot1", size: 4 * KiB, mtime: now.Add(-10 * time.Minute)}, // mais novo → fica
-				{path: "/cache/hot2", size: 4 * KiB, mtime: now.Add(-30 * time.Minute)}, // mais antigo → Pass 2
+				{path: "/cache/hot1", size: 4 * KiB, mtime: now.Add(-10 * time.Minute)},   // mais novo → fica
+				{path: "/cache/hot2", size: 4 * KiB, mtime: now.Add(-30 * time.Minute)},   // mais antigo → Pass 2
 				{path: "/cache/cold", size: 4 * KiB, mtime: now.Add(-7 * 24 * time.Hour)}, // → Pass 1
 			},
 			maxBytes:   6 * KiB, // total 12K; cold sozinho deixa 8K > 6K → Pass 2 trima o hot mais antigo
@@ -830,6 +843,10 @@ func TestJobCompletedUsesGentleDockerSequence(t *testing.T) {
 	opts.LogPath = ""
 	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
 	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+	// Hermetico: sem isso, DefaultOptionsFromEnv usa o ps scan real e na box da
+	// CI (outros runners buildando) o cache trim defere -> o teste do trim falha.
+	// ActivityFn idle (nenhuma atividade) força o cenario idle.
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
 
 	Run(context.Background(), opts)
 
@@ -880,6 +897,10 @@ func TestJobCompletedDemotesCommandFailureToWarning(t *testing.T) {
 	opts.LogPath = ""
 	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
 	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+	// Hermetico: sem isso, DefaultOptionsFromEnv usa o ps scan real e na box da
+	// CI (outros runners buildando) o cache trim defere -> o teste do trim falha.
+	// ActivityFn idle (nenhuma atividade) força o cenario idle.
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
 
 	res := Run(context.Background(), opts)
 
@@ -936,6 +957,10 @@ func TestJobStartedCleanupCommandFailureIsNonFatal(t *testing.T) {
 	opts.LogPath = ""
 	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
 	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+	// Hermetico: sem isso, DefaultOptionsFromEnv usa o ps scan real e na box da
+	// CI (outros runners buildando) o cache trim defere -> o teste do trim falha.
+	// ActivityFn idle (nenhuma atividade) força o cenario idle.
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
 
 	res := Run(context.Background(), opts)
 
@@ -1077,6 +1102,10 @@ func TestJobStartedUnderPressureUsesFilteredDockerPrune(t *testing.T) {
 	opts.LogPath = ""
 	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
 	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+	// Hermetico: sem isso, DefaultOptionsFromEnv usa o ps scan real e na box da
+	// CI (outros runners buildando) o cache trim defere -> o teste do trim falha.
+	// ActivityFn idle (nenhuma atividade) força o cenario idle.
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
 
 	Run(context.Background(), opts)
 
@@ -1124,6 +1153,10 @@ func TestJobStartedDockerPruneErrorIsNonFatal(t *testing.T) {
 	opts.LogPath = ""
 	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
 	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+	// Hermetico: sem isso, DefaultOptionsFromEnv usa o ps scan real e na box da
+	// CI (outros runners buildando) o cache trim defere -> o teste do trim falha.
+	// ActivityFn idle (nenhuma atividade) força o cenario idle.
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
 
 	res := Run(context.Background(), opts)
 	if res.Decision == DecisionError || res.ExitCode != 0 {
