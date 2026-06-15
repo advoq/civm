@@ -316,3 +316,64 @@ func TestTrimByAgeMissingDirIsNoError(t *testing.T) {
 		t.Errorf("absent cache dir must be a no-op, got err %v", r.Err)
 	}
 }
+
+// TestTrimByAgeInFlightFloorSkipsFreshDirReclaimsStale prova o floor in-flight do
+// emergency path. O emergency_test antigo injetava cache VAZIO (GlobFn->nil) e
+// nunca exercitava este caminho — o buraco Kahneman #13 que escondia o job-kill.
+// Com InFlightFloor setado: um dir com escrita fresca (install vivo) é PULADO
+// inteiro mesmo acima do cap (par com o positivo: um dir só com arquivos velhos,
+// runaway stale, continua sendo reclamado).
+func TestTrimByAgeInFlightFloorSkipsFreshDirReclaimsStale(t *testing.T) {
+	now := time.Now()
+	// Cria um dir com 3 arquivos de 8MB (24MB total) na idade dada.
+	mkdir := func(age time.Duration) string {
+		dir := t.TempDir()
+		for _, n := range []string{"a.o", "b.o", "c.o"} {
+			p := filepath.Join(dir, n)
+			if err := os.WriteFile(p, make([]byte, 8<<20), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(p, now.Add(-age), now.Add(-age)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	const floor = 15 * time.Minute
+	// cap 10MB num total de 24MB → sem o floor, trimaria (>=14MB) mesmo protegido.
+	cap10 := func(dir string) Cap { return Cap{Path: dir, MaxBytes: 10 << 20, MinProtect: 24 * time.Hour} }
+
+	// (1) Escrita fresca (1min < floor) = install vivo → PULA o dir inteiro.
+	freshDir := mkdir(1 * time.Minute)
+	var removedFresh []string
+	rFresh := TrimByAge(Options{
+		Execute: true, Now: now, InFlightFloor: floor,
+		RemoveAllFn: func(p string) error { removedFresh = append(removedFresh, p); return nil },
+	}, cap10(freshDir))
+	if rFresh.Err != nil {
+		t.Fatalf("fresh dir err: %v", rFresh.Err)
+	}
+	if !rFresh.SkippedInFlight {
+		t.Error("dir com escrita fresca DEVE ser pulado (SkippedInFlight) sob o floor")
+	}
+	if rFresh.BytesFreed != 0 || len(removedFresh) != 0 {
+		t.Errorf("install vivo NAO pode ser trimado: freed=%d removed=%d", rFresh.BytesFreed, len(removedFresh))
+	}
+
+	// (2) Tudo velho (2h > floor) = runaway stale → reclama normalmente.
+	staleDir := mkdir(2 * time.Hour)
+	var removedStale []string
+	rStale := TrimByAge(Options{
+		Execute: true, Now: now, InFlightFloor: floor,
+		RemoveAllFn: func(p string) error { removedStale = append(removedStale, p); return nil },
+	}, cap10(staleDir))
+	if rStale.Err != nil {
+		t.Fatalf("stale dir err: %v", rStale.Err)
+	}
+	if rStale.SkippedInFlight {
+		t.Error("dir stale NAO deve ser pulado pelo floor")
+	}
+	if rStale.BytesFreed < (24<<20)-(10<<20) {
+		t.Errorf("runaway stale deve ser reclamado: freed=%d, want >= %d", rStale.BytesFreed, (24<<20)-(10<<20))
+	}
+}

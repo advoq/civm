@@ -180,6 +180,14 @@ type Options struct {
 	Now         time.Time
 	WalkDirFn   func(root string, fn fs.WalkDirFunc) error
 	RemoveAllFn func(path string) error
+	// InFlightFloor, quando > 0, faz o trim PULAR qualquer dir de cache que tenha
+	// um arquivo escrito dentro desse intervalo — um dir com escrita fresca é um
+	// install vivo. Setado só no emergency path (≥75% de disco, onde o idle guard
+	// é ignorado); no path normal fica 0 e o teto-hard de sempre vale. Sem ele, o
+	// Pass 2 (que ignora MinProtect) deletaria o pacote que o yarn/go está
+	// escrevendo → parcial → ENOENT → job morto mid-install. Kahneman #16: o
+	// fail-safe é o disco, mas nunca às custas de matar o job que ele preserva.
+	InFlightFloor time.Duration
 }
 
 func (o Options) withDefaults() Options {
@@ -202,6 +210,10 @@ type Result struct {
 	BytesFreed int64
 	Executed   bool
 	Err        error
+	// SkippedInFlight indica que o dir tinha escrita fresca (< InFlightFloor) e
+	// foi pulado inteiro para não matar um install vivo. Observável para o teste
+	// e para o log de decisão do emergency reclaim.
+	SkippedInFlight bool
 }
 
 type cacheEntry struct {
@@ -309,6 +321,20 @@ func TrimByAge(opts Options, c Cap) Result {
 	r.BytesFound = total
 	if total <= c.MaxBytes {
 		return r
+	}
+	// In-flight floor (só no emergency path): um dir com escrita muito recente é
+	// um install vivo. Sob o bypass de disco (sem idle guard) trimá-lo mataria o
+	// job — parcial → ENOENT. Pula o dir inteiro; o alívio de disco vem de
+	// docker/tmp e da recusa de job no piso, nunca de um cache em uso. Vale para
+	// WipeWhole (go-build/golangci) e para o trim por pacote (yarn).
+	if opts.InFlightFloor > 0 {
+		floor := opts.Now.Add(-opts.InFlightFloor)
+		for i := range entries {
+			if entries[i].mtime.After(floor) {
+				r.SkippedInFlight = true
+				return r
+			}
+		}
 	}
 	if c.WipeWhole {
 		// Cache com refs cruzadas opacas (go-build/golangci): sub-trimar orfana uma
