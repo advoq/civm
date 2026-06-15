@@ -49,23 +49,27 @@ caem no coletor de **arquivos soltos** → trim por arquivo. Um zip é unidade
 atômica, então trim por arquivo é seguro nele. `DirAtomic` degrada para modo
 arquivo sozinho quando não há dir de pacote. Vale para v1 (dir) e berry (zip).
 
-### A2 — Pass 2 (hard-ceiling) pode remover pacote em escrita
+### A2 — disk-watchdog trima o working-set no meio de um install (corrige #13)
 
-O dois-passes do #124: Pass 1 preserva quentes (<MinProtect), Pass 2 impõe o teto
-removendo protegidos se o cap não for atingível. Com cap por-dir patologicamente
-apertado (4 dirs / 3GB = 0.75GB/dir < 0.84GB natural, tudo recente), Pass 1 não
-alcança o cap → Pass 2 remove pacotes recentes. No `job-started` isso é benigno
-(o install re-fetcha). O resíduo é o **disk-watchdog disparando no meio de um
-install** e removendo o pacote em escrita.
+A auditoria 2.5 marcou isto como resíduo BENIGNO ("no pior caso re-baixa"). A
+validação ao vivo (#1155: jobs `web`, `tenant-isolation-smoke`, `Yarn audit`)
+provou o contrário — #13, subestimei. O disk-watchdog (timer 8min + o
+EmergencyBypass do #117 a ≥75%) dispara NO MEIO de um `yarn install`: remove (mesmo
+atômico, o pacote inteiro) o pacote que o yarn está escrevendo, o yarn re-fetcha,
+e a corrida entre o re-fetch e a leitura seguinte deixa o `.yarn-metadata.json`
+parcial → `ENOENT`. Sempre o mesmo pacote (`@ai-sdk/gateway`), porque o timer cai
+num ponto determinístico da ordem do lockfile. O self-heal (clean+retry) **não
+vence**: o disk-watchdog re-corrompe o retry.
 
-**Resolução (2 camadas):**
-
-1. **Atômico limita o estrago**: mesmo no resíduo, remove-se um pacote inteiro
-   (re-fetchável), nunca um parcial — `ENOENT` em pacote pela metade some.
-2. **Companion advoq (RF-5)**: reverter o `yarn-advoq-audit` (4º dir que **eu**
-   criei em `security-scans.yml`). Com 3 dirs / 3GB = 1GB/dir > 0.84GB → Pass 1
-   atinge o cap → Pass 2 **não dispara** para yarn no caso comum. Some o churn e
-   o resíduo de race.
+**Resolução — backstop cap (a filosofia certa para cache regenerável).** O
+cache-trim deixa de enforçar um cap apertado contínuo e vira BACKSTOP. Com cap
+generoso (yarn 3→12GB; go-build já 12GB), o working-set (~0.84GB/dir yarn,
+~2.2GB/dir go-build) fica sempre SOB o cap → `TrimByAge` é no-op durante o job
+(`total <= MaxBytes`), inclusive sob o EmergencyBypass → o disk-watchdog NUNCA toca
+o working-set em escrita → fim do race, em TODOS os jobs de uma vez. O trim
+(atômico/WipeWhole) só age no crescimento descontrolado; o alívio de disco sob
+pressão vem de docker/`/tmp` e, no piso, da recusa de job (exit 75). Conserta a
+FONTE (não cada job — não-whack-a-mole) e preserva o EmergencyBypass do #117.
 
 ### A3 — Glob `*/*` em `.tmp`
 
@@ -80,14 +84,17 @@ atomicamente é inócuo. Sem ação.
 - **RF-3** (civm): `Cap.WipeWhole` para go-build/golangci (refs cruzadas): acima do
   cap, RemoveAll do dir inteiro (atômico). Cap do go-build subido 5→12GB para o
   wipe ser backstop, não o working-set normal (~2.2GB/dir).
-- **RF-5** (companion, advoq): reverter `yarn-advoq-audit` → cache yarn default
-  com `--mutex network` (3 dirs em vez de 4).
-- **RF-4** (validação): rebuild + deploy civmctl → limpar caches corrompidos →
-  re-run `web` do #1155 verde.
+- **RF-6** (core, civm — fix do A2): cap de cache regenerável é BACKSTOP, não cap
+  contínuo. yarn 3→12GB (go-build já 12GB). O working-set fica sob o cap → o
+  disk-watchdog/EmergencyBypass nunca o trima durante um job → elimina o race.
+- **RF-5** (superseded por RF-6): reverter `yarn-advoq-audit` virou desnecessário —
+  com o backstop cap, 4 dirs yarn (3GB/dir) ficam todos sob o cap.
+- **RF-4** (validação): rebuild + deploy civmctl → limpar caches → re-run dos jobs
+  `web`/`gates`/`tenant-isolation`/`audit` do #1155 todos verdes.
 
 ## Resíduos aceitos (documentados, #16)
 
-- Disk-watchdog no meio de um install ainda pode remover um pacote (agora
-  inteiro, re-fetchável) — não corrompe, no pior caso re-baixa. Aceito.
-- Corrupção por escrita concorrente (2 jobs/mesmo dir) — fora de escopo,
-  mitigada por dirs per-workflow + `--mutex`.
+- Corrupção por escrita concorrente (2 runners no mesmo dir, mesmo `$HOME`) — fora
+  do escopo do trim; mitigada por dirs per-workflow + `--mutex` e, em última rede,
+  pelo self-heal do gate (clean+retry no devctl/ci-router). Prevenção total =
+  cache per-runner (`CIVM_RUNNER_SLOT` no path) — follow-up.
