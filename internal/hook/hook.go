@@ -21,6 +21,7 @@ import (
 	"github.com/advoq/civm/internal/cachetrim"
 	"github.com/advoq/civm/internal/civm"
 	"github.com/advoq/civm/internal/hostdisk"
+	"github.com/advoq/civm/internal/idle"
 	"github.com/advoq/civm/internal/safedelete"
 )
 
@@ -115,6 +116,11 @@ type Options struct {
 	// pressure triggers cleanup/rejection even when the guest filesystem % alone
 	// would not. Injected so unit tests never touch the metrics file.
 	HostDiskFn func() (hostdisk.Report, error)
+	// ActivityFn lista os builds de CI ativos no host (ps scan). O cache trim do
+	// hook só roda quando NENHUM outro runner tem build ativo — trimar um cache
+	// compartilhado que um sibling lê/escreve mid-install remove o arquivo em uso
+	// (ENOENT). Injetado para teste; default idle.DefaultActivities.
+	ActivityFn func(ctx context.Context) ([]idle.Activity, error)
 }
 
 func DefaultOptionsFromEnv(event Event) Options {
@@ -136,6 +142,7 @@ func DefaultOptionsFromEnv(event Event) Options {
 		ReadDirFn:       os.ReadDir,
 		WalkDirFn:       filepath.WalkDir,
 		HostDiskFn:      defaultHostDisk,
+		ActivityFn:      idle.DefaultActivities,
 	}
 }
 
@@ -274,6 +281,34 @@ func Run(ctx context.Context, opts Options) Result {
 // remove os caches em $HOME (go-build, npm, yarn, pnpm) por inteiro e roda
 // docker system prune agressivo. purgeCaches=false em modo rotineiro
 // (job-completed) faz trim por tamanho/idade (preserva quentes <24h) e usa
+// cacheTrimIsIdle reporta se é seguro trimar os caches compartilhados: true só
+// quando NENHUM outro runner tem atividade. As atividades do próprio runner
+// (Runner.Worker + o build deste job) são excluídas pelo prefixo do runner dir
+// (ownDirs, já com separador final para não casar advoq em advoq-org). Fail-safe:
+// sem probe, sem como excluir self, ou erro de probe → false (não trima).
+func cacheTrimIsIdle(ctx context.Context, opts Options, ownDirs []string) bool {
+	if opts.ActivityFn == nil || len(ownDirs) == 0 {
+		return false
+	}
+	acts, err := opts.ActivityFn(ctx)
+	if err != nil {
+		return false
+	}
+	for _, a := range acts {
+		own := false
+		for _, dir := range ownDirs {
+			if strings.Contains(a.Command, dir) {
+				own = true
+				break
+			}
+		}
+		if !own {
+			return false
+		}
+	}
+	return true
+}
+
 // buildx prune mais brando — evita invalidar cache de jobs concorrentes.
 func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	roots := workRoots(opts)
@@ -292,13 +327,24 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 		actions = append(actions, killWorkRootContainers(ctx, opts, root))
 		actions = append(actions, cleanWorkRoot(ctx, opts, root, purgeCaches))
 	}
-	// Cache trim is age-based in BOTH modes. A wholesale purge of the shared
-	// $HOME caches at job-started deletes the hot go-build/npm cache out from
-	// under a concurrent sibling job mid-compile ("could not import ...: no
-	// such file or directory"). trimCacheByAge protects recently-used files
-	// (minProtect); HardFailPct still guards genuinely-full disk.
-	for _, c := range caps {
-		actions = append(actions, trimCacheByAge(opts, c.path, c.maxBytes, c.minProtect))
+	// O cache trim NUNCA roda enquanto OUTRO runner tem build ativo. O hook roda
+	// sob o Runner.Worker do próprio job (ParseActiveProcesses só exclui o PID do
+	// hook, não o Worker pai), então derivamos o runner dir dos nossos roots e
+	// excluímos toda atividade sob ele — o que sobra é build de outro runner.
+	// Trimar o cache compartilhado que um sibling lê/escreve mid-install remove o
+	// arquivo em uso → ENOENT (gates/yarn-audit, confirmado na CI real). Sob
+	// pressão real o disk-watchdog (idle-gated) + o EmergencyBypass (com floor)
+	// cuidam do limite; aqui o fail-safe é NÃO trimar na dúvida.
+	ownDirs := make([]string, 0, len(roots))
+	for _, r := range roots {
+		ownDirs = append(ownDirs, filepath.Dir(r)+string(os.PathSeparator))
+	}
+	if cacheTrimIsIdle(ctx, opts, ownDirs) {
+		for _, c := range caps {
+			actions = append(actions, trimCacheByAge(opts, c.path, c.maxBytes, c.minProtect))
+		}
+	} else {
+		actions = append(actions, Action{Name: "cache_trim_deferred_sibling_build", Path: "(another runner's build is active)"})
 	}
 	// Docker prune is always best-effort (commandActionWarn, never fatal) in
 	// both modes. Two concurrency hazards on the shared runner:
