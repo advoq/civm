@@ -35,6 +35,7 @@ import (
 
 	"github.com/advoq/civm/internal/civm"
 	"github.com/advoq/civm/internal/memwatchdog"
+	"github.com/advoq/civm/internal/procstat"
 )
 
 // Weight is the job memory weight: heavy jobs take a slot, light jobs do not.
@@ -463,7 +464,7 @@ func applyDefaults(opts *Options) {
 		opts.PidAliveFn = defaultPidAlive
 	}
 	if opts.PidStartTicksFn == nil {
-		opts.PidStartTicksFn = defaultPidStartTicks
+		opts.PidStartTicksFn = procstat.PidStartTicks
 	}
 	if opts.FlockFn == nil {
 		opts.FlockFn = defaultFlockNB

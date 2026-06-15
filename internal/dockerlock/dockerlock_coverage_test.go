@@ -162,40 +162,6 @@ func TestDefaultPidAlive(t *testing.T) {
 	}
 }
 
-// TestDefaultPidStartTicks reads field 22 from the real /proc for our own PID
-// and confirms a missing /proc entry surfaces an error.
-func TestDefaultPidStartTicks(t *testing.T) {
-	t.Parallel()
-	if _, err := os.Stat("/proc/self/stat"); err != nil {
-		t.Skip("no /proc on this platform")
-	}
-	ticks, err := defaultPidStartTicks(os.Getpid())
-	if err != nil {
-		t.Fatalf("defaultPidStartTicks(self) err = %v", err)
-	}
-	if ticks == 0 {
-		t.Fatalf("defaultPidStartTicks(self) = 0, want non-zero starttime")
-	}
-	// A PID that cannot exist forces the /proc read error path.
-	if _, err := defaultPidStartTicks(1 << 30); err == nil {
-		t.Fatalf("defaultPidStartTicks(huge) err = nil, want error")
-	}
-}
-
-// TestTruncateStat covers both the short pass-through and the >64 byte cut.
-func TestTruncateStat(t *testing.T) {
-	t.Parallel()
-	short := "1234 (bash) S"
-	if got := truncateStat(short); got != short {
-		t.Fatalf("truncateStat(short) = %q, want unchanged", got)
-	}
-	long := strings.Repeat("x", 100)
-	got := truncateStat(long)
-	if len(got) != 64 {
-		t.Fatalf("truncateStat(long) len = %d, want 64", len(got))
-	}
-}
-
 // TestAcquireRejectsNULBytePath covers the NUL-byte branch of validateAbsPath.
 func TestAcquireRejectsNULBytePath(t *testing.T) {
 	t.Parallel()
