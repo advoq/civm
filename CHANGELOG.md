@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.18.6](https://github.com/advoq/civm/compare/v1.18.5...v1.18.6) (2026-06-15)
+
+
+### Refactor
+
+* **civm:** dedup + decompose god-functions + safe docker reclaim ([#130](https://github.com/advoq/civm/issues/130)) ([14860e5](https://github.com/advoq/civm/commit/14860e5bd6549c6f3f6a8c53bc5810892fefee0e))
+
+
+### Documentation
+
+* fix doc-vs-reality contradictions across civm docs ([#131](https://github.com/advoq/civm/issues/131)) ([9eaa05e](https://github.com/advoq/civm/commit/9eaa05ed883e500df962fdd32b129975d7cb6dac))
+
 ## [1.18.5](https://github.com/advoq/civm/compare/v1.18.4...v1.18.5) (2026-06-15)
 
 
