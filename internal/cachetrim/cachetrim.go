@@ -303,24 +303,70 @@ func packageRoot(c Cap, p string) string {
 // until total <= c.MaxBytes. Files newer than Now-c.MinProtect are preserved —
 // protects the hot cache of a job that just wrote. No-op if the cache is absent
 // or already under the cap.
+//
+// É só o orquestrador: a sequência de guards de short-circuit (unsafe-path,
+// walk-error, under-cap, in-flight floor, WipeWhole) vive em trimGuards, e o
+// trim em si, por idade e em dois passes, em trimEntries.
 func TrimByAge(opts Options, c Cap) Result {
 	opts = opts.withDefaults()
 	r := Result{Path: c.Path, Executed: opts.Execute}
+
+	// trimGuards resolve os casos de short-circuit. Quando done=true, r já carrega
+	// o resultado final (no-op, erro, skip ou wipe) e não há nada a trimar.
+	entries, total, done := trimGuards(opts, c, &r)
+	if done {
+		return r
+	}
+
+	sort.Slice(entries, func(i, j int) bool { return entries[i].mtime.Before(entries[j].mtime) })
+	target := total - c.MaxBytes
+	removed := make([]bool, len(entries))
+
+	// MaxBytes e um TETO HARD (a garantia anti-enchimento). trimEntries percorre do
+	// mais antigo ao mais novo. Pass 1 (allowProtected=false) preserva os arquivos
+	// quentes (acessados dentro de MinProtect). Se isso NAO alcanca o cap — o caso
+	// do cache de CI sob carga continua, onde TODO arquivo e recente e o cap nunca
+	// se aplicava (yarn-advoq-* cresceu a 18GB, incidente 2026-06-15) — Pass 2 trima
+	// os protegidos tambem, do mais antigo ao mais novo, ate o cap. A protecao de
+	// disco vence a temperatura do cache (Kahneman #16: o fail-safe e o disco).
+	freed, err := trimEntries(entries, removed, target, 0, false, opts, c)
+	if err != nil {
+		r.Err = err
+		r.BytesFreed = freed
+		return r
+	}
+	if freed < target {
+		freed, err = trimEntries(entries, removed, target, freed, true, opts, c)
+		if err != nil {
+			r.Err = err
+		}
+	}
+	r.BytesFreed = freed
+	return r
+}
+
+// trimGuards roda o preâmbulo de short-circuits do TrimByAge e devolve as
+// unidades coletadas, o total de bytes e done=true quando o caller deve retornar
+// imediatamente com r já preenchido. Cobre, nesta ordem: path inseguro (vazio,
+// "/" ou o próprio HOME), erro de walk (dir ausente = no-op), dir já abaixo do
+// cap, o floor in-flight (pula o install vivo) e o WipeWhole (backstop atômico do
+// go-build/golangci). Quando done=false, há trabalho de trim real a fazer.
+func trimGuards(opts Options, c Cap, r *Result) (entries []cacheEntry, total int64, done bool) {
 	if strings.TrimSpace(c.Path) == "" || c.Path == "/" || c.Path == os.Getenv("HOME") {
 		r.Err = errors.New("unsafe cache path")
-		return r
+		return nil, 0, true
 	}
 	entries, total, walkErr := collectUnits(c, opts.WalkDirFn)
 	if walkErr != nil {
 		if errors.Is(walkErr, fs.ErrNotExist) {
-			return r
+			return nil, 0, true
 		}
 		r.Err = walkErr
-		return r
+		return nil, 0, true
 	}
 	r.BytesFound = total
 	if total <= c.MaxBytes {
-		return r
+		return nil, total, true
 	}
 	// In-flight floor (só no emergency path): um dir com escrita muito recente é
 	// um install vivo. Sob o bypass de disco (sem idle guard) trimá-lo mataria o
@@ -332,7 +378,7 @@ func TrimByAge(opts Options, c Cap) Result {
 		for i := range entries {
 			if entries[i].mtime.After(floor) {
 				r.SkippedInFlight = true
-				return r
+				return nil, total, true
 			}
 		}
 	}
@@ -342,61 +388,46 @@ func TrimByAge(opts Options, c Cap) Result {
 		if opts.Execute {
 			if err := opts.RemoveAllFn(c.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				r.Err = err
-				return r
+				return nil, total, true
 			}
 		}
 		r.BytesFreed = total
-		return r
+		return nil, total, true
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].mtime.Before(entries[j].mtime) })
-	protectCutoff := opts.Now.Add(-c.MinProtect)
-	target := total - c.MaxBytes
-	var freed int64
-	removed := make([]bool, len(entries))
+	return entries, total, false
+}
 
-	// MaxBytes e um TETO HARD (a garantia anti-enchimento). trimPass percorre do
-	// mais antigo ao mais novo. Pass 1 (allowProtected=false) preserva os arquivos
-	// quentes (acessados dentro de MinProtect). Se isso NAO alcanca o cap — o caso
-	// do cache de CI sob carga continua, onde TODO arquivo e recente e o cap nunca
-	// se aplicava (yarn-advoq-* cresceu a 18GB, incidente 2026-06-15) — Pass 2 trima
-	// os protegidos tambem, do mais antigo ao mais novo, ate o cap. A protecao de
-	// disco vence a temperatura do cache (Kahneman #16: o fail-safe e o disco).
-	trimPass := func(allowProtected bool) error {
-		for i := range entries {
-			if freed >= target {
-				return nil
-			}
-			if removed[i] {
-				continue
-			}
-			if !allowProtected && c.MinProtect > 0 && entries[i].mtime.After(protectCutoff) {
-				continue
-			}
-			if opts.Execute {
-				if err := opts.RemoveAllFn(entries[i].path); err != nil {
-					if errors.Is(err, fs.ErrNotExist) {
-						removed[i] = true
-						continue
-					}
-					r.Err = err
-					return err
+// trimEntries remove as unidades mais antigas até freed alcançar target, contando
+// a partir do freed já liberado num pass anterior. Com allowProtected=false (Pass
+// 1) pula as unidades quentes (mtime depois do cutoff de proteção, sob MinProtect
+// > 0); com true (Pass 2) trima até os protegidos — o TETO HARD do cap vence a
+// temperatura do cache. O slice removed é compartilhado entre os passes (mutado in
+// place) para um pass não reprocessar o que o outro já tirou. Devolve o freed
+// acumulado e o primeiro erro de remoção (ErrNotExist conta como já removido).
+func trimEntries(entries []cacheEntry, removed []bool, target, freed int64, allowProtected bool, opts Options, c Cap) (int64, error) {
+	// O cutoff de proteção é Now − MinProtect: tudo escrito depois dele é quente.
+	protectCutoff := opts.Now.Add(-c.MinProtect)
+	for i := range entries {
+		if freed >= target {
+			return freed, nil
+		}
+		if removed[i] {
+			continue
+		}
+		if !allowProtected && c.MinProtect > 0 && entries[i].mtime.After(protectCutoff) {
+			continue
+		}
+		if opts.Execute {
+			if err := opts.RemoveAllFn(entries[i].path); err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					removed[i] = true
+					continue
 				}
+				return freed, err
 			}
-			removed[i] = true
-			freed += entries[i].size
 		}
-		return nil
+		removed[i] = true
+		freed += entries[i].size
 	}
-	if err := trimPass(false); err != nil {
-		r.Err = err
-		r.BytesFreed = freed
-		return r
-	}
-	if freed < target {
-		if err := trimPass(true); err != nil {
-			r.Err = err
-		}
-	}
-	r.BytesFreed = freed
-	return r
+	return freed, nil
 }
