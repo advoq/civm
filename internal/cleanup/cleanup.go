@@ -210,8 +210,10 @@ func Run(ctx context.Context, opts Options) []Action {
 				// Disk at emergency level: the busy job is the thing filling
 				// the disk, so "wait for idle" never comes. Run only the safe
 				// reclaim — old /tmp entries (age-gated by TmpThreshold) and
-				// the cache trim (cachetrim MinProtect shields hot files a
-				// live build is using). The work-dir sweep stays deferred.
+				// cache trim under InFlightFloor: trims only genuinely-stale
+				// caches and SKIPS any dir with a fresh write (a live install) —
+				// MinProtect alone is not enough here, the hard-ceiling Pass 2
+				// overrides it. The work-dir sweep stays deferred.
 				out = append(out, scanAndMaybeDelete(ctx, opts, "tmp_old", opts.TmpDir, opts.TmpThreshold))
 				out = append(out, cacheTrimActions(opts)...)
 				out = append(out, Action{Name: "emergency-bypass-idle", Path: "(disk emergency: safe reclaim while busy)"})
@@ -337,10 +339,19 @@ func cacheTrimActions(opts Options) []Action {
 		return nil
 	}
 	trimOpts := cachetrim.Options{Execute: opts.Execute, Now: opts.Now, WalkDirFn: opts.WalkFn, RemoveAllFn: opts.RemoveAllFn}
+	if opts.EmergencyBypassIdle {
+		// Emergency path: sem idle guard, o trim precisa do floor in-flight para
+		// não deletar o working-set de um install vivo. O path normal (idle-gated)
+		// mantém InFlightFloor=0 e o teto-hard de sempre.
+		trimOpts.InFlightFloor = time.Duration(civm.DefaultCacheInFlightFloorMinutes) * time.Minute
+	}
 	out := make([]Action, 0, len(caps))
 	for _, c := range caps {
 		r := cachetrim.TrimByAge(trimOpts, c)
 		a := Action{Name: "cache_trim", Path: r.Path, BytesFound: r.BytesFound, BytesFreed: r.BytesFreed, Executed: r.Executed, Err: r.Err}
+		if r.SkippedInFlight {
+			a.Path = r.Path + " (skipped: in-flight install)"
+		}
 		out = append(out, a)
 	}
 	return out

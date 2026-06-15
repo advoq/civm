@@ -67,6 +67,12 @@ const (
 	// ~/.yarn/cache) e os dirs nomeados cresciam SEM LIMITE — go-build-advoq-services
 	// chegou a 13GB num cap de 5GB, enchendo o VHDX até o host dar PausedCritical.
 	DefaultCacheTrimMinProtectHours = 24
+	// DefaultCacheInFlightFloorMinutes é o piso de "escrita fresca" do emergency
+	// path: sob bypass de disco (≥75%, sem idle guard) o trim PULA qualquer dir de
+	// cache com arquivo escrito nos últimos N minutos — um dir com escrita fresca é
+	// um install vivo, e trimá-lo mata o job (parcial → ENOENT). 15min cobre um
+	// yarn/go install com folga e fica bem abaixo do MinProtect de 24h.
+	DefaultCacheInFlightFloorMinutes = 15
 	// go-build é WipeWhole (refs cruzadas opacas: sub-trim orfana entrada e o vet
 	// quebra). O cap é generoso de propósito — backstop para crescimento
 	// descontrolado, não o working-set normal (~2.2GB/dir; 12GB/3dirs = 4GB/dir).
