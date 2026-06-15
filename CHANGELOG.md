@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.4](https://github.com/advoq/civm/compare/v1.18.3...v1.18.4) (2026-06-15)
+
+
+### Bug Fixes
+
+* **cachetrim:** enforce MaxBytes as a hard ceiling over MinProtect ([#124](https://github.com/advoq/civm/issues/124)) ([b985032](https://github.com/advoq/civm/commit/b98503270d073d2c761516c10fab3e7d0cfd837c))
+
 ## [1.18.3](https://github.com/advoq/civm/compare/v1.18.2...v1.18.3) (2026-06-15)
 
 
