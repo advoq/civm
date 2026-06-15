@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.3](https://github.com/advoq/civm/compare/v1.18.2...v1.18.3) (2026-06-15)
+
+
+### Bug Fixes
+
+* **reclaim:** guarantee host V: reclaim liveness (phantom + guest-prune) ([#122](https://github.com/advoq/civm/issues/122)) ([27fae9c](https://github.com/advoq/civm/commit/27fae9c70116e651147dec9a2a31cf1568b870df))
+
 ## [1.18.2](https://github.com/advoq/civm/compare/v1.18.1...v1.18.2) (2026-06-14)
 
 
