@@ -18,7 +18,7 @@ issues: [106, 113]
 > `M internal/civm/civm.go`, `M internal/civm/reclaim_test.go`) que já alterou o
 > estado descrito abaixo como "problema atual":
 > - O gate de emergência **já é de duas fases** em `autoreclaim.ps1` e
->   `DefaultHostVolumeScratchBudgetGB` **já é 11** (`civm.go:93`, era 0). Logo, a
+>   `DefaultHostVolumeScratchBudgetGB` **já é 11** (`civm.go:93`, era 0). A
 >   "espiral de morte" do §Resumo e a citação do gate único
 >   (`autoreclaim.ps1:252-260,262`) refletem o **HEAD pré-IMPL**, não o working
 >   tree. O evento `autoreclaim_abort_insufficient_slack` (linha 262) foi removido.
@@ -29,32 +29,31 @@ issues: [106, 113]
 >   `optimize.ps1` (não instrumentado); veio de log do host + um `vmrs_release`
 >   único (8.02GB). O critério "5 medições anexadas" **não está cumprido**.
 > - RF-3 (`HeavyMaxMB`, #113) **não** foi implementado (`civm.go:132` = 0).
-> Ver o SPEC §Reconciliação para a lista completa e a ação de Passo 2.5.
+> Ver SPEC §Reconciliação para a lista completa e a ação de Passo 2.5.
 
 ## Resumo
 
 O runner self-hosted do `civm` (VM Linux `gha-ubuntu-2404` sob Hyper-V, host
-Windows, VHDX dinâmico em `V:` de ~119 GB) **enche o disco do host e exige que o
-operador apague coisas à mão**. A causa não é um bug isolado: é uma **espiral de
-morte por headroom** mais um conjunto de mecanismos de auto-cura **escritos mas
-não habilitados/instalados**.
+Windows, VHDX dinâmico em `V:` de ~119 GB) **enche o disco do host e exige
+exclusão manual**. A causa não é um bug isolado: é uma **espiral de morte por
+headroom** mais mecanismos de auto-cura **escritos mas não
+habilitados/instalados**.
 
 - O VHDX cresce ~11 GB por run de CI; o `Optimize-VHD` offline recupera ~11 GB
-  por evento — mas o gate de emergência que dispara o reclaim quando `V:` está
-  baixo está **desabilitado** (`DefaultHostVolumeScratchBudgetGB = 0`, issue
-  **#106**). Resultado: quando `V:` cruza 8 GB, **todo reclaimer aborta** com
+  por evento — mas o gate de emergência que dispara o reclaim com `V:` baixo está
+  **desabilitado** (`DefaultHostVolumeScratchBudgetGB = 0`, issue **#106**).
+  Quando `V:` cruza 8 GB, **todo reclaimer aborta** com
   `autoreclaim_abort_headroom` / `emergency_disabled_no_budget` (exit 2) e o
   espaço fica preso em ~6.6 GB livres. (`Observação operacional (auditoria)`;
   `Confirmado no codebase`: `deploy/windows/civm-vhdx-autoreclaim.ps1:50,252-260`)
 - Pior: o gate decide sobre `beforeFreeGB` **pré-`Stop-VM`**, que **não
-  contabiliza** os ~8 GB de estado da VM (VMRS) que só são liberados **quando a
-  VM vai a Off**. Logo, a folga real disponível para o `Optimize` é
-  sistematicamente subestimada — e o caminho de emergência se recusa a rodar mesmo
-  quando, depois do `Stop-VM`, haveria folga de sobra.
-  (`Confirmado no codebase`: `civm-vhdx-autoreclaim.ps1:237,262`)
+  contabiliza** os ~8 GB de estado da VM (VMRS) liberados só **quando a VM vai a
+  Off**. A folga real para o `Optimize` é sistematicamente subestimada — a
+  emergência se recusa a rodar mesmo quando, pós-`Stop-VM`, haveria folga de
+  sobra. (`Confirmado no codebase`: `civm-vhdx-autoreclaim.ps1:237,262`)
 - A limpeza do guest roda, mas `fstrim -av` retorna `FITRIM ioctl: Operation not
-  permitted` no controlador atual (UNMAP não propagado), então o discard não
-  flui e o VHDX não encolhe online. (`Observação operacional (auditoria)`)
+  permitted` no controlador atual (UNMAP não propagado): o discard não flui e o
+  VHDX não encolhe online. (`Observação operacional (auditoria)`)
 - As 3 Scheduled Tasks do host (`civm-host-metrics`, `civm-vhdx-optimize`,
   `civm-vhdx-autoreclaim`) **existem em `deploy/windows/` mas nunca foram
   registradas** no host; `host-metrics.json` está ausente e `civmctl host-disk`
@@ -62,10 +61,10 @@ não habilitados/instalados**.
   codebase`: scripts presentes, sem automação de registro)
 
 **Valor operacional:** o objetivo único e literal deste PRD é **"nunca mais
-apagar nada à mão"**. Isso exige fechar a espiral (#106), calibrar a admissão de
-memória que abre a janela de compactação (#113), garantir que a limpeza do guest
-seja auto-sustentável, cancelar runs órfãs que travam a fila, e aplicar patches
-de OS sem quebrar reprodutibilidade — tudo com gates fail-closed e auditável.
+apagar nada à mão"**. Exige fechar a espiral (#106), calibrar a admissão de
+memória que abre a janela de compactação (#113), garantir limpeza do guest
+auto-sustentável, cancelar runs órfãs que travam a fila, e aplicar patches de OS
+sem quebrar reprodutibilidade — tudo com gates fail-closed e auditável.
 
 ## Contexto técnico
 
@@ -104,18 +103,18 @@ SPECv2), `civm-disk-watchdog-busy-cleanup` (SPEC issue #70),
 `runner-memory-admission` (SPECv4 DT-v4-1..7 + "Pós-merge" HeavyMaxMB),
 `multi-project-isolation`.
 
-**Sendo proposto (novo neste PRD):** (N1) campanha de medição que liga o gate de
+**Proposto (novo neste PRD):** (N1) campanha de medição que liga o gate de
 emergência; (N2) **re-medição autoritativa pós-`Stop-VM` no autoreclaim** — o fix
-do VMRS que efetivamente quebra a espiral; (N3) calibração de `HeavyMaxMB`; (N4)
+do VMRS que quebra a espiral; (N3) calibração de `HeavyMaxMB`; (N4)
 classificação de HTTP 409 no reaper; (N5) saúde do `fstrim` exposta na admissão;
 (N6) gate Day-0 de registro das tasks + sudoers/tmpfiles no box; (N7) política de
 OS patching security-only; (N8) runbook consolidado.
 
 ## Opção recomendada
 
-**Solução escolhida:** um pacote único "runner auto-limpante" em 5 camadas, com
-o **fix do VMRS por re-medição direta** como decisão central, reusando ao máximo
-o que já está implementado e habilitando o que está dormente.
+**Solução escolhida:** pacote único "runner auto-limpante" em 5 camadas, com o
+**fix do VMRS por re-medição direta** como decisão central, reusando ao máximo o
+implementado e habilitando o dormente.
 
 1. **Host reclaim self-healing (fecha #106).**
    - **N1 — medir primeiro (executa SPECv3 DT-v3-2).** Rodar ≥5 ciclos
@@ -139,27 +138,27 @@ o que já está implementado e habilitando o que está dormente.
        `autoreclaim_abort_post_stop_insufficient_slack`, **pula o Optimize** e o
        `finally` religa a VM (sem dano: paramos e religamos, nada foi compactado).
    - **Por que N2 é o fix real:** a folga que importa para o `Optimize` é a que
-     existe **no instante do `Optimize`**, depois do `Stop-VM` ter liberado o
-     VMRS. Medir esse número diretamente (em vez de usar o `beforeFreeGB`
-     pré-stop, que subestima por ~8 GB) é o que permite a emergência rodar a 6.6
-     GB e sair da espiral, **sem adivinhar o VMRS** e **sem abortar um Optimize
-     ininterruptível no meio**.
+     existe **no instante do `Optimize`**, depois do `Stop-VM` liberar o VMRS.
+     Medir esse número diretamente (em vez do `beforeFreeGB` pré-stop, que
+     subestima por ~8 GB) permite a emergência rodar a 6.6 GB e sair da espiral,
+     **sem adivinhar o VMRS** e **sem abortar um Optimize ininterruptível no
+     meio**.
 
 2. **Cleanup guest auto-sustentável.** Reusa `hook.go`/`cleanup.go` (prune
    dangling-only, buildx `until=24h`, apt clean+autoremove idle-gated, journal
    vacuum, `system prune -af --volumes` idle-gated, `safedelete` para root-owned).
    **N5:** detectar `fstrim` inefetivo (FITRIM ioctl falha) e expô-lo em
-   `civmctl host-disk`/`doctor` como `level=warn` (não erro), porque um discard
-   morto significa que o reclaim depende 100% do `Optimize` offline — o operador
-   e o autoreclaim precisam saber. **Ressalva sobre imagens warm:** só o prune do
+   `civmctl host-disk`/`doctor` como `level=warn` (não erro): discard morto
+   significa que o reclaim depende 100% do `Optimize` offline — operador e
+   autoreclaim precisam saber. **Ressalva sobre imagens warm:** só o prune do
    *hook* job-completed é dangling-only (`hook.go:240-243`, `-f` sem `-a`,
    preserva todas as imagens tagueadas). O *cron* `civmctl cleanup --execute`
    (`DockerPrune` default `true`, `cleanup.go:119`) roda `docker system prune -af
    --volumes` (`cleanup.go:425`) no ramo idle — `-a` remove imagens **tagueadas
-   não-usadas**, e quando o box está idle (gate do próprio cron) as bases não têm
-   container vivo → são apagadas, recriando o cold-build no próximo job. Isso é um
-   trade-off deliberado do código atual (reclamar disco no idle), não "warm por
-   construção"; ver §Fora de escopo para a decisão sobre proteção de bases.
+   não-usadas**, e no idle (gate do cron) as bases não têm container vivo → são
+   apagadas, recriando o cold-build no próximo job. Trade-off deliberado do código
+   atual (reclamar disco no idle), não "warm por construção"; ver §Fora de escopo
+   para a decisão sobre proteção de bases.
 
 3. **Admissão/idle coordenando a janela de compactação (relaciona #113).** Reusa
    `civmctl admit` + `memwatchdog` + `idle-check`. **N3:** calibrar
@@ -185,17 +184,16 @@ provisionar `/run/civm` no box. Sem isso, **nenhuma** das camadas de host opera.
 **Alternativas descartadas:**
 
 - *"Opção conservadora: não mexer no gate do autoreclaim; só setar
-  `ScratchBudget>0`" (proposta de uma das perspectivas da auditoria).* Descartada
+  `ScratchBudget>0`" (proposta de uma perspectiva da auditoria).* Descartada
   porque **não quebra a espiral**: a 6.6 GB livres, `6.6 − 1 = 5.6 < 11` → o gate
-  pré-stop ainda aborta. Setar o budget sem corrigir o predito de folga apenas
-  troca `emergency_disabled_no_budget` por `abort_insufficient_slack` — mesmo
-  deadlock, mensagem diferente. (`Confirmado no codebase`:
-  `civm-vhdx-autoreclaim.ps1:262`)
+  pré-stop ainda aborta. Setar o budget sem corrigir o predito de folga só troca
+  `emergency_disabled_no_budget` por `abort_insufficient_slack` — mesmo deadlock,
+  mensagem diferente. (`Confirmado no codebase`: `civm-vhdx-autoreclaim.ps1:262`)
 - *Estimar "+8 GB de VMRS" e somar a `beforeFreeGB` pré-flight.* Descartada:
   estimar é adivinhar (Kahneman #3). Se num run o VMRS liberar menos, o predito
-  superestima e o `Optimize` pode cruzar o `HardFloor` e zerar `V:` (exatamente o
-  worst-case que o SPECv3 #5 proíbe). A re-medição direta (N2) observa o número
-  real e é fail-closed.
+  superestima e o `Optimize` pode cruzar o `HardFloor` e zerar `V:` (o worst-case
+  que o SPECv3 #5 proíbe). A re-medição direta (N2) observa o número real e é
+  fail-closed.
 - *Baixar o `HeadroomGB` de 8 para um valor menor.* Descartada (SPECv3 Finding 5):
   só **realoca** o deadlock para um piso menor.
 - *SCSI+discard online como mecanismo primário.* Mantido como fallback
@@ -204,7 +202,7 @@ provisionar `/run/civm` no box. Sem isso, **nenhuma** das camadas de host opera.
   `1 MB BlockSize + Optimize offline`. (`Confirmado em docs`:
   host-volume-reclamation PRD §descartadas; `Observação operacional (auditoria)`)
 - *VHDX de tamanho fixo / expandir `V:`.* Mitigação estrutural (RF-6 da spec
-  vizinha), não solução de auto-cura.
+  vizinha), não auto-cura.
 
 **Trade-offs aceitos:** (a) Fase 1 do gate N2 pode, em casos raros, `Stop-VM` e
 depois recusar o `Optimize` (Fase 2), gastando um ciclo de parada/religação — mas
@@ -317,14 +315,14 @@ de medição (N1/N3) exige janela supervisionada antes de habilitar os gates.
   `registry-mirrors=["http://127.0.0.1:5000"]` substituindo `mirror.gcr.io` — que só
   espelha `library/` e deixa `minio/`, `clamav/`, `evoapicloud/` baterem direto no
   Docker Hub → rate limit anônimo (100/6h/IP) → `compose up --build` falha com
-  "No such image" de largada (sintoma observado no `tenant-isolation-smoke` de #1092).
+  "No such image" de largada (sintoma no `tenant-isolation-smoke` de #1092).
   O cache serve QUALQUER namespace localmente após a 1ª pull; um warm set (tags
   exatas do `image:` do compose + bases dos `FROM` dos Dockerfiles) pré-popula. Auth
   upstream opcional (`DOCKERHUB_USER`/`DOCKERHUB_TOKEN`) levanta o limite no warm.
   - *Critério:* `docker info` lista o mirror local; após o warm, `compose up --build`
     no runner não puxa do Docker Hub (0 hits) e não falha por "No such image"; o cache
     sobrevive a `docker prune` (volume nomeado + container running + imagem tagged em
-    uso — consistente com `hook.go cleanup`, que já só poda DANGLING pelo mesmo motivo).
+    uso — consistente com `hook.go cleanup`, que só poda DANGLING pelo mesmo motivo).
   - `Confirmado no codebase` (`internal/hook/hook.go:228-243` evita `image prune -a`
     exatamente para não apagar `redis/minio/alpine/clamav/postgres` sob um job;
     `deploy/bin/setup-registry-cache.sh` implementa cache+mirror+warm) ·
@@ -353,7 +351,7 @@ de medição (N1/N3) exige janela supervisionada antes de habilitar os gates.
   `Optimize` pendura/erra → `finally` Start-VM 3× (`autoreclaim.ps1:372-402`); VM
   ocupada → idle-check N=2 + rate-limit; controlador sem UNMAP → fallback offline
   primário; `fstrim` morto → exposto, não mascarado; reaper 409 → benigno; patch
-  de OS → blacklist de toolchain. (`Confirmado no codebase`/`Confirmado em docs`)
+  de OS → blacklist de toolchain. (`Confirmado no codebase` / `Confirmado em docs`)
 
 ## Fluxos
 
@@ -533,10 +531,9 @@ supervisionada: Slices 1, 2, 3. Reversível por task disable: Slice 2.
   (`cleanup.go:425`, `DockerPrune` default `true`) **apaga** bases tagueadas
   não-usadas. Tratar o cold-build resultante (allowlist de bases, ou trocar o
   ramo idle para dangling-only + builder prune como o ramo host-busy
-  `dockerPruneSafe`, `cleanup.go:444-459`) é trabalho real de auto-cura, deixado
-  como follow-up explícito — não "otimização marginal". Day-0: aceitamos o
-  cold-build ocasional como custo do reclaim agressivo no idle. (`Confirmado no
-  codebase`)
+  `dockerPruneSafe`, `cleanup.go:444-459`) é auto-cura real, deixada como
+  follow-up explícito — não "otimização marginal". Day-0: aceitamos o cold-build
+  ocasional como custo do reclaim agressivo no idle. (`Confirmado no codebase`)
 - **`civmctl cache-gc` (SPECv3 DT-v3-7).** Slice própria; depende de DT-v3-1..6.
 - **SCSI re-attach como primário / `Convert-VHD -BlockSizeBytes 1MB` one-time.**
   Pertence a `host-volume-reclamation` (RF-2/RF-6); aqui só consumimos o resultado

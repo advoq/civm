@@ -1,20 +1,18 @@
 # Runbook — civm como runner self-hosted compartilhado entre projetos
 
-> **Quando usar:** múltiplos repositórios do mesmo operador precisam
-> rodar CI em paralelo no mesmo runner self-hosted `civm`, sem conflito
-> de portas, volumes Docker, work directories ou crosstalk de dados.
+> **Quando usar:** múltiplos repositórios do mesmo operador rodam CI em
+> paralelo no mesmo runner self-hosted `civm`, sem conflito de portas,
+> volumes Docker, work directories ou crosstalk de dados.
 >
 > **Modelo conceitual (importante):** civm e' **mirror visivel no
 > GitHub**, nao gate alternativo de validacao. O gate de verdade do
 > projeto e' o gate local do peer (ex.: `make ci`, `npm test`,
-> `go test ./...` ou comando equivalente) que cada dev roda no laptop
-> ANTES de push (ver [`LOCAL-CI-DISCIPLINE.md`](./LOCAL-CI-DISCIPLINE.md) §"Modelo conceitual").
-> Este runner self-hosted existe pra postar checkmark verde no PR sem
-> custo de Actions minutes — a validacao real ja aconteceu antes do
-> push, em cada laptop.
->
-> Aplica-se identicamente a qualquer peer repo: dev valida local primeiro,
-> depois push, depois civm posta verde.
+> `go test ./...` ou equivalente) que cada dev roda no laptop ANTES de
+> push (ver [`LOCAL-CI-DISCIPLINE.md`](./LOCAL-CI-DISCIPLINE.md) §"Modelo conceitual").
+> Este runner existe pra postar checkmark verde no PR sem custo de
+> Actions minutes — a validacao real ja aconteceu antes do push, em cada
+> laptop. Aplica-se identicamente a qualquer peer repo: dev valida local,
+> push, civm posta verde.
 >
 > **Companion runbooks:**
 > - [`CI-BILLING-FALLBACK.md`](./CI-BILLING-FALLBACK.md) — Camada 1+2 do
@@ -49,8 +47,7 @@
 ```
 
 GitHub auto-distribui jobs entre runners disponíveis. Com N=3 runners, até
-3 jobs simultâneos (distribuídos entre os 3 repos). Sobrando demanda, jobs
-ficam em queue até runner liberar.
+3 jobs simultâneos. Sobrando demanda, jobs ficam em queue até runner liberar.
 
 **Dimensionamento:** começar com N = número de repos ativos. Escalar se o
 gate requerido do peer ficar consistentemente em queue >2 minutos.
@@ -96,7 +93,7 @@ gh api /repos/<owner>/<repo>/actions/runners --jq '.runners[]|"\(.name) \(.statu
 
 ### Runner persistente com workspace limpo por job
 
-O modelo atual é runner persistente por repo. O isolamento vem do workspace
+Modelo atual: runner persistente por repo. Isolamento vem do workspace
 per-job e do cleanup operacional, não de runner efêmero/JIT:
 
 - `GITHUB_WORKSPACE` unico per-job (delete + recreate entre jobs)
@@ -107,7 +104,7 @@ per-job e do cleanup operacional, não de runner efêmero/JIT:
   mutar se houver job/build ativo; o timer padrão não faz rerun automático
 - Multiplos runners da mesma VM tem `--work _work` separado por runner
 
-Resultado: cada job comeca do zero, sem crosstalk.
+Cada job comeca do zero, sem crosstalk.
 
 ### Rollback de runner peer (1 comando)
 
@@ -122,7 +119,7 @@ diretorio. Token mascarado nos logs.
 
 ### Remover runner legacy offline (manual)
 
-`civmctl doctor` apenas reporta runners legacy/stale; ele nunca apaga
+`civmctl doctor` apenas reporta runners legacy/stale; nunca apaga
 registro GitHub automaticamente. Depois de confirmar que o runner offline
 nao e mais usado:
 
@@ -148,8 +145,8 @@ billing-block continuar derrubando jobs em <10s).
 ## Setup zero-effort (recomendado): civmctl bootstrap
 
 A partir de 2026-05-10, **provisionamento e cleanup são automatizados** via
-`civmctl` (Go binary do proprio repo civm). Specs ficam travadas em
-`internal/specs/specs.go` e seguem `actions/runner-images` Ubuntu2404-Readme.md.
+`civmctl` (Go binary do proprio repo civm). Specs travadas em
+`internal/specs/specs.go`, seguindo `actions/runner-images` Ubuntu2404-Readme.md.
 
 ```bash
 # Numa VM Ubuntu 24.04 LTS limpa, como root:
@@ -185,8 +182,8 @@ civmctl disk-audit --json
 ### Atualizar civmctl em runner existente
 
 Depois do bootstrap inicial, novas versões do binário entram via
-`civmctl self-upgrade` (a partir de v1.4.0). Roteiro padrão de
-deploy quando um PR de interesse merge em `main`:
+`civmctl self-upgrade` (a partir de v1.4.0). Deploy quando um PR de
+interesse merge em `main`:
 
 ```bash
 # Na VM do runner, como qualquer usuario com sudo:
@@ -197,10 +194,9 @@ sudo civmctl self-upgrade --execute
 O subcomando builda em `/usr/local/bin/.civmctl.new`, valida via
 `--help`, e faz `os.Rename` atomico para `/usr/local/bin/civmctl`.
 Em qualquer falha (build, verify, rename) o binario existente fica
-intacto e o temp e' removido — seguro pra rodar mesmo sem manutencao.
+intacto e o temp e' removido — seguro pra rodar sem manutencao.
 
-Dry-run primeiro (default) imprime tamanho do binario atual e
-confirma `source_dir`:
+Dry-run (default) imprime tamanho do binario atual e confirma `source_dir`:
 
 ```bash
 sudo civmctl self-upgrade
@@ -216,11 +212,11 @@ sudo civmctl self-upgrade --execute --json
 
 Re-instalacao de hooks **nao** e' necessaria: os scripts
 `/opt/civm/hooks/job-{started,completed}.sh` continuam invocando
-`/usr/local/bin/civmctl` (que acaba de ser substituido in-place).
+`/usr/local/bin/civmctl` (substituido in-place).
 
 `health`/`doctor` podem retornar warning `LAST cleanup timer nunca rodou`
-até o primeiro disparo real do `civmctl-cleanup.timer` (04:00 UTC). Isso
-é aceitável apenas até passar a próxima janela diária esperada; depois
+até o primeiro disparo real do `civmctl-cleanup.timer` (04:00 UTC).
+Aceitável apenas até passar a próxima janela diária esperada; depois
 vira ação operacional para checar `systemctl list-timers`, journal da
 unit `civmctl-cleanup.service` e o estado do timer na VM.
 
@@ -274,14 +270,14 @@ civmctl runner watchdog --repos=auto --json
 sudo civmctl runner watchdog --execute --repos=owner/repo --rerun-network-failures --max-run-age=6h
 ```
 
-O serviço systemd roda a cada ~2min depois do boot. Ele primeiro testa
-conectividade com GitHub. Se a rede ainda estiver fora, sai `1` com evento
-`network-down` e não muta nada. Quando a rede volta, ele exige host idle,
+O serviço systemd roda a cada ~2min depois do boot. Primeiro testa
+conectividade com GitHub. Se a rede estiver fora, sai `1` com evento
+`network-down` e não muta nada. Quando a rede volta, exige host idle,
 reconcilia hooks e reinicia units `actions.runner.*` offline/failed. O timer
 padrão usa `civmctl runner watchdog --execute --repos=auto --json`; não passa
 `--rerun-network-failures`. Em `--repos=auto`, o watchdog tenta ler o
 `.runner` do diretório real do service para preservar owners/repos com hífen;
-se isso falhar, usa o parser legado do unit name.
+se falhar, usa o parser legado do unit name.
 
 Rerun automático é opt-in. Quando alguém roda manualmente ou instala um
 drop-in com `--rerun-network-failures --max-run-age=6h`, o watchdog confirma
@@ -332,7 +328,7 @@ Nesses casos, ver "## Setup operacional (manual)" abaixo.
 
 ### 1. Provisionar a VM
 
-O caminho suportado é o bootstrap idempotente. Ele baixa artefatos root com
+O caminho suportado é o bootstrap idempotente. Baixa artefatos root com
 SHA256/fingerprint pinado no código antes de instalar:
 
 ```bash
@@ -361,7 +357,7 @@ configura `config.sh`, instala `svc.sh` e mascara o token nos logs.
 
 **Alternativa org-level:** se os 3 repos estão sob a mesma org, registrar runner
 no nível da org (Settings > Actions > Runners da organização). 1 runner serve
-os 3 repos sem precisar registrar 3 vezes. Recomendado se for o caso.
+os 3 repos sem registrar 3 vezes. Recomendado se for o caso.
 
 ### 3. Verificar online
 
@@ -397,7 +393,7 @@ Containers não conflitam por isolamento Linux, **mas networks e named
 volumes podem colidir** se múltiplos repos usarem o mesmo `--project-name`.
 
 **Regra:** sempre passar `--project-name <repo>-<run-id>` em qualquer
-`docker compose` invocado em CI:
+`docker compose` em CI:
 
 ```bash
 docker compose --project-name "${GITHUB_REPOSITORY##*/}-${GITHUB_RUN_ID}" up -d
@@ -434,7 +430,7 @@ gera path único) ou dentro de `${{ runner.temp }}`.
 ### 4. Disk pressure (CRITICO em VM 128GB)
 
 VM tipica: 128GB SSD. Com 3+ repos peer rodando CI continuamente, sem
-limpeza automatica o disco enche em semanas. Budget pratico:
+limpeza automatica o disco enche em semanas. Budget:
 
 | Item | Tamanho tipico | Notas |
 |---|---|---|
@@ -504,8 +500,7 @@ compartilhados" item 2.
 ### Lock docker-heavy — `civmctl lock --exec --scope docker-heavy`
 
 Um único lock global em `/run/civm/docker-heavy.lock` serializa todo
-trabalho docker-heavy entre runners do mesmo daemon. Embrulhe o trabalho
-docker-heavy assim:
+trabalho docker-heavy entre runners do mesmo daemon. Embrulhe assim:
 
 ```bash
 civmctl lock --exec --scope docker-heavy --budget 50m --wait 75m -- make up-local
@@ -554,8 +549,8 @@ HOLD só marca `over_budget`.
 ### ci-guard — `civmctl ci-guard`
 
 Lint do compose/workflow do peer contra os invariantes de isolamento
-(civm SPECv2 ITEM-5 override / DT-v2-9/14). Disciplina única:
-**#5 Availability heuristic**.
+(civm SPECv2 ITEM-5 override / DT-v2-9/14). Disciplina única: **#5
+Availability heuristic**.
 
 ```bash
 civmctl ci-guard --repo-root . --mode report --json
@@ -612,7 +607,7 @@ ubuntu-latest, instalar:
 
 ### Toolchains de linguagem
 
-Preferir `sudo civmctl bootstrap --execute`. Ele instala Go, Node, Python,
+Preferir `sudo civmctl bootstrap --execute`. Instala Go, Node, Python,
 Docker, gh e yq conforme `civmctl version-pins`, com checksum/fingerprint
 pinado quando há download fora do apt.
 
@@ -669,8 +664,8 @@ civmctl parity --json
 ```
 
 `civmctl parity` retorna `0` quando todas as ferramentas instaladas estao
-em paridade aceitavel com os pins, `1` quando alguma ferramenta esta ausente
-ou atrasada. `ahead` cobre ferramenta local mais nova; `compatible` cobre
+em paridade aceitavel com os pins, `1` quando alguma esta ausente ou
+atrasada. `ahead` cobre ferramenta local mais nova; `compatible` cobre
 familia operacional equivalente para ferramentas providas pelo Ubuntu base
 (ex.: Python 3.12.x e Git 2.x).
 
@@ -680,9 +675,9 @@ Sem automacao, disco enche em ~30 dias com 3 repos ativos. Setup:
 
 ### Limpeza diaria legada via cron
 
-Preferir systemd + `civmctl cleanup --execute`. O script manual abaixo fica
-como referência legada para VM sem civmctl e **não deve ser usado em VM
-ativa com runners online**, porque não tem o guard completo de
+Preferir systemd + `civmctl cleanup --execute`. O script manual abaixo é
+referência legada para VM sem civmctl e **não deve ser usado em VM ativa
+com runners online**, porque não tem o guard completo de
 `Runner.Worker`/`_work`.
 
 ```bash
@@ -785,8 +780,8 @@ grep "after cleanup" -A1 /var/log/civm-cleanup.log | tail -20
 ```
 
 Se disco continua subindo apesar da automacao, investigar quem esta
-escrevendo fora do workspace (job mal-comportado violando regra
-"Filesystem fora do workspace").
+escrevendo fora do workspace (job mal-comportado violando "Filesystem
+fora do workspace").
 
 ### Rollback trigger (disk hygiene)
 
@@ -796,7 +791,7 @@ Se em 30 dias o disco passar de 90% mais de 3 vezes, escalar:
 2. Adicionar 2o disco (ou expandir VM se cloud)
 3. Migrar caches grandes para volume separado
 4. Reavaliar a topologia de runner persistente por repo antes de considerar
-   JIT/efemero; isso exige novo desenho de registro e segurança
+   JIT/efemero; exige novo desenho de registro e segurança
 
 ### Limpar caches antigos manualmente (interativo)
 
@@ -809,7 +804,7 @@ find /home/*/actions-runner-*/_work/_temp -mtime +7 -delete
 ## Como vitae e advoq adotam o padrão router <!-- invariant-waive:#11 -- secao operacional descreve adocao por repos peer -->
 
 O `.github/workflows/ci.yml` do advoq é o template de referência.
-Estrutura mínima a copiar:
+Estrutura mínima:
 
 1. Job `ci-router` em `runs-on: [self-hosted, civm]` que classifica
    changes + decide `use_local` via heurística.
@@ -829,18 +824,17 @@ Para o detector heurístico, vitae/advoq podem escolher entre 3 tiers <!-- invar
   quando a VM ainda nao tiver `/usr/local/bin/civmctl`. Evita acoplar
   peers a ferramentas de outro projeto.
 - **Tier 3 — optimistic-retry pattern (zero-auth, self-healing):** adotar
-  `docs/templates/ci-optimistic.yml.template` que **não usa detector**.
+  `docs/templates/ci-optimistic.yml.template`, que **não usa detector**.
   Sempre tenta `ubuntu-latest` primeiro com `continue-on-error: true`;
   se falhar (incluindo billing block que mata o job em <10s sem step
-  rodar), automaticamente dispara versão local em `civm`. Aggregator
-  passa se ANY um dos dois roteamentos completou success. Pros: zero
-  detection logic, zero auth, self-healing. Cons: ~5-30s de billing
-  consumido por run quando ubuntu-latest morre rapido (custo baixo na
-  pratica).
+  rodar), dispara versão local em `civm`. Aggregator passa se ANY um dos
+  dois roteamentos completou success. Pros: zero detection logic, zero
+  auth, self-healing. Cons: ~5-30s de billing consumido por run quando
+  ubuntu-latest morre rapido (custo baixo na pratica).
 
 Tiers 1 e 2 funcionam com `GITHUB_TOKEN` padrão do workflow — sem PAT
 extra. Tier 3 é o único que funciona mesmo se o token estiver indisponível
-(quase nunca acontece em workflow context, mas é uma fallback final).
+(quase nunca acontece em workflow context, mas é fallback final).
 
 ## Checklist de adoção (por repo)
 
@@ -919,8 +913,8 @@ Cada caso reabre este runbook + atualiza secão Capacity planning.
 ## Hooks de job e contrato de integração
 
 Numa VM multi-projeto compartilhada por repos de organização e pessoais, o
-modelo padrão continua sendo runners persistentes por repo. O host deve se
-comportar como worker gerenciado: limpar fronteiras de job sem destruir
+modelo padrão continua sendo runners persistentes por repo. O host se
+comporta como worker gerenciado: limpar fronteiras de job sem destruir
 caches quentes de runner.
 
 Instale ou reconcilie a política de hooks com:
@@ -931,9 +925,8 @@ sudo civmctl hook install --execute
 
 Estado alvo: o comando cria dois scripts executaveis em `/opt/civm/hooks`
 que invocam o binário canônico e atualiza cada
-`/home/*/actions-runner*/.env`. O GitHub Actions runner exige que o path do
-hook termine em `.sh`, `.ps1` ou `.js`; por isso os scripts têm sufixo
-`.sh`:
+`/home/*/actions-runner*/.env`. O GitHub Actions runner exige path do hook
+terminando em `.sh`, `.ps1` ou `.js`; por isso os scripts têm sufixo `.sh`:
 
 ```bash
 ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/civm/hooks/job-started.sh
@@ -942,9 +935,8 @@ ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh
 
 Cada script executa `civmctl hook job-started|completed --execute`. A
 política fica em Go dentro de `internal/hook`; o shell script gerenciado é
-apenas o adaptador exigido pelo runner para paths `.sh`. Symlinks `.sh`
-legados de instalações anteriores são substituídos por esses scripts
-gerenciados.
+só o adaptador exigido pelo runner para paths `.sh`. Symlinks `.sh` legados
+de instalações anteriores são substituídos por esses scripts gerenciados.
 
 Para VMs cujo layout não usa `/home/*/actions-runner*`, não edite código nem
 crie script local. Passe o layout como flag:
@@ -1037,8 +1029,8 @@ civmctl disk-audit --json
 
 `capacity --json` is the lightweight readiness endpoint. It reports disk
 pressure, active runner services, active `Runner.Worker` count, and an
-`accepting_jobs` boolean suitable for dashboards, orchestration, or guarded
-commands in Busson.
+`accepting_jobs` boolean for dashboards, orchestration, or guarded commands
+in Busson.
 
 `disk-audit --json` is the read-only ownership endpoint. It reports the safe
 roots that explain most disk growth on the VM: runner `_work`,

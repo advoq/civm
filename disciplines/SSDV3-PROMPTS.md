@@ -1,14 +1,14 @@
 # SSDV3 — Spec-Driven Development: Prompts Base
 
-> **Metodologia civm-native (PRD → SPEC → IMPL).** Os prompts abaixo são os do próprio `civm` — repo **Go de infra** (Go 1.26 stdlib-first, `cmd/civmctl/` + `internal/**`, mais a camada host PowerShell em `deploy/windows/*.ps1` que dirige a VM/VHDX Hyper-V). Sem frontend, sem HTTP API, sem multi-tenant, sem banco. O pipeline em si (PRD → SPEC → Passo 2.5 Red-Team → SPECv2/SPECv3) é independente de stack; um peer repo que o adote troca o exemplo e os gates pelos seus.
+> **Metodologia civm-native (PRD → SPEC → IMPL).** Os prompts abaixo são os do próprio `civm` — repo **Go de infra** (Go 1.26 stdlib-first, `cmd/civmctl/` + `internal/**`, mais a camada host PowerShell em `deploy/windows/*.ps1` que dirige a VM/VHDX Hyper-V). Sem frontend, sem HTTP API, sem multi-tenant, sem banco. O pipeline (PRD → SPEC → Passo 2.5 Red-Team → SPECv2/SPECv3) é independente de stack; um peer repo que o adote troca o exemplo e os gates pelos seus.
 
 Metodologia em 3 passos: **PRD → SPEC → IMPL**
 
-Exemplo trabalhado usado ao longo deste doc: o redesign de reclaim do `civm` (`docs/specs/host-volume-reclamation/`, slug do exemplo: `host-reclaim-admission-gate`). É um caso SSDV3 real — um **deadlock de headroom** (quando `V: < 8 GB` todo reclaimer aborta, então um disco cheio não consegue rodar a própria limpeza) que virou PRD → SPEC; o SPEC levou **no-go** no red-team (`Stop-Job` NÃO aborta `Optimize-VHD`; a evidência N=1 nunca mediu scratch) e foi reescrito em SPECv3 (medir-primeiro, optimize ininterruptível, lock canônico). Veja a história inteira nas snippets ao longo deste arquivo.
+Exemplo trabalhado ao longo deste doc: o redesign de reclaim do `civm` (`docs/specs/host-volume-reclamation/`, slug: `host-reclaim-admission-gate`). Caso SSDV3 real — um **deadlock de headroom** (quando `V: < 8 GB` todo reclaimer aborta, então um disco cheio não consegue rodar a própria limpeza) que virou PRD → SPEC; o SPEC levou **no-go** no red-team (`Stop-Job` NÃO aborta `Optimize-VHD`; a evidência N=1 nunca mediu scratch) e foi reescrito em SPECv3 (medir-primeiro, optimize ininterruptível, lock canônico). História completa nas snippets ao longo deste arquivo.
 
 Objetivo desta versão:
 
-- preservar a fase de descoberta útil antes de decidir
+- preservar a descoberta útil antes de decidir
 - reduzir ambiguidade entre fatos do repo e propostas
 - produzir PRD e SPEC mais executáveis
 - melhorar a passagem do PRD para o SPEC e do SPEC para a implementação
@@ -16,10 +16,10 @@ Objetivo desta versão:
 
 ## Como usar
 
-1. Use o **Passo 1** para gerar `docs/specs/{feature-slug}/PRD.md`
-2. Use o **Passo 2** para transformar o PRD em `docs/specs/{feature-slug}/SPEC.md`
-3. Use o **Passo 2.5** quando houver risco estrutural, operacional ou de segurança (no `civm`: mexe na VM/VHDX, no contrato de reclaim/cleanup, em subcomando `civmctl` que muta, na superfície de privilégio, ou quebra invariante documentado)
-4. Use o **Passo 3** para implementar estritamente a partir do SPEC
+1. **Passo 1** gera `docs/specs/{feature-slug}/PRD.md`
+2. **Passo 2** transforma o PRD em `docs/specs/{feature-slug}/SPEC.md`
+3. **Passo 2.5** quando houver risco estrutural, operacional ou de segurança (no `civm`: mexe na VM/VHDX, no contrato de reclaim/cleanup, em subcomando `civmctl` que muta, na superfície de privilégio, ou quebra invariante documentado)
+4. **Passo 3** implementa estritamente a partir do SPEC
 
 Se um passo encontrar ambiguidade que pertence ao passo anterior, volte um passo.
 
@@ -34,11 +34,11 @@ SSDV3 é **mandatório** para mudanças em:
 5. **Constantes que gateiam comportamento** em `internal/civm/civm.go` (headroom, faixas de porta, pre-cleanup %, `ScratchBudget`).
 6. **Quebra de invariante documentado** (`disciplines/INVARIANTS.md`): sync rule, anti-skynet, cobertura ≥80%.
 
-Tudo o mais é opcional — para UI/refactor sem mudança de contrato, bugfix localizado, atualização de docs/deps, o pipeline completo é overhead.
+Tudo o mais é opcional — para UI/refactor sem mudança de contrato, bugfix localizado, docs/deps, o pipeline completo é overhead.
 
 ## Organização dos arquivos
 
-**Todos os artefatos SDD (PRD.md, SPEC.md, IMPL.md) devem ser criados dentro de pastas semânticas em `docs/specs/`**, nunca soltos na raiz do repositório.
+**Todos os artefatos SDD (PRD.md, SPEC.md, IMPL.md) devem ficar em pastas semânticas em `docs/specs/`**, nunca soltos na raiz do repositório.
 
 **Convenção de nomes:**
 
@@ -51,13 +51,13 @@ docs/specs/{feature-slug}/
 └── IMPL.md    # registro do que foi feito (commits, arquivos, decisões pequenas, métricas)
 ```
 
-- `{feature-slug}` deve ser kebab-case inglês, curto e descritivo (ex.: `host-reclaim-admission-gate`, `multi-project-isolation`)
-- `SPEC.md` é a primeira versão gerada pelo Passo 2 e deve ser preservada como baseline histórico
-- `SPECv2.md` é a versão melhorada criada pelo Passo 2 quando a auditoria do Passo 2.5 resultar em `no-go`
+- `{feature-slug}`: kebab-case inglês, curto e descritivo (ex.: `host-reclaim-admission-gate`, `multi-project-isolation`)
+- `SPEC.md`: primeira versão gerada pelo Passo 2; preservar como baseline histórico
+- `SPECv2.md`: versão melhorada criada pelo Passo 2 quando a auditoria do Passo 2.5 resultar em `no-go`
 - Não sobrescreva `SPEC.md` para incorporar correções de auditoria; gere `SPECv2.md`, salvo pedido explícito do usuário para edição in-place
 - Se `SPECv2.md` já existir e uma nova auditoria ainda der `no-go`, atualize `SPECv2.md` in-place, salvo pedido explícito do usuário para criar `SPECv3.md` (foi o que aconteceu no caso reclaim: SPECv2 fechou robustez operacional, SPECv3 fechou o deadlock de headroom)
-- Se a feature já tem uma pasta em `docs/specs/`, reutilize-a
-- Se a feature for uma evolução incremental, reutilize a pasta existente ou crie uma subpasta semântica
+- Se a feature já tem pasta em `docs/specs/`, reutilize-a
+- Se for evolução incremental, reutilize a pasta existente ou crie uma subpasta semântica
 
 ## Frontmatter obrigatório no PRD.md
 
@@ -73,18 +73,18 @@ issues: []
 # PRD — Reclamação de volume do host (VHDX): guest-free vira host-free com segurança
 ```
 
-- `slug`: igual ao nome da pasta (`<issue>-<descricao>` para issues, ou `<descricao>` para mudanças sem issue).
+- `slug`: igual ao nome da pasta (`<issue>-<descricao>` para issues, ou `<descricao>` sem issue).
 - `title`: humano, descreve a mudança.
-- `milestone`: identificador (M14, v1.0.0, …). Use `—` se ainda não associada.
-- `issues`: array de números de issue do GitHub (vazio `[]` se não tem).
+- `milestone`: identificador (M14, v1.0.0, …). Use `—` se não associada.
+- `issues`: array de números de issue do GitHub (`[]` se não tem).
 
-O status de um spec é derivado da presença de arquivos: `PRD` → só PRD.md; `SPEC` → SPEC.md (ou SPECv2/SPECv3) também presente; `DONE` → IMPL.md presente.
+Status derivado da presença de arquivos: `PRD` → só PRD.md; `SPEC` → SPEC.md (ou SPECv2/SPECv3) também presente; `DONE` → IMPL.md presente.
 
 ## Referência cognitiva
 
 Quando a mudança envolver risco estrutural, operacional, de segurança, rollout, rollback, migração de estado, concorrência, contrato de reclaim/cleanup, secret, privilégio do host ou isolamento/concorrência (se aplicável), o SPEC deve apontar explicitamente para `disciplines/KAHNEMAN-DISCIPLINES.md`.
 
-O objetivo não é teorizar no documento, mas forçar cada etapa crítica a responder:
+O objetivo não é teorizar, mas forçar cada etapa crítica a responder:
 
 - qual viés está sendo combatido
 - qual pergunta obrigatória de Sistema 2 precisa ser respondida
@@ -93,13 +93,13 @@ O objetivo não é teorizar no documento, mas forçar cada etapa crítica a resp
 
 ## Política Day-0 (sem produção legada obrigatória)
 
-> O `civm` **já roda em produção** (runner self-hosted), mas **não tem dados legados persistidos** que precisem de migração/backfill — o estado é arquivos efêmeros (`/var/lib/civm/*.json`, locks, métricas do host). Logo a política Day-0 se aplica ao **modelo de dados/estado** (sem shim, sem dual-reader, sem backfill para estado inexistente), enquanto qualquer mudança em **comportamento operacional** (reclaim, drain, headroom) segue rollback trigger numérico e teste, não a política Day-0 isoladamente.
+> O `civm` **já roda em produção** (runner self-hosted), mas **não tem dados legados persistidos** que precisem de migração/backfill — o estado é arquivos efêmeros (`/var/lib/civm/*.json`, locks, métricas do host). Logo a política Day-0 se aplica ao **modelo de dados/estado** (sem shim, sem dual-reader, sem backfill para estado inexistente), enquanto mudança em **comportamento operacional** (reclaim, drain, headroom) segue rollback trigger numérico e teste, não a política Day-0 isoladamente.
 
-Quando não houver estado persistido legado obrigatório, toda mudança deve ser especificada e implementada como solução principal e única, no formato correto final para Day-0.
+Sem estado persistido legado obrigatório, toda mudança deve ser especificada e implementada como solução principal e única, no formato final correto para Day-0.
 
 Por padrão, é proibido criar workaround, shim, dual-reader, dual-write, camada de compatibilidade com formato antigo, backfill para estado inexistente, migração incremental corretiva desnecessária ou código morto.
 
-Exceções só são permitidas quando houver requisito explícito e documentado para manter duas versões, integração externa real, estado persistido que não possa ser resetado, ou rollout coordenado aprovado. A exceção deve registrar motivo, prazo de remoção, rollback e evidência.
+Exceções só são permitidas com requisito explícito e documentado para manter duas versões, integração externa real, estado persistido que não possa ser resetado, ou rollout coordenado aprovado. A exceção deve registrar motivo, prazo de remoção, rollback e evidência.
 
 ## Princípios da versão 3
 
@@ -108,16 +108,16 @@ Exceções só são permitidas quando houver requisito explícito e documentado 
 2. **Reuso antes de criação**
    Antes de propor novo subcomando, constante, arquivo de estado, script `.ps1`, Scheduled Task ou env var, prove que o padrão existente não atende (`internal/**`, `cmd/civmctl/`, `deploy/windows/`).
 3. **Separar fato de proposta**
-   Todo documento deve diferenciar explicitamente:
+   Diferencie explicitamente:
    - `Confirmado no codebase`
    - `Confirmado na documentação oficial`
    - `Inferência / proposta`
 4. **Rastreabilidade obrigatória**
    Cada requisito do PRD deve aparecer no SPEC e cada bloco da implementação deve apontar para itens do SPEC.
 5. **Sem criatividade estrutural no Passo 3**
-   Se a implementação exigir decisão nova, a decisão volta para o SPEC antes de virar código.
+   Se a implementação exigir decisão nova, ela volta para o SPEC antes de virar código.
 6. **Sistema 2 explícito nas etapas críticas**
-   Todo SPEC deve apontar, nos passos com risco estrutural, operacional ou de segurança, qual disciplina de `disciplines/KAHNEMAN-DISCIPLINES.md` está sendo usada para reduzir viés, quais evidências mínimas são exigidas e qual condição objetiva dispara abortar, voltar um passo ou rollback.
+   Nos passos com risco estrutural, operacional ou de segurança, o SPEC deve apontar qual disciplina de `disciplines/KAHNEMAN-DISCIPLINES.md` reduz o viés, quais evidências mínimas são exigidas e qual condição objetiva dispara abortar, voltar um passo ou rollback.
 7. **Passos críticos devem levar ao documento de disciplina**
    Nenhum item crítico do SPEC fica autocontido só em execução; ele precisa apontar para `disciplines/KAHNEMAN-DISCIPLINES.md` e registrar como a disciplina afeta a decisão local.
 
@@ -159,14 +159,14 @@ Antes de escrever o PRD final, siga estas fases:
 #### Fase 2 — Convergência
 
 - Escolha uma opção principal
-- Explique por que ela é a recomendada no contexto do `civm`
+- Explique por que é a recomendada no contexto do `civm`
 - Liste alternativas descartadas e por quê
-- Registre lacunas de contexto que permaneceram abertas
+- Registre lacunas de contexto abertas
 
 #### Fase 3 — PRD final
 
 - Escreva o `PRD.md` refletindo apenas a opção recomendada
-- Não escreva um PRD com múltiplas arquiteturas concorrentes
+- Não escreva PRD com múltiplas arquiteturas concorrentes
 - Se houver incerteza real, registre-a em riscos, dependências ou fora de escopo
 
 ### Pesquisa obrigatória antes de gerar o PRD
@@ -190,7 +190,7 @@ Antes de escrever o PRD final, siga estas fases:
 
 #### 2. Documentação oficial e compatibilidade
 
-Pesquise e valide contra a documentação oficial das tecnologias realmente envolvidas na mudança:
+Valide contra a documentação oficial das tecnologias realmente envolvidas:
 
 **Guest (Go):**
 
@@ -212,12 +212,12 @@ Pesquise e valide contra a documentação oficial das tecnologias realmente envo
 #### 3. Padrões de mercado e edge cases
 
 - Pesquise implementações de referência (GitHub code search, docs oficiais) para reclaim de VHDX dinâmico, compactação offline segura e admission gates de disco antes de propor algo novo
-- Identifique edge cases comuns para esse tipo de mudança em contexto de host single-VM (host a poucos GB livres, optimize pendurado, VM ocupada, controlador sem UNMAP)
+- Identifique edge cases comuns desse tipo de mudança em host single-VM (host a poucos GB livres, optimize pendurado, VM ocupada, controlador sem UNMAP)
 - Avalie trade-offs de disponibilidade (deixar a VM Off é o pior caso) vs. recuperação de espaço
 
 ### Regras de qualidade do PRD
 
-- Não invente arquitetura nova se o codebase já tiver um padrão equivalente
+- Não invente arquitetura nova se o codebase já tiver padrão equivalente
 - Diferencie explicitamente:
   - **Confirmado no codebase**
   - **Confirmado na documentação oficial**
@@ -225,12 +225,12 @@ Pesquise e valide contra a documentação oficial das tecnologias realmente envo
 - Se faltar contexto no repo, declare a lacuna em vez de assumir como fato
 - Prefira reaproveitar constantes, subcomandos, packages, scripts `.ps1`, Scheduled Tasks e arquivos de estado existentes
 - Não proponha novos subcomandos, constantes, scripts ou env vars sem justificar por que os existentes não atendem
-- Aponte breaking changes, estratégia de rollout, rollback e migração de estado quando aplicável
-- Como não há estado legado obrigatório, aplique a política Day-0: proponha a solução correta principal, sem compatibilidade legada, shims, workarounds ou backfills para estado inexistente
+- Aponte breaking changes, rollout, rollback e migração de estado quando aplicável
+- Sem estado legado obrigatório, aplique a política Day-0: proponha a solução correta principal, sem compatibilidade legada, shims, workarounds ou backfills para estado inexistente
 - Se sugerir dual path, camada de compatibilidade ou migração corretiva de estado, declare a exceção Day-0 com motivo objetivo; caso contrário, consolide o desenho final
-- Em **Alternativas descartadas**, descarte explicitamente soluções de compatibilidade quando elas só existirem para preservar versão antiga sem estado vivo
-- Liste os documentos que precisarão ser atualizados no mesmo commit quando houver impacto estrutural (sync rule: README ≡ AGENTS ≡ CODEX ≡ rules)
-- Se a mudança tiver risco alto, antecipe no PRD quais etapas provavelmente exigirão disciplina explícita de `disciplines/KAHNEMAN-DISCIPLINES.md` no SPEC
+- Em **Alternativas descartadas**, descarte explicitamente soluções de compatibilidade que só existem para preservar versão antiga sem estado vivo
+- Liste os documentos a atualizar no mesmo commit quando houver impacto estrutural (sync rule: README ≡ AGENTS ≡ CODEX ≡ rules)
+- Se o risco for alto, antecipe no PRD quais etapas provavelmente exigirão disciplina explícita de `disciplines/KAHNEMAN-DISCIPLINES.md` no SPEC
 - Mantenha o PRD específico e operacional; evite texto genérico
 
 ### Saída esperada
@@ -285,7 +285,7 @@ Para cada requisito:
 
 - Passo a passo numerado
 - Qual componente/camada executa cada passo (guest Go, host `.ps1`, Hyper-V)
-- Qual mecanismo é usado (subcomando `civmctl`, SSH guest↔host, `fstrim`, `Optimize-VHD`, lock de arquivo)
+- Qual mecanismo (subcomando `civmctl`, SSH guest↔host, `fstrim`, `Optimize-VHD`, lock de arquivo)
 - Como o estado flui (ex.: drain grava `/var/lib/civm/maintenance.json`; métricas do host entregues ao guest)
 
 **Fluxos alternativos**
@@ -408,9 +408,9 @@ civmctl disk-doctor --json  →  { "device": "...", "controller": "scsi|ide|virt
 
 ## PASSO 2 — Geração do SPEC.md / SPECv2.md / SPECv3.md (a partir do PRD ou auditoria)
 
-> **Leia o `docs/specs/{feature-slug}/PRD.md` e produza um `docs/specs/{feature-slug}/SPEC.md` cirúrgico para implementação.**
-> Se este Passo 2 estiver sendo reexecutado depois de um `no-go` do Passo 2.5, preserve o `SPEC.md` original e crie/atualize `docs/specs/{feature-slug}/SPECv2.md` (e `SPECv3.md` numa 2ª rodada).
-> O SPEC não replica o PRD; ele fecha decisões, remove ambiguidade e traduz requisitos em mudanças exatas no repo.
+> **Leia `docs/specs/{feature-slug}/PRD.md` e produza um `docs/specs/{feature-slug}/SPEC.md` cirúrgico para implementação.**
+> Se este Passo 2 estiver sendo reexecutado após um `no-go` do Passo 2.5, preserve o `SPEC.md` original e crie/atualize `docs/specs/{feature-slug}/SPECv2.md` (e `SPECv3.md` numa 2ª rodada).
+> O SPEC não replica o PRD; fecha decisões, remove ambiguidade e traduz requisitos em mudanças exatas no repo.
 
 ### Objetivo do Passo 2
 
@@ -423,7 +423,7 @@ civmctl disk-doctor --json  →  { "device": "...", "controller": "scsi|ide|virt
 
 Leia `docs/specs/{feature-slug}/PRD.md` e gere `docs/specs/{feature-slug}/SPEC.md` com decisões fechadas, rastreabilidade por requisito e instruções implementáveis sem interpretação.
 
-Se você estiver voltando do Passo 2.5 com decisão `no-go`, leia também o relatório da auditoria e gere `docs/specs/{feature-slug}/SPECv2.md` (ou atualize-o / crie `SPECv3.md`) como versão melhorada, sem alterar o `SPEC.md` original.
+Voltando do Passo 2.5 com decisão `no-go`, leia também o relatório da auditoria e gere `docs/specs/{feature-slug}/SPECv2.md` (ou atualize-o / crie `SPECv3.md`) como versão melhorada, sem alterar o `SPEC.md` original.
 
 ### Regras
 
@@ -457,7 +457,7 @@ Se você estiver voltando do Passo 2.5 com decisão `no-go`, leia também o rela
 
 ### Guardrail cognitivo obrigatório
 
-Em qualquer ITEM do SPEC que envolva migração de estado, privilégio do host, concorrência/exclusão mútua, rollout, rollback, contrato de reclaim/cleanup, secret, retry ou risco de indisponibilidade (deixar a VM Off, estourar o `V:`), incluir um bloco `Disciplina Kahneman` com:
+Em qualquer ITEM do SPEC que envolva migração de estado, privilégio do host, concorrência/exclusão mútua, rollout, rollback, contrato de reclaim/cleanup, secret, retry ou risco de indisponibilidade (deixar a VM Off, estourar o `V:`), inclua um bloco `Disciplina Kahneman` com:
 
 - **Disciplina**: nome exato da disciplina em `disciplines/KAHNEMAN-DISCIPLINES.md` (ex.: #2 Counterfactual, #3 Número não adjetivo, #5 Availability/worst-case)
 - **Link**: caminho do documento e, quando possível, âncora da seção correspondente
@@ -473,8 +473,8 @@ Nenhum passo crítico pode ficar apenas com instrução operacional.
 Regras adicionais para etapas críticas:
 
 - A evidência mínima deve ser reproduzível no estado real do repo; se depender de medição no host (ex.: scratch high-water do `Optimize-VHD`), o SPEC deve descrever a campanha (poll de 1 s, ≥5 runs supervisionados) que produz esse número antes de habilitar o gate
-- Se houver rollback, o SPEC deve dizer explicitamente se ele é de aplicação, de host (task/config) ou de estado
-- Se algum rollback não for seguro fora de janela (ex.: reverter SCSI→IDE, rodar durante Windows Update), o SPEC deve registrar isso como política `forward-only`/janela explícita, com abort trigger correspondente
+- Se houver rollback, o SPEC deve dizer se é de aplicação, de host (task/config) ou de estado
+- Se algum rollback não for seguro fora de janela (ex.: reverter SCSI→IDE, rodar durante Windows Update), o SPEC deve registrar como política `forward-only`/janela explícita, com abort trigger correspondente
 
 ### Saída esperada
 
@@ -513,7 +513,7 @@ Decisões tomadas que não estavam explícitas no PRD:
 
 - **Fronteira de atomicidade desta implementação**:
   - o que esta issue garante atomicamente (ex.: cada `os.WriteFile` de estado; cada `Optimize-VHD` é uma operação Hyper-V única)
-  - o que continua fora da atomicidade (ex.: o ciclo drain→shutdown→optimize→start→restore; a entrega SSH de métricas best-effort)
+  - o que fica fora da atomicidade (ex.: o ciclo drain→shutdown→optimize→start→restore; a entrega SSH de métricas best-effort)
   - quais estados parciais continuam aceitos nesta fase (ex.: VM drenada mas não compactada; métricas stale → degrada para guest-only)
 - **Política de rollback**:
   - rollback de app (`civmctl self-upgrade` anterior; subcomandos novos viram no-op)
@@ -740,9 +740,9 @@ Lista numerada, verificável e sem gaps:
 
 ## PASSO 2.5 — Auditoria do SPEC (red-team, opcional por risco)
 
-> **Use este passo quando a implementação tiver risco estrutural, operacional ou de segurança.**
-> Ele existe para reduzir ambiguidade antes do código, não para burocratizar mudanças pequenas.
-> No caso reclaim, este passo **rodou duas vezes**: SPEC → SPECv2 (4 CRÍTICOS de robustez operacional do host) e SPECv2 → SPECv3 (2 CRÍTICOS: evidência N=1 não-medida + `Stop-Job` não aborta `Optimize-VHD`). Os no-go ficaram registrados no próprio SPEC para não reincidir.
+> **Use quando a implementação tiver risco estrutural, operacional ou de segurança.**
+> Existe para reduzir ambiguidade antes do código, não para burocratizar mudanças pequenas.
+> No caso reclaim, **rodou duas vezes**: SPEC → SPECv2 (4 CRÍTICOS de robustez operacional do host) e SPECv2 → SPECv3 (2 CRÍTICOS: evidência N=1 não-medida + `Stop-Job` não aborta `Optimize-VHD`). Os no-go ficaram registrados no próprio SPEC para não reincidir.
 
 ### Quando usar
 
@@ -758,7 +758,7 @@ Use o Passo 2.5 quando a mudança envolver um ou mais destes pontos:
 
 ### Quando pode pular
 
-Pode pular quando a mudança for pequena, local e sem risco estrutural relevante:
+Quando a mudança for pequena, local e sem risco estrutural relevante:
 
 - poucos arquivos
 - sem mutação de VM/VHDX nem do contrato de reclaim/cleanup
@@ -771,7 +771,7 @@ Revise `docs/specs/{feature-slug}/SPEC.md` como auditoria pré-implementação.
 
 Se `docs/specs/{feature-slug}/SPECv2.md` (ou `SPECv3.md`) existir e tiver sido criado como resposta a um `no-go` anterior, revise a versão mais recente como candidato ativo.
 
-Quero uma revisão de lacunas com foco em:
+Revisão de lacunas com foco em:
 
 - ambiguidades técnicas ainda não resolvidas
 - fronteira de atomicidade implícita, ambígua ou incompatível com o código/host real
@@ -817,13 +817,13 @@ Quero uma revisão de lacunas com foco em:
 
 ## PASSO 3 — Implementação (a partir do SPEC ativo)
 
-> **Leia o SPEC ativo e execute-o passo a passo.**
-> O Passo 3 não fecha lacunas arquiteturais; ele implementa o que já foi decidido.
-> O SPEC ativo é a última versão auditada com `go`: `SPECv3.md` quando existir e tiver sido aprovado pelo Passo 2.5; senão `SPECv2.md`; senão `SPEC.md`.
+> **Leia o SPEC ativo e execute passo a passo.**
+> O Passo 3 não fecha lacunas arquiteturais; implementa o que já foi decidido.
+> O SPEC ativo é a última versão auditada com `go`: `SPECv3.md` quando existir e aprovado pelo Passo 2.5; senão `SPECv2.md`; senão `SPEC.md`.
 
 ### Prompt
 
-Implemente a feature descrita no SPEC ativo de `docs/specs/{feature-slug}/`.
+Implemente a feature do SPEC ativo de `docs/specs/{feature-slug}/`.
 
 Use a versão mais recente que recebeu `go` no Passo 2.5 (`SPECv3.md` > `SPECv2.md` > `SPEC.md`). Não altere as versões baseline preservadas.
 
@@ -872,11 +872,11 @@ A cada camada concluída:
 
 - Descobriu necessidade de constante/arquivo de estado não previsto
 - Subcomando precisa de flag/campo extra
-- Edge case do host não coberto apareceu (optimize pendurado, controlador inesperado, métrica stale)
+- Apareceu edge case do host não coberto (optimize pendurado, controlador inesperado, métrica stale)
 - Ordem de implementação não fecha
 - Mudou shape de saída JSON, exit code ou contrato de reclaim/cleanup
 - Surgiu necessidade de janela, troca one-time ou rollback não descritos
-- A etapa crítica exige uma decisão que o mapa Kahneman do SPEC ainda não fechou
+- A etapa crítica exige decisão que o mapa Kahneman do SPEC ainda não fechou
 - Surgiu necessidade de manter versão antiga, shim, dual path ou compatibilidade não documentada como exceção Day-0
 
 > **Regra absoluta:** se o código precisar decidir algo que o SPEC não decidiu, a implementação deve parar e o SPEC deve ser atualizado primeiro.

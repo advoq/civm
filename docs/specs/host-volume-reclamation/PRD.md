@@ -8,33 +8,33 @@ issues: []
 # PRD — Reclamação de volume do host (VHDX): guest-free vira host-free com segurança
 
 > Tipo: nova capacidade de plataforma do runner (`civmctl` guest + componente Windows host + runbook). Sem schema de banco, sem endpoint de produto.
-> Política Day-0: civm não tem produção viva com dados legados obrigatórios; backfill = N/A. Solução primária única.
-> Origem: sessão operacional de 2026-05-29 onde o host Windows `V:` chegou a 3 GB livres (98%) enquanto o guest Linux tinha 44 GB livres (58%); a compactação foi feita à mão (drain manual de label, `fstrim`, zero-fill perigoso, `Optimize-VHD` interativo via UAC que pendurou) e levou ~1h18m sem atingir a meta. Este PRD substitui esse procedimento manual por um primitivo civm correto, seguro e automatizado.
+> Política Day-0: civm não tem produção viva com dados legados; backfill = N/A. Solução primária única.
+> Origem: sessão de 2026-05-29 onde o host Windows `V:` chegou a 3 GB livres (98%) com o guest Linux em 44 GB livres (58%); a compactação foi manual (drain de label, `fstrim`, zero-fill perigoso, `Optimize-VHD` interativo via UAC que pendurou) e levou ~1h18m sem atingir a meta. Este PRD substitui esse procedimento por um primitivo civm correto, seguro e automatizado.
 
 ---
 
 ## 1. Resumo
 
-O runner civm roda dentro de uma VM Hyper-V Linux (`gha-ubuntu-2404`) cujo disco é um **VHDX dinâmico** num volume Windows `V:` de ~120 GB. O VHDX cresce quando o guest escreve, mas **não encolhe** quando o guest libera blocos. Na prática observada (Confirmado em observação operacional — sessão 2026-05-29): guest `/dev/sda2` 108 GB a 58-62% (≈44 GB livres), mas o arquivo `gha-ubuntu-2404.vhdx` ≈ 116 GB (116.068.974.592 bytes) ocupando quase todo o `V:`, que ficou com **3 GB livres (98%)**.
+O runner civm roda numa VM Hyper-V Linux (`gha-ubuntu-2404`) cujo disco é um **VHDX dinâmico** num volume Windows `V:` de ~120 GB. O VHDX cresce quando o guest escreve, mas **não encolhe** quando o guest libera blocos. Observado (sessão 2026-05-29): guest `/dev/sda2` 108 GB a 58-62% (≈44 GB livres), mas `gha-ubuntu-2404.vhdx` ≈ 116 GB (116.068.974.592 bytes) ocupando quase todo o `V:`, que ficou com **3 GB livres (98%)**.
 
-Esse descompasso é o problema. Ele tem três causas que o civm hoje **não trata** (Confirmado no codebase):
+Esse descompasso é o problema. Três causas que o civm hoje **não trata** (Confirmado no codebase):
 
-1. **Pipeline de discard quebrado e não diagnosticado.** O civm roda `sudo fstrim -av` cegamente (`internal/hook/hook.go:200`), mas **nenhum** código verifica se o discard chega ao VHDX: não lê `/proc/mounts`, não checa `discard`, não detecta controlador SCSI vs IDE, não checa suporte a TRIM via `lsblk -D`. Na sessão, `fstrim -av` liberou só **737,8 MiB** — sinal claro de que os blocos liberados pelo guest **não** estão virando UNMAP para o VHDX. Sem isso, o VHDX só encolhe por compactação offline (`Optimize-VHD`), que por sua vez só recupera blocos zerados/trimados.
-2. **Zero observabilidade do host.** `capacity.Report` faz `Statfs` só no guest `/` (`internal/capacity/capacity.go:17-26,52-62`); civm **não enxerga** o volume `V:` do Windows nem o tamanho do VHDX. Ninguém viu a parede de 3 GB chegar.
-3. **VHDX pode encher o host inteiro.** O VHDX dinâmico cresce até ~120 GB num volume `V:` de 120 GB — **sem headroom** para o scratch do `Optimize-VHD` nem para crescimento. O runbook fala de "VM 128GB SSD" e do guest, mas **não** menciona VHDX, `V:` nem o teto do host (Confirmado em docs — `runbooks/MULTI-PROJECT-RUNNER.md` §Disk pressure).
+1. **Pipeline de discard quebrado e não diagnosticado.** O civm roda `sudo fstrim -av` cegamente (`internal/hook/hook.go:200`), mas **nenhum** código verifica se o discard chega ao VHDX: não lê `/proc/mounts`, não checa `discard`, não detecta controlador SCSI vs IDE, não checa suporte a TRIM via `lsblk -D`. Na sessão, `fstrim -av` liberou só **737,8 MiB** — sinal de que os blocos liberados pelo guest **não** viram UNMAP para o VHDX. Sem isso, o VHDX só encolhe por compactação offline (`Optimize-VHD`), que só recupera blocos zerados/trimados.
+2. **Zero observabilidade do host.** `capacity.Report` faz `Statfs` só no guest `/` (`internal/capacity/capacity.go:17-26,52-62`); civm **não enxerga** o volume `V:` nem o tamanho do VHDX. Ninguém viu a parede de 3 GB chegar.
+3. **VHDX pode encher o host inteiro.** O VHDX dinâmico cresce até ~120 GB num `V:` de 120 GB — **sem headroom** para o scratch do `Optimize-VHD` nem para crescimento. O runbook fala de "VM 128GB SSD" e do guest, mas **não** menciona VHDX, `V:` nem o teto do host (Confirmado em docs — `runbooks/MULTI-PROJECT-RUNNER.md` §Disk pressure).
 
-E o procedimento de correção é **inteiramente manual** (Confirmado no codebase — zero `.ps1`/`Optimize-VHD`/`Get-VM`/`schtasks` no repo): o operador teve que (a) drenar runners removendo a label `civm` à mão via `gh api` + `systemctl stop`, (b) rodar `fstrim` ineficaz, (c) tentar zero-fill **perigoso** (escrever zeros no guest **cresce** o VHDX; com 3 GB livres no host isso pode estourar o `V:`), (d) abrir `Optimize-VHD` elevado interativo via `Start-Process -Verb RunAs`, que **pendu  rou** esperando UAC e não reduziu o VHDX por falta de blocos trimados, (e) restaurar a label. Resultado: ~1h18m, host ainda em 3 GB livres.
+E a correção é **inteiramente manual** (Confirmado no codebase — zero `.ps1`/`Optimize-VHD`/`Get-VM`/`schtasks` no repo): o operador teve que (a) drenar runners removendo a label `civm` via `gh api` + `systemctl stop`, (b) rodar `fstrim` ineficaz, (c) tentar zero-fill **perigoso** (escrever zeros no guest **cresce** o VHDX; com 3 GB livres no host pode estourar o `V:`), (d) abrir `Optimize-VHD` elevado interativo via `Start-Process -Verb RunAs`, que **pendurou** esperando UAC e não reduziu o VHDX por falta de blocos trimados, (e) restaurar a label. Resultado: ~1h18m, host ainda em 3 GB livres.
 
-Este PRD entrega um primitivo civm que é **melhor que o procedimento manual** porque ataca a **raiz** em vez do sintoma:
+Este PRD entrega um primitivo civm **melhor que o manual** porque ataca a **raiz** em vez do sintoma:
 
 - **Diagnostica** por que o `fstrim` não recupera espaço (RF-1).
-- **Conserta o pipeline de discard** (VHDX em SCSI + discard no guest) para que o VHDX **encolha automaticamente** com o `fstrim` que já roda — eliminando a maior parte das compactações offline (RF-2).
+- **Conserta o pipeline de discard** (VHDX em SCSI + discard no guest) para o VHDX **encolher automaticamente** com o `fstrim` que já roda — eliminando a maior parte das compactações offline (RF-2).
 - **Dá observabilidade do host** (volume `V:` + tamanho do VHDX + gap guest×host) para alarmar **antes** dos pisos de 30 GB/10 GB (RF-3).
-- **Automatiza a compactação offline de forma segura e não-interativa** (Scheduled Task como SYSTEM, sem UAC; drain→shutdown gracioso→`Optimize-VHD`→start→restore; **proíbe zero-fill sob baixo headroom**) — substituindo a dança manual (RF-4).
+- **Automatiza a compactação offline segura e não-interativa** (Scheduled Task como SYSTEM, sem UAC; drain→shutdown gracioso→`Optimize-VHD`→start→restore; **proíbe zero-fill sob baixo headroom**) — substituindo a dança manual (RF-4).
 - **Dá um primitivo de drain** (`civmctl maintenance enter|exit`) idempotente, no lugar da remoção manual de label (RF-5).
 - **Right-sizing estrutural** (teto do VHDX abaixo do `V:`, ou expandir/mover) para o host nunca poder ser preenchido (RF-6).
 
-Valor: o runner para de morrer por disco do host de forma silenciosa e imprevisível; a manutenção vira um comando seguro e auditável em vez de uma operação manual de 1h+ com risco de estourar o volume.
+Valor: o runner para de morrer por disco do host de forma silenciosa; a manutenção vira um comando seguro e auditável em vez de uma operação manual de 1h+ com risco de estourar o volume.
 
 ---
 
@@ -50,7 +50,7 @@ Windows host (EMEDEV)  ── Hyper-V ──> VM Linux "gha-ubuntu-2404" (guest)
   WSL (operador) ── powershell.exe + ssh gha-ubuntu-2404 ──> guest
 ```
 
-- civm é um binário Go que roda **no guest** (Ubuntu 24.04). Não há componente no host Windows hoje (Confirmado no codebase).
+- civm é um binário Go que roda **no guest** (Ubuntu 24.04). Sem componente no host Windows hoje (Confirmado no codebase).
 - O operador/agente roda em WSL no host e alcança o Windows via `powershell.exe` e o guest via `ssh gha-ubuntu-2404`.
 
 ### Estado atual confirmado no codebase
@@ -68,14 +68,14 @@ Windows host (EMEDEV)  ── Hyper-V ──> VM Linux "gha-ubuntu-2404" (guest)
 
 ### Confirmado na documentação oficial (Hyper-V/VHDX)
 
-- VHDX **dinâmico** não encolhe sozinho ao liberar blocos no guest; encolhe via TRIM/UNMAP online (quando o disco está num controlador **SCSI** — o **IDE do Hyper-V não repassa UNMAP**) ou via `Optimize-VHD -Mode Full` com a VM desligada.
-- `Optimize-VHD` exige privilégio de Hyper-V Admin/elevação; só recupera blocos que estão zerados/descartados dentro do VHDX.
+- VHDX **dinâmico** não encolhe sozinho ao liberar blocos no guest; encolhe via TRIM/UNMAP online (com o disco num controlador **SCSI** — o **IDE do Hyper-V não repassa UNMAP**) ou via `Optimize-VHD -Mode Full` com a VM desligada.
+- `Optimize-VHD` exige privilégio de Hyper-V Admin/elevação; só recupera blocos zerados/descartados dentro do VHDX.
 - `fstrim` (ou montagem com `discard`) só recupera espaço no VHDX se o caminho guest→controlador→VHDX repassa UNMAP (SCSI + VHDX dinâmico/thin).
-- Escrever zeros (zero-fill) **cresce** um VHDX dinâmico até o tamanho do espaço livre do guest — perigoso quando o host tem pouco espaço livre.
+- Escrever zeros (zero-fill) **cresce** um VHDX dinâmico até o tamanho do espaço livre do guest — perigoso quando o host tem pouco espaço.
 
 ### O que está sendo proposto (Inferência / proposta)
 
-Diagnóstico do pipeline de discard (RF-1); correção do pipeline para auto-shrink (RF-2); observabilidade do host via componente Windows + consumo no civm (RF-3); Scheduled Task de compactação offline segura e não-interativa (RF-4); `civmctl maintenance` (RF-5); right-sizing/headroom do VHDX (RF-6); runbook + contrato (RF-7).
+Diagnóstico do pipeline de discard (RF-1); correção para auto-shrink (RF-2); observabilidade do host via componente Windows + consumo no civm (RF-3); Scheduled Task de compactação offline segura e não-interativa (RF-4); `civmctl maintenance` (RF-5); right-sizing/headroom do VHDX (RF-6); runbook + contrato (RF-7).
 
 ### Tenant scope
 
@@ -87,19 +87,19 @@ N/A — sem dados de tenant. É infraestrutura de runner.
 
 ### Solução escolhida (raiz-primeiro, em camadas, Day-0 único)
 
-1. **Diagnóstico (`civmctl disk-doctor`, guest) — RF-1.** Antes de qualquer ação, descobrir **por que** o `fstrim` não recupera espaço: controlador (SCSI vs IDE), `discard` em `/proc/mounts`, suporte a TRIM (`lsblk -D` com DISC-GRAN/DISC-MAX > 0), e um teste de efetividade (free→fstrim→medir). Saída JSON com o root cause.
-2. **Auto-shrink via discard correto — RF-2.** Se o diagnóstico mostrar IDE ou discard desligado, a correção é **re-anexar o VHDX a um controlador SCSI** (one-time, host) + garantir discard no guest (o `fstrim` periódico que já roda passa a ser efetivo). Com isso o VHDX **encolhe online**, sem `Optimize-VHD` offline na maioria dos casos.
-3. **Observabilidade do host — RF-3.** Componente Windows (`deploy/windows/civm-host-metrics.ps1` + Scheduled Task) que emite `V:` free/size + VHDX FileSize/MinimumSize/Max + o gap guest×host para um arquivo/endpoint que o civm consome e alarma **antes** de 30 GB/10 GB.
-4. **Compactação offline segura e não-interativa — RF-4.** Scheduled Task `civm-vhdx-optimize` rodando como **SYSTEM** (sem UAC interativo), acionável on-demand (`schtasks /run`) ou por threshold: drain → shutdown gracioso do guest → `Optimize-VHD -Mode Full` (com timeout e tratamento de erro) → Start-VM → restore. Idempotente, abort-safe (**nunca** deixa a VM desligada), e **proíbe zero-fill quando o host livre < headroom**.
+1. **Diagnóstico (`civmctl disk-doctor`, guest) — RF-1.** Antes de qualquer ação, descobrir **por que** o `fstrim` não recupera espaço: controlador (SCSI vs IDE), `discard` em `/proc/mounts`, suporte a TRIM (`lsblk -D` com DISC-GRAN/DISC-MAX > 0), e teste de efetividade (free→fstrim→medir). Saída JSON com o root cause.
+2. **Auto-shrink via discard correto — RF-2.** Se o diagnóstico mostrar IDE ou discard desligado, a correção é **re-anexar o VHDX a um controlador SCSI** (one-time, host) + garantir discard no guest (o `fstrim` periódico que já roda passa a ser efetivo). O VHDX **encolhe online**, sem `Optimize-VHD` offline na maioria dos casos.
+3. **Observabilidade do host — RF-3.** Componente Windows (`deploy/windows/civm-host-metrics.ps1` + Scheduled Task) que emite `V:` free/size + VHDX FileSize/MinimumSize/Max + gap guest×host para um arquivo/endpoint que o civm consome e alarma **antes** de 30 GB/10 GB.
+4. **Compactação offline segura e não-interativa — RF-4.** Scheduled Task `civm-vhdx-optimize` como **SYSTEM** (sem UAC interativo), acionável on-demand (`schtasks /run`) ou por threshold: drain → shutdown gracioso do guest → `Optimize-VHD -Mode Full` (timeout + tratamento de erro) → Start-VM → restore. Idempotente, abort-safe (**nunca** deixa a VM desligada), **proíbe zero-fill quando o host livre < headroom**.
 5. **Drain primitivo (`civmctl maintenance enter|exit`, guest) — RF-5.** Idempotente: `enter` para `actions.runner.*` e/ou remove a label `civm` (gravando as labels anteriores), `exit` restaura. Substitui a dança manual de `gh api`.
 6. **Right-sizing estrutural — RF-6.** Capar o **tamanho máximo do VHDX abaixo da capacidade do `V:`** (ex.: max 100 GB num volume de 120 GB) deixando scratch para `Optimize-VHD`; ou expandir `V:`/mover o VHDX. Invariante: "host `V:` free ≥ headroom".
 7. **Contrato/docs — RF-7.** Novo `runbooks/RUNBOOK-HOST-VHDX-MAINTENANCE.md` + atualização de `MULTI-PROJECT-RUNNER.md` §Disk + `capacity` docs.
 
 ### Motivo da escolha
 
-- **Conserta a raiz, não o sintoma.** Codex compactou (tentou) uma vez, manualmente; este PRD faz o VHDX **parar de inchar** (discard correto) e torna a rara compactação offline **segura e automática**. A maior parte do problema desaparece quando o `fstrim` que já roda passa a ser efetivo.
+- **Conserta a raiz, não o sintoma.** Codex compactou uma vez, manualmente; este PRD faz o VHDX **parar de inchar** (discard correto) e torna a rara compactação offline **segura e automática**. A maior parte do problema some quando o `fstrim` que já roda passa a ser efetivo.
 - **Fecha o ponto cego.** Observabilidade do host transforma "descobrir a 3 GB" em "alarmar a 30 GB" (Kahneman #5 worst-case; #3 número).
-- **Elimina os modos de falha do procedimento manual.** SYSTEM scheduled task → sem UAC pendurado; ordem segura sem zero-fill sob baixo headroom → sem risco de estourar o `V:`; drain idempotente → sem label dance.
+- **Elimina os modos de falha do manual.** SYSTEM scheduled task → sem UAC pendurado; ordem segura sem zero-fill sob baixo headroom → sem risco de estourar o `V:`; drain idempotente → sem label dance.
 - **Reuso máximo.** `idle.Check` (gating), `fstrim`/cleanup (já existem), padrão `deploy/systemd/` (espelhado em `deploy/windows/`), dispatch por `switch`, `Report` estendível.
 - **Fail-safe.** Compactação só com guest idle + drenado; abort se host livre < headroom; nunca deixa a VM off; nunca zero-fill perigoso.
 
@@ -107,20 +107,20 @@ N/A — sem dados de tenant. É infraestrutura de runner.
 
 | Alternativa | Por que descartada |
 | --- | --- |
-| **Repetir o procedimento manual do Codex (compactar à mão quando estourar)** | Trata sintoma; interativo (UAC pendura); zero-fill perigoso; sem observabilidade → reincide. É exatamente o que estamos substituindo. |
-| **Só compactação offline agendada, sem consertar discard** | Mantém o VHDX inchando entre janelas; exige downtime recorrente; não recupera nada se os blocos não foram trimados. Tratável só como fallback. |
-| **Zero-fill + Optimize-VHD como caminho padrão** | Zero-fill cresce o VHDX; sob 3 GB livres no host pode estourar o `V:`. Só aceitável com headroom amplo e quando discard não existe — nunca como padrão. |
-| **Montar `/` com `discard` em vez de fstrim periódico** | `discard` síncrono pode ter custo de I/O por delete; o `fstrim` periódico que civm já roda é suficiente **se** o pipeline (SCSI+thin) estiver correto. Mantemos fstrim; discard contínuo fica como opção. |
+| **Repetir o procedimento manual do Codex (compactar à mão quando estourar)** | Trata sintoma; interativo (UAC pendura); zero-fill perigoso; sem observabilidade → reincide. É o que estamos substituindo. |
+| **Só compactação offline agendada, sem consertar discard** | Mantém o VHDX inchando entre janelas; exige downtime recorrente; não recupera nada se os blocos não foram trimados. Só como fallback. |
+| **Zero-fill + Optimize-VHD como caminho padrão** | Zero-fill cresce o VHDX; sob 3 GB livres no host pode estourar o `V:`. Só aceitável com headroom amplo e sem discard — nunca como padrão. |
+| **Montar `/` com `discard` em vez de fstrim periódico** | `discard` síncrono pode ter custo de I/O por delete; o `fstrim` periódico que civm já roda basta **se** o pipeline (SCSI+thin) estiver correto. Mantemos fstrim; discard contínuo fica como opção. |
 | **VHDX de tamanho fixo (não dinâmico)** | Aloca 100% do `V:` de imediato; remove a elasticidade e não resolve "guest-free vira host-free". |
 | **Mover o civmctl para o host / reescrever em Windows** | Quebra a arquitetura guest-Linux do civm; o host precisa só de um script PS + task. |
-| **Ignorar e só expandir o `V:`/disco** | Capex puro; adia o problema (o VHDX volta a encher); não dá observabilidade nem automação. Vale como mitigação estrutural (RF-6), não como solução. |
+| **Ignorar e só expandir o `V:`/disco** | Capex puro; adia o problema (o VHDX volta a encher); sem observabilidade nem automação. Vale como mitigação estrutural (RF-6), não como solução. |
 
 ### Trade-offs aceitos
 
-- **civm passa a ter um componente no host Windows** (`deploy/windows/` + Scheduled Task). Aceito: é a única forma de automatizar `Optimize-VHD`/observar `V:`; fica isolado em `deploy/` como o `deploy/systemd/` do guest, com contrato claro.
+- **civm passa a ter um componente no host Windows** (`deploy/windows/` + Scheduled Task). Aceito: única forma de automatizar `Optimize-VHD`/observar `V:`; isolado em `deploy/` como o `deploy/systemd/` do guest, com contrato claro.
 - **Re-anexar o VHDX a SCSI (RF-2) é uma janela one-time** (requer VM off). Aceito: paga-se uma vez e elimina compactações recorrentes.
 - **A compactação offline ainda exige drain + shutdown** quando usada. Aceito como fallback; o caminho primário (online discard) não precisa de downtime.
-- **Privilégio:** a Scheduled Task roda como SYSTEM com direito de Hyper-V. Aceito: é o mínimo para `Optimize-VHD` sem UAC; documentado em segurança.
+- **Privilégio:** a Scheduled Task roda como SYSTEM com direito de Hyper-V. Aceito: mínimo para `Optimize-VHD` sem UAC; documentado em segurança.
 
 ---
 
@@ -130,12 +130,12 @@ N/A — sem dados de tenant. É infraestrutura de runner.
 
 Novo subcomando read-only que reporta por que o `fstrim` recupera (ou não) espaço para o VHDX.
 
-- **Critério de aceite:** `civmctl disk-doctor --json` reporta: device de `/`, tipo de controlador (SCSI/IDE/virtio), `discard` em `/proc/mounts` (sim/não), `lsblk -D` DISC-GRAN/DISC-MAX (>0 = TRIM suportado), resultado de um teste efetividade (alocar→liberar→`fstrim`→delta) e um campo `root_cause` legível. Exit 0 sempre (diagnóstico); `trim_effective` booleano. Teste unit com `/proc/mounts`/`lsblk` mockados.
+- **Critério de aceite:** `civmctl disk-doctor --json` reporta: device de `/`, tipo de controlador (SCSI/IDE/virtio), `discard` em `/proc/mounts` (sim/não), `lsblk -D` DISC-GRAN/DISC-MAX (>0 = TRIM suportado), resultado de teste de efetividade (alocar→liberar→`fstrim`→delta) e campo `root_cause` legível. Exit 0 sempre (diagnóstico); `trim_effective` booleano. Teste unit com `/proc/mounts`/`lsblk` mockados.
 - **Tenant isolation:** N/A.
 
 ### RF-2 — Auto-shrink via discard correto (online, preferido)
 
-Garantir o pipeline guest→SCSI→VHDX para que o `fstrim` já existente faça o VHDX encolher online; corrigir controlador IDE→SCSI (host, one-time) quando o `disk-doctor` apontar.
+Garantir o pipeline guest→SCSI→VHDX para o `fstrim` existente encolher o VHDX online; corrigir controlador IDE→SCSI (host, one-time) quando o `disk-doctor` apontar.
 
 - **Critério de aceite:** após a correção, um ciclo "liberar N GB no guest → `fstrim` → medir VHDX no host" reduz o `FileSize` do VHDX em ≈N GB (±tolerância), **sem** `Optimize-VHD` offline. Evidência: `disk-doctor` `trim_effective=true` + medição host antes/depois.
 - **Tenant isolation:** N/A.
@@ -181,8 +181,8 @@ Novo `RUNBOOK-HOST-VHDX-MAINTENANCE.md` + updates em `MULTI-PROJECT-RUNNER.md` �
 
 ### Performance
 
-- Alvo: **host `V:` nunca abaixo de 30 GB livres** em operação normal; recuperação de espaço **sem downtime** no caminho online (RF-2). Métrica: gap guest×host → ≈0 após RF-2; `v_free_gb` ≥ 30 sustentado.
-- `disk-doctor`/`host-metrics` são leves (segundos). `Optimize-VHD` é minutos a dezenas de minutos com a VM off — por isso é fallback, não rotina.
+- Alvo: **host `V:` nunca abaixo de 30 GB livres** em operação normal; recuperação **sem downtime** no caminho online (RF-2). Métrica: gap guest×host → ≈0 após RF-2; `v_free_gb` ≥ 30 sustentado.
+- `disk-doctor`/`host-metrics` são leves (segundos). `Optimize-VHD` leva minutos a dezenas de minutos com a VM off — por isso é fallback, não rotina.
 
 ### Segurança
 
@@ -193,11 +193,11 @@ Novo `RUNBOOK-HOST-VHDX-MAINTENANCE.md` + updates em `MULTI-PROJECT-RUNNER.md` �
 ### Observabilidade
 
 - `host-metrics` JSON (V: free/size, VHDX file/min/max, gap, timestamp) + alarme nos pisos 30/10 GB. `civmctl` expõe via `capacity`/`host-disk`. Sem PII.
-- Logs estruturados da Scheduled Task em arquivo no host (`V:\civm-hyperv-maintenance.log` já é convenção observada) + linha de auditoria.
+- Logs estruturados da Scheduled Task em arquivo no host (`V:\civm-hyperv-maintenance.log`, convenção observada) + linha de auditoria.
 
 ### Escalabilidade
 
-- O primitivo é por-VM/host; escala por host. O gap guest×host é o sinal de saúde por VM.
+- Primitivo por-VM/host; escala por host. O gap guest×host é o sinal de saúde por VM.
 
 ### LGPD
 
@@ -251,7 +251,7 @@ Backfill = **N/A — Day-0**.
 
 ## 8. API / Interfaces
 
-Sem endpoint HTTP/OpenAPI/evento. Interfaces = CLI + componente host + arquivos.
+Sem endpoint HTTP/OpenAPI/evento. Interfaces: CLI + componente host + arquivos.
 
 ### CLI civmctl (guest)
 
@@ -294,7 +294,7 @@ Sem endpoint HTTP/OpenAPI/evento. Interfaces = CLI + componente host + arquivos.
 | Scheduled Task SYSTEM amplia superfície no host | Privilégio mínimo, script versionado em `deploy/windows/`, sem rede, log auditável |
 | `Optimize-VHD` longo segura a VM off além do esperado | Timeout + religar; rodar em janela; alarme se exceder budget |
 | Zero-fill sob baixo headroom estoura o `V:` | **Proibido** por contrato (RF-4); abort com headroom check |
-| Observabilidade do host depende de WSL/host vivo | Task agendada no Windows é independente do WSL; civm degrada para guest-only se métricas ausentes |
+| Observabilidade do host depende de WSL/host vivo | Task agendada no Windows independe do WSL; civm degrada para guest-only se métricas ausentes |
 | Boundary: civm ganhar artefato no host Windows | Isolado em `deploy/windows/` com contrato; documentado; reversível (remover task) |
 
 ### Impacto em componentes existentes
@@ -303,7 +303,7 @@ Sem endpoint HTTP/OpenAPI/evento. Interfaces = CLI + componente host + arquivos.
 
 ### Breaking changes
 
-Nenhum. Aditivo; sem RF-2 aplicado, tudo continua como hoje (degradado).
+Nenhum. Aditivo; sem RF-2 aplicado, tudo segue como hoje (degradado).
 
 ### Estratégia de rollout
 
@@ -319,7 +319,7 @@ Slice 0 (diagnóstico/baseline, sem mudança) → Slice 1 (`disk-doctor` + `main
 
 ### Hipóteses que exigirão disciplina explícita no SPEC (`disciplines/KAHNEMAN-DISCIPLINES.md`)
 
-- **#3 (número, não adjetivo):** "fstrim ineficaz", "VHDX não encolhe" devem virar medição (`disk-doctor` delta; host FileSize antes/depois).
+- **#3 (número, não adjetivo):** "fstrim ineficaz", "VHDX não encolhe" viram medição (`disk-doctor` delta; host FileSize antes/depois).
 - **#5 (availability/worst-case):** host a 3 GB, Optimize pendurado, zero-fill perigoso, IDE sem UNMAP — todos com mitigação.
 - **#2 (counterfactual):** rollback trigger numérico no SPEC.
 
