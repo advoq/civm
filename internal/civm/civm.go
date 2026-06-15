@@ -67,11 +67,22 @@ const (
 	// ~/.yarn/cache) e os dirs nomeados cresciam SEM LIMITE — go-build-advoq-services
 	// chegou a 13GB num cap de 5GB, enchendo o VHDX até o host dar PausedCritical.
 	DefaultCacheTrimMinProtectHours = 24
-	DefaultCacheGoBuildMaxGB        = 5
-	DefaultCacheNPMMaxGB            = 3
-	DefaultCacheYarnMaxGB           = 3
-	DefaultCachePNPMMaxGB           = 5
-	DefaultCacheGolangciLintMaxGB   = 2
+	// go-build é WipeWhole (refs cruzadas opacas: sub-trim orfana entrada e o vet
+	// quebra). O cap é generoso de propósito — backstop para crescimento
+	// descontrolado, não o working-set normal (~2.2GB/dir; 12GB/3dirs = 4GB/dir).
+	// O go auto-trima entradas > 5 dias, então normalmente o wipe nunca dispara.
+	DefaultCacheGoBuildMaxGB = 12
+	DefaultCacheNPMMaxGB     = 3
+	// yarn v1 e PackageDepth (atomico), e o cap tambem e generoso (backstop, mesma
+	// razao do go-build). O cap de 3GB antigo fazia o disk-watchdog (timer 8min, e o
+	// EmergencyBypass do #117 a >=75%) trimar o working-set (~0.84GB/dir x4) NO MEIO
+	// de um yarn install: removia o pacote em escrita, o yarn re-fetchava, race,
+	// .yarn-metadata.json parcial, ENOENT (quebrava web/tenant-isolation/audit). Como
+	// backstop (12GB/4dirs = 3GB/dir) o working-set fica sempre sob o cap, entao o
+	// trim e no-op durante o job; o trim atomico so age no crescimento descontrolado.
+	DefaultCacheYarnMaxGB         = 12
+	DefaultCachePNPMMaxGB         = 5
+	DefaultCacheGolangciLintMaxGB = 2
 
 	// Filtros do docker prune em modo rotineiro. Mantêm layers quentes < 24h
 	// e imagens unused < 7 dias, em vez do agressivo system prune --volumes.
