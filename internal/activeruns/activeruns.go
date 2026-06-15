@@ -89,22 +89,8 @@ func DefaultOptions() Options {
 func Collect(ctx context.Context, opts Options) (Report, error) {
 	applyDefaults(&opts)
 
-	repos := append([]string(nil), opts.Repos...)
-	if opts.InferRepos && len(repos) == 0 {
-		if opts.SystemRunnersFn == nil {
-			opts.SystemRunnersFn = func(ctx context.Context) ([]runner.Status, error) {
-				lo := runner.DefaultListOptions()
-				lo.RunFn = opts.RunFn
-				return runner.List(ctx, lo)
-			}
-		}
-		systemd, err := opts.SystemRunnersFn(ctx)
-		if err != nil {
-			return Report{}, fmt.Errorf("infer repos: %w", err)
-		}
-		repos = inferReposFromSystemd(systemd)
-	}
-	if err := validateRepos(repos); err != nil {
+	repos, err := resolveRepos(ctx, &opts)
+	if err != nil {
 		return Report{}, err
 	}
 
@@ -116,6 +102,64 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 		return report, nil
 	}
 
+	// Fase de listagem: fan-out (repo × status) → runs ativas + exit
+	// recuperável quando alguma chamada gh falha.
+	all, exitCode := fetchActiveRuns(ctx, opts, repos)
+
+	// Fase de ETA (opcional): enriquece cada run com AvgDurationSec do
+	// histórico de success do seu workflow.
+	if opts.IncludeETA && len(all) > 0 {
+		enrichETA(ctx, opts, all)
+	}
+
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].Status != all[j].Status {
+			return all[i].Status == "in_progress"
+		}
+		return all[i].CreatedAt.After(all[j].CreatedAt)
+	})
+
+	report.Runs = all
+	report.Summary = summarize(all, opts.Now())
+	report.Exit = exitCode
+	return report, nil
+}
+
+// resolveRepos devolve a lista final de repos a inspecionar. Usa
+// opts.Repos quando preenchida; caso contrário, com InferRepos, descobre
+// os repos a partir dos runners systemd (injetando runner.List como fonte
+// default). A lista resultante é validada antes de retornar.
+//
+// Este é o prelúdio de repo-inference compartilhado com o pacote
+// actionsmetrics; cada pacote mantém o seu próprio inferReposFromSystemd
+// porque o filtro de shape difere (aqui exige owner/repo via regex).
+func resolveRepos(ctx context.Context, opts *Options) ([]string, error) {
+	repos := append([]string(nil), opts.Repos...)
+	if opts.InferRepos && len(repos) == 0 {
+		if opts.SystemRunnersFn == nil {
+			opts.SystemRunnersFn = func(ctx context.Context) ([]runner.Status, error) {
+				lo := runner.DefaultListOptions()
+				lo.RunFn = opts.RunFn
+				return runner.List(ctx, lo)
+			}
+		}
+		systemd, err := opts.SystemRunnersFn(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("infer repos: %w", err)
+		}
+		repos = inferReposFromSystemd(systemd)
+	}
+	if err := validateRepos(repos); err != nil {
+		return nil, err
+	}
+	return repos, nil
+}
+
+// fetchActiveRuns dispara um listRuns por (repo, status) num worker pool,
+// concatena os runs e devolve o exit recuperável (1 se alguma chamada gh
+// falhou). Erros parciais não abortam — runs das outras chamadas seguem
+// no resultado.
+func fetchActiveRuns(ctx context.Context, opts Options, repos []string) ([]Run, int) {
 	type listKey struct{ repo, status string }
 	type listResult struct {
 		key  listKey
@@ -123,7 +167,8 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 		err  error
 	}
 
-	var jobs []listKey
+	// Capacidade exata: cada repo gera 2 jobs (in_progress + queued).
+	jobs := make([]listKey, 0, 2*len(repos))
 	for _, r := range repos {
 		for _, s := range []string{"in_progress", "queued"} {
 			jobs = append(jobs, listKey{r, s})
@@ -140,60 +185,53 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 	exitCode := 0
 	var all []Run
 	for _, r := range results {
-		if r.err != nil && exitCode == 0 {
+		if r.err != nil {
 			exitCode = 1
 		}
 		all = append(all, r.runs...)
 	}
+	return all, exitCode
+}
 
-	if opts.IncludeETA && len(all) > 0 {
-		type wfKey struct{ repo, workflow string }
-		seen := map[wfKey]struct{}{}
-		var keys []wfKey
-		for _, r := range all {
-			k := wfKey{r.Repo, r.Workflow}
-			if _, ok := seen[k]; ok {
-				continue
-			}
-			seen[k] = struct{}{}
-			keys = append(keys, k)
+// enrichETA preenche AvgDurationSec de cada run in-place. Calcula a média
+// uma vez por (repo, workflow) distinto — chave compartilhada por várias
+// runs do mesmo workflow — num worker pool, e só anexa o ponteiro quando
+// há histórico (avg > 0). Mutação direta no slice recebido.
+func enrichETA(ctx context.Context, opts Options, all []Run) {
+	type wfKey struct{ repo, workflow string }
+	seen := map[wfKey]struct{}{}
+	var keys []wfKey
+	for _, r := range all {
+		k := wfKey{r.Repo, r.Workflow}
+		if _, ok := seen[k]; ok {
+			continue
 		}
-
-		avgs := make(map[wfKey]int64, len(keys))
-		var avgsMu sync.Mutex
-		runJobs(ctx, opts.Concurrency, len(keys), func(i int) {
-			k := keys[i]
-			avg, err := computeAvgDurationSec(ctx, opts, k.repo, k.workflow, opts.HistoryLimit)
-			if err != nil {
-				return
-			}
-			if avg == 0 {
-				return
-			}
-			avgsMu.Lock()
-			avgs[k] = avg
-			avgsMu.Unlock()
-		})
-
-		for i := range all {
-			if v, ok := avgs[wfKey{all[i].Repo, all[i].Workflow}]; ok {
-				vCopy := v
-				all[i].AvgDurationSec = &vCopy
-			}
-		}
+		seen[k] = struct{}{}
+		keys = append(keys, k)
 	}
 
-	sort.SliceStable(all, func(i, j int) bool {
-		if all[i].Status != all[j].Status {
-			return all[i].Status == "in_progress"
+	avgs := make(map[wfKey]int64, len(keys))
+	var avgsMu sync.Mutex
+	runJobs(ctx, opts.Concurrency, len(keys), func(i int) {
+		k := keys[i]
+		avg, err := computeAvgDurationSec(ctx, opts, k.repo, k.workflow, opts.HistoryLimit)
+		if err != nil {
+			return
 		}
-		return all[i].CreatedAt.After(all[j].CreatedAt)
+		if avg == 0 {
+			return
+		}
+		avgsMu.Lock()
+		avgs[k] = avg
+		avgsMu.Unlock()
 	})
 
-	report.Runs = all
-	report.Summary = summarize(all, opts.Now())
-	report.Exit = exitCode
-	return report, nil
+	for i := range all {
+		if v, ok := avgs[wfKey{all[i].Repo, all[i].Workflow}]; ok {
+			vCopy := v
+			all[i].AvgDurationSec = &vCopy
+		}
+	}
 }
 
 // listRuns invoca `gh run list --repo X --status Y` e converte cada item

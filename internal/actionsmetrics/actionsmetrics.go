@@ -60,27 +60,27 @@ type SKUTotal struct {
 
 // Report é a saída agregada.
 type Report struct {
-	CollectedAt   time.Time    `json:"collected_at"`
-	StartDate     string       `json:"start_date"`
-	EndDate       string       `json:"end_date"`
-	Organization  string       `json:"organization"`
-	TotalMinutes  int64        `json:"total_minutes"`        // soma de Actions minutes (billable)
-	TotalRuns     int          `json:"total_runs"`           // count cross-repo
-	BySKU         []SKUTotal   `json:"by_sku"`
-	ByRepo        []RepoMetric `json:"by_repo"`
-	Exit          int          `json:"exit"`
+	CollectedAt  time.Time    `json:"collected_at"`
+	StartDate    string       `json:"start_date"`
+	EndDate      string       `json:"end_date"`
+	Organization string       `json:"organization"`
+	TotalMinutes int64        `json:"total_minutes"` // soma de Actions minutes (billable)
+	TotalRuns    int          `json:"total_runs"`    // count cross-repo
+	BySKU        []SKUTotal   `json:"by_sku"`
+	ByRepo       []RepoMetric `json:"by_repo"`
+	Exit         int          `json:"exit"`
 }
 
 // Options controla a coleta.
 type Options struct {
-	Organization string   // ex: "advoq"
-	Repos        []string // owner/repo; vazio + InferRepos descobre via systemd
-	InferRepos   bool
-	StartDate    string // ISO YYYY-MM-DD
-	EndDate      string // ISO YYYY-MM-DD
-	Concurrency  int
-	Now          func() time.Time
-	RunFn        func(ctx context.Context, name string, args ...string) ([]byte, error)
+	Organization    string   // ex: "advoq"
+	Repos           []string // owner/repo; vazio + InferRepos descobre via systemd
+	InferRepos      bool
+	StartDate       string // ISO YYYY-MM-DD
+	EndDate         string // ISO YYYY-MM-DD
+	Concurrency     int
+	Now             func() time.Time
+	RunFn           func(ctx context.Context, name string, args ...string) ([]byte, error)
 	SystemRunnersFn func(ctx context.Context) ([]runner.Status, error)
 }
 
@@ -113,29 +113,12 @@ func DefaultOptions() Options {
 // medir, custo proibitivo num cycle de cockpit).
 func Collect(ctx context.Context, opts Options) (Report, error) {
 	applyDefaults(&opts)
-	if !validOrg(opts.Organization) {
-		return Report{}, fmt.Errorf("organization deve ser slug seguro [A-Za-z0-9-]+, got %q", opts.Organization)
-	}
-	if !validDate(opts.StartDate) || !validDate(opts.EndDate) {
-		return Report{}, fmt.Errorf("start_date/end_date devem ser YYYY-MM-DD; got %q/%q", opts.StartDate, opts.EndDate)
+	if err := validateOptions(opts); err != nil {
+		return Report{}, err
 	}
 
-	repos := append([]string(nil), opts.Repos...)
-	if opts.InferRepos && len(repos) == 0 {
-		if opts.SystemRunnersFn == nil {
-			opts.SystemRunnersFn = func(ctx context.Context) ([]runner.Status, error) {
-				lo := runner.DefaultListOptions()
-				lo.RunFn = opts.RunFn
-				return runner.List(ctx, lo)
-			}
-		}
-		systemd, err := opts.SystemRunnersFn(ctx)
-		if err != nil {
-			return Report{}, fmt.Errorf("infer repos: %w", err)
-		}
-		repos = inferReposFromSystemd(systemd)
-	}
-	if err := validateRepos(repos); err != nil {
+	repos, err := resolveRepos(ctx, &opts)
+	if err != nil {
 		return Report{}, err
 	}
 
@@ -148,16 +131,53 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 		ByRepo:       []RepoMetric{},
 	}
 
+	// O exit code começa em 0 e sobe pra 1 se qualquer fase recuperável
+	// falhar (billing ou run-count). A coleta nunca aborta por erro
+	// parcial — o consumidor inspeciona report.Exit.
 	exitCode := 0
+
+	// Fase de billing: minutos hosted + storage por (sku, repo). Falha
+	// aqui não interrompe — os run counts ainda podem completar.
 	usage, err := fetchBillingUsage(ctx, opts)
 	if err != nil {
 		exitCode = 1
-		// Continua mesmo sem billing — run counts podem ainda completar.
 	}
+	repoMinutes, repoStorageX1000 := aggregateSKUs(usage, &report)
 
+	// Fase de run-count: fan-out por repo (ou agregação só-por-billing
+	// quando não há repos enumerados).
+	if assembleByRepo(ctx, opts, &report, repos, repoMinutes, repoStorageX1000) {
+		exitCode = 1
+	}
+	sort.Slice(report.ByRepo, func(i, j int) bool {
+		return report.ByRepo[i].HostedMinutes > report.ByRepo[j].HostedMinutes
+	})
+
+	report.Exit = exitCode
+	return report, nil
+}
+
+// validateOptions checa org e período antes de qualquer chamada de rede.
+// Falhar cedo evita gastar uma chamada gh com input inválido.
+func validateOptions(opts Options) error {
+	if !validOrg(opts.Organization) {
+		return fmt.Errorf("organization deve ser slug seguro [A-Za-z0-9-]+, got %q", opts.Organization)
+	}
+	if !validDate(opts.StartDate) || !validDate(opts.EndDate) {
+		return fmt.Errorf("start_date/end_date devem ser YYYY-MM-DD; got %q/%q", opts.StartDate, opts.EndDate)
+	}
+	return nil
+}
+
+// aggregateSKUs percorre os usage items de Actions e preenche report.BySKU
+// + report.TotalMinutes. Retorna os mapas auxiliares minutos-por-repo e
+// storage-por-repo (×1000) que a montagem do ByRepo consome depois. Só
+// items com Product == "actions" entram; SKUs de outros produtos são
+// ignorados. A ordenação do BySKU é por minutos desc.
+func aggregateSKUs(usage []UsageItem, report *Report) (repoMinutes, repoStorageX1000 map[string]int64) {
 	skuTotals := map[string]*SKUTotal{}
-	repoMinutes := map[string]int64{}
-	repoStorageX1000 := map[string]int64{}
+	repoMinutes = map[string]int64{}
+	repoStorageX1000 = map[string]int64{}
 	for _, it := range usage {
 		if it.Product != "actions" {
 			continue
@@ -182,44 +202,21 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 			}
 		}
 	}
-
 	for _, t := range skuTotals {
 		report.BySKU = append(report.BySKU, *t)
 	}
 	sort.Slice(report.BySKU, func(i, j int) bool { return report.BySKU[i].Minutes > report.BySKU[j].Minutes })
+	return repoMinutes, repoStorageX1000
+}
 
-	type runCountResult struct {
-		repo  string
-		count int
-		err   error
-	}
-	if len(repos) > 0 {
-		results := make([]runCountResult, len(repos))
-		runJobs(ctx, opts.Concurrency, len(repos), func(i int) {
-			c, err := fetchRunCount(ctx, opts, repos[i])
-			results[i] = runCountResult{repo: repos[i], count: c, err: err}
-		})
-		repoRuns := map[string]int{}
-		for _, r := range results {
-			if r.err != nil && exitCode == 0 {
-				exitCode = 1
-			}
-			repoRuns[r.repo] = r.count
-			report.TotalRuns += r.count
-		}
-		for _, repo := range repos {
-			parts := strings.SplitN(repo, "/", 2)
-			repoName := parts[len(parts)-1]
-			report.ByRepo = append(report.ByRepo, RepoMetric{
-				Repo:           repo,
-				HostedMinutes:  repoMinutes[repoName],
-				RunsTotal:      repoRuns[repo],
-				RunsInPeriod:   repoRuns[repo],
-				StorageGBHours: repoStorageX1000[repoName],
-			})
-		}
-	} else {
-		// Sem repos enumerados: agrega-só por billing
+// assembleByRepo preenche report.ByRepo e report.TotalRuns. Com repos
+// enumerados, faz fan-out de run-count (um gh por repo) e cruza com os
+// minutos/storage do billing; sem repos, agrega só pelo que o billing
+// reportou. Devolve true se algum fetch de run-count falhou (sinaliza
+// exit recuperável ao caller).
+func assembleByRepo(ctx context.Context, opts Options, report *Report, repos []string, repoMinutes, repoStorageX1000 map[string]int64) bool {
+	if len(repos) == 0 {
+		// Sem repos enumerados: agrega-só por billing.
 		for repoName, m := range repoMinutes {
 			report.ByRepo = append(report.ByRepo, RepoMetric{
 				Repo:           opts.Organization + "/" + repoName,
@@ -227,13 +224,78 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 				StorageGBHours: repoStorageX1000[repoName],
 			})
 		}
+		return false
 	}
-	sort.Slice(report.ByRepo, func(i, j int) bool {
-		return report.ByRepo[i].HostedMinutes > report.ByRepo[j].HostedMinutes
-	})
 
-	report.Exit = exitCode
-	return report, nil
+	repoRuns, failed := fetchRunCounts(ctx, opts, repos)
+	for _, repo := range repos {
+		parts := strings.SplitN(repo, "/", 2)
+		repoName := parts[len(parts)-1]
+		report.ByRepo = append(report.ByRepo, RepoMetric{
+			Repo:           repo,
+			HostedMinutes:  repoMinutes[repoName],
+			RunsTotal:      repoRuns[repo],
+			RunsInPeriod:   repoRuns[repo],
+			StorageGBHours: repoStorageX1000[repoName],
+		})
+		report.TotalRuns += repoRuns[repo]
+	}
+	return failed
+}
+
+// fetchRunCounts dispara um fetchRunCount por repo num worker pool e
+// devolve o mapa repo→count. O segundo retorno é true se ao menos um
+// fetch falhou — o caller mapeia isso pro exit code recuperável.
+func fetchRunCounts(ctx context.Context, opts Options, repos []string) (map[string]int, bool) {
+	type runCountResult struct {
+		repo  string
+		count int
+		err   error
+	}
+	results := make([]runCountResult, len(repos))
+	runJobs(ctx, opts.Concurrency, len(repos), func(i int) {
+		c, err := fetchRunCount(ctx, opts, repos[i])
+		results[i] = runCountResult{repo: repos[i], count: c, err: err}
+	})
+	repoRuns := make(map[string]int, len(repos))
+	failed := false
+	for _, r := range results {
+		if r.err != nil {
+			failed = true
+		}
+		repoRuns[r.repo] = r.count
+	}
+	return repoRuns, failed
+}
+
+// resolveRepos devolve a lista final de repos a coletar. Usa opts.Repos
+// quando preenchida; caso contrário, com InferRepos, descobre os repos a
+// partir dos runners systemd (injetando runner.List como fonte default).
+// A lista resultante é validada antes de retornar.
+//
+// Este é o prelúdio de repo-inference compartilhado com o pacote
+// activeruns; cada pacote mantém o seu próprio inferReposFromSystemd
+// porque o filtro de shape difere (aqui basta o repo conter "/").
+func resolveRepos(ctx context.Context, opts *Options) ([]string, error) {
+	repos := append([]string(nil), opts.Repos...)
+	if opts.InferRepos && len(repos) == 0 {
+		if opts.SystemRunnersFn == nil {
+			opts.SystemRunnersFn = func(ctx context.Context) ([]runner.Status, error) {
+				lo := runner.DefaultListOptions()
+				lo.RunFn = opts.RunFn
+				return runner.List(ctx, lo)
+			}
+		}
+		systemd, err := opts.SystemRunnersFn(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("infer repos: %w", err)
+		}
+		repos = inferReposFromSystemd(systemd)
+	}
+	if err := validateRepos(repos); err != nil {
+		return nil, err
+	}
+	return repos, nil
 }
 
 // fetchBillingUsage chama /organizations/{org}/settings/billing/usage com
