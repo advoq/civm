@@ -220,23 +220,50 @@ func TrimByAge(opts Options, c Cap) Result {
 	protectCutoff := opts.Now.Add(-c.MinProtect)
 	target := total - c.MaxBytes
 	var freed int64
-	for _, e := range entries {
-		if freed >= target {
-			break
-		}
-		if c.MinProtect > 0 && e.mtime.After(protectCutoff) {
-			continue
-		}
-		if opts.Execute {
-			if err := opts.RemoveAllFn(e.path); err != nil {
-				if errors.Is(err, fs.ErrNotExist) {
-					continue
-				}
-				r.Err = err
-				return r
+	removed := make([]bool, len(entries))
+
+	// MaxBytes e um TETO HARD (a garantia anti-enchimento). trimPass percorre do
+	// mais antigo ao mais novo. Pass 1 (allowProtected=false) preserva os arquivos
+	// quentes (acessados dentro de MinProtect). Se isso NAO alcanca o cap — o caso
+	// do cache de CI sob carga continua, onde TODO arquivo e recente e o cap nunca
+	// se aplicava (yarn-advoq-* cresceu a 18GB, incidente 2026-06-15) — Pass 2 trima
+	// os protegidos tambem, do mais antigo ao mais novo, ate o cap. A protecao de
+	// disco vence a temperatura do cache (Kahneman #16: o fail-safe e o disco).
+	trimPass := func(allowProtected bool) error {
+		for i := range entries {
+			if freed >= target {
+				return nil
 			}
+			if removed[i] {
+				continue
+			}
+			if !allowProtected && c.MinProtect > 0 && entries[i].mtime.After(protectCutoff) {
+				continue
+			}
+			if opts.Execute {
+				if err := opts.RemoveAllFn(entries[i].path); err != nil {
+					if errors.Is(err, fs.ErrNotExist) {
+						removed[i] = true
+						continue
+					}
+					r.Err = err
+					return err
+				}
+			}
+			removed[i] = true
+			freed += entries[i].size
 		}
-		freed += e.size
+		return nil
+	}
+	if err := trimPass(false); err != nil {
+		r.Err = err
+		r.BytesFreed = freed
+		return r
+	}
+	if freed < target {
+		if err := trimPass(true); err != nil {
+			r.Err = err
+		}
 	}
 	r.BytesFreed = freed
 	return r

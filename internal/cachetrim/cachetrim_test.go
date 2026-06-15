@@ -112,6 +112,61 @@ func TestTrimByAgeRemovesOldestPreservesHot(t *testing.T) {
 	}
 }
 
+// TestTrimByAgeHardCeilingTrimsRecentWhenAllProtected prova o TETO HARD do
+// incidente 2026-06-15: quando TODO arquivo esta dentro do MinProtect — o caso do
+// cache de CI sob carga continua, onde o yarn-advoq-* cresceu a 18GB porque o cap
+// nunca aplicava — o MaxBytes AINDA e imposto (Pass 2 trima os protegidos, do mais
+// antigo ao mais novo). Antes do fix isto FALHAVA (freed=0, dir crescia sem limite).
+func TestTrimByAgeHardCeilingTrimsRecentWhenAllProtected(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	mkfile := func(name string, size int64, age time.Duration) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, make([]byte, size), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, now.Add(-age), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// 3 arquivos de 8MB (24MB total), TODOS dentro do MinProtect de 24h.
+	oldest := mkfile("a.o", 8<<20, 3*time.Hour)
+	mkfile("b.o", 8<<20, 2*time.Hour)
+	newest := mkfile("c.o", 8<<20, 1*time.Hour)
+
+	var removed []string
+	opts := Options{
+		Execute:     true,
+		Now:         now,
+		RemoveAllFn: func(p string) error { removed = append(removed, p); return nil },
+	}
+	// cap 10MB, total 24MB → DEVE liberar >=14MB mesmo com tudo protegido.
+	c := Cap{Path: dir, MaxBytes: 10 << 20, MinProtect: 24 * time.Hour}
+	r := TrimByAge(opts, c)
+	if r.Err != nil {
+		t.Fatalf("unexpected err: %v", r.Err)
+	}
+	if r.BytesFreed < (24<<20)-(10<<20) {
+		t.Errorf("hard ceiling NAO imposto: freed=%d, want >= %d (todos os arquivos recentes)", r.BytesFreed, (24<<20)-(10<<20))
+	}
+	removedOldest, removedNewest := false, false
+	for _, p := range removed {
+		if p == oldest {
+			removedOldest = true
+		}
+		if p == newest {
+			removedNewest = true
+		}
+	}
+	if !removedOldest {
+		t.Error("hard ceiling deve trimar o arquivo protegido MAIS ANTIGO primeiro")
+	}
+	if removedNewest {
+		t.Errorf("hard ceiling over-trimou: removeu o mais novo %s quando os mais antigos bastavam", newest)
+	}
+}
+
 func TestTrimByAgeNoOpUnderCap(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "f"), make([]byte, 1<<20), 0o600); err != nil {

@@ -687,18 +687,22 @@ func TestTrimCacheByAge(t *testing.T) {
 			wantKept:   []string{"/cache/mid", "/cache/new"},
 		},
 		{
-			name: "protect window keeps hot files even if cap requires them",
+			// TETO HARD (incidente 2026-06-15): o cap e absoluto. Pass 1 trima o
+			// cold; se ainda acima do cap, Pass 2 trima o hot mais ANTIGO ate caber,
+			// preservando o hot mais novo. Antes do fix, hot1+hot2 ficavam e o dir
+			// crescia sem limite (o cache de CI sob carga continua chegou a 18GB).
+			name: "hard ceiling trims oldest hot when cold cannot meet the cap",
 			files: []cacheFile{
-				{path: "/cache/hot1", size: 4 * KiB, mtime: now.Add(-10 * time.Minute)},
-				{path: "/cache/hot2", size: 4 * KiB, mtime: now.Add(-30 * time.Minute)},
-				{path: "/cache/cold", size: 4 * KiB, mtime: now.Add(-7 * 24 * time.Hour)},
+				{path: "/cache/hot1", size: 4 * KiB, mtime: now.Add(-10 * time.Minute)}, // mais novo → fica
+				{path: "/cache/hot2", size: 4 * KiB, mtime: now.Add(-30 * time.Minute)}, // mais antigo → Pass 2
+				{path: "/cache/cold", size: 4 * KiB, mtime: now.Add(-7 * 24 * time.Hour)}, // → Pass 1
 			},
-			maxBytes:   1 * KiB, // cap is way below; only cold can be removed
+			maxBytes:   6 * KiB, // total 12K; cold sozinho deixa 8K > 6K → Pass 2 trima o hot mais antigo
 			minProtect: time.Hour,
 			wantFound:  12 * KiB,
-			wantFreed:  4 * KiB,
-			wantGone:   []string{"/cache/cold"},
-			wantKept:   []string{"/cache/hot1", "/cache/hot2"},
+			wantFreed:  8 * KiB,
+			wantGone:   []string{"/cache/cold", "/cache/hot2"},
+			wantKept:   []string{"/cache/hot1"},
 		},
 		{
 			name: "stops once target met",
