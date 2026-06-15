@@ -7,8 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -92,36 +90,4 @@ var errSlotBusy = errors.New("admit: slot busy")
 // writer can hold the same slot). perm is uint32 to match the injected seam.
 func defaultWriteFile(path string, data []byte, perm uint32) error {
 	return os.WriteFile(path, data, os.FileMode(perm))
-}
-
-// defaultPidStartTicks reads field 22 (starttime, clock ticks since boot) from
-// /proc/<pid>/stat — the PID-reuse discriminator paired with kill -0. Ported
-// from internal/dockerlock (same proven parser). The comm field (2) may contain
-// spaces and ')', so parsing resumes after the final ')'.
-func defaultPidStartTicks(pid int) (uint64, error) {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return 0, fmt.Errorf("admit: ler /proc/%d/stat: %w", pid, err)
-	}
-	return parseStartTicks(string(data))
-}
-
-// parseStartTicks extracts field 22 from a /proc/<pid>/stat line.
-func parseStartTicks(stat string) (uint64, error) {
-	commEnd := strings.LastIndexByte(stat, ')')
-	if commEnd < 0 || commEnd+2 > len(stat) {
-		return 0, fmt.Errorf("admit: stat sem campo comm")
-	}
-	rest := strings.Fields(stat[commEnd+1:])
-	// After comm (field 2), rest[0] is field 3 (state); starttime is field 22 =
-	// index 19 of rest.
-	const startTimeIdx = 19
-	if len(rest) <= startTimeIdx {
-		return 0, fmt.Errorf("admit: stat com poucos campos (%d)", len(rest))
-	}
-	ticks, err := strconv.ParseUint(rest[startTimeIdx], 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("admit: parse starttime %q: %w", rest[startTimeIdx], err)
-	}
-	return ticks, nil
 }

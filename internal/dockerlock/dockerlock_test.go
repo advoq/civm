@@ -558,61 +558,6 @@ func TestAcquireWriteHeartbeatFailureUnlocks(t *testing.T) {
 	}
 }
 
-func TestParseStartTicks(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name    string
-		stat    string
-		want    uint64
-		wantErr bool
-	}{
-		{
-			name: "simple comm",
-			// fields: 1=pid 2=(comm) 3=state ... 22=starttime
-			stat: "1234 (bash) S 1 1234 1234 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 9876543 0 0",
-			want: 9876543,
-		},
-		{
-			name: "comm with spaces and parens",
-			stat: "5678 (My Proc (x)) R 1 5678 5678 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 4242 0 0",
-			want: 4242,
-		},
-		{
-			name:    "missing comm close paren",
-			stat:    "1234 bash S 1",
-			wantErr: true,
-		},
-		{
-			name:    "too few fields after comm",
-			stat:    "1234 (bash) S 1 1",
-			wantErr: true,
-		},
-		{
-			name:    "non-numeric starttime",
-			stat:    "1234 (bash) S 1 1234 1234 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 notanumber 0 0",
-			wantErr: true,
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			got, err := parseStartTicks(c.stat)
-			if c.wantErr {
-				if err == nil {
-					t.Fatalf("parseStartTicks(%q) err = nil, want error", c.stat)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseStartTicks(%q) err = %v", c.stat, err)
-			}
-			if got != c.want {
-				t.Fatalf("parseStartTicks(%q) = %d, want %d", c.stat, got, c.want)
-			}
-		})
-	}
-}
-
 func TestHeartbeatJSONRoundTrips(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

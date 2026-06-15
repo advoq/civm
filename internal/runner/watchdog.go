@@ -376,11 +376,49 @@ func unitForWorkRoot(workRoot string, systemd []Status) string {
 // an unreadable/absent/truncated log is a no-op, never a watchdog failure
 // (RF-6 / ITEM-10 / DT-8).
 func detectBrokenRunner(ctx context.Context, opts WatchdogOptions, systemd []Status, report *WatchdogReport) {
-	data, err := opts.ReadFileFn(opts.HooksLogPath)
-	if err != nil || len(strings.TrimSpace(string(data))) == 0 {
+	now := opts.NowFn()
+	// Pipeline em 4 estágios: lê os sentinels do log → mapeia cada work_root para
+	// a unit dona → escolhe quais units restartar (respeitando cap + dedup, e
+	// persistindo o estado ANTES de agir) → executa os restarts. Cada estágio é
+	// um no-op silencioso quando não há nada a fazer (best-effort, RF-6/ITEM-10).
+	sentinelAt := parseBrokenSentinels(opts, now)
+	if len(sentinelAt) == 0 {
 		return
 	}
-	now := opts.NowFn()
+	unitSentinel := mapSentinelsToUnits(sentinelAt, systemd, report)
+	if len(unitSentinel) == 0 {
+		return
+	}
+	state, err := loadRerunState(opts)
+	if err != nil {
+		report.add(WatchdogEvent{Event: "runner-auto-restart-skipped", Severity: "warning", Reason: "marker-read-failed", Detail: err.Error()})
+		return
+	}
+	toRestart := selectUnitsToRestart(opts, now, unitSentinel, &state, report)
+	if len(toRestart) == 0 {
+		return
+	}
+	// F1 fail-closed: persist the reserved cap/dedup state BEFORE restarting. If
+	// the marker cannot be written, abort without restarting — a missed recovery
+	// is safer than an uncapped restart loop (a write failure is correlated with
+	// the disk/permission fault that wedged the runner in the first place).
+	if err := writeRerunState(opts, state); err != nil {
+		report.add(WatchdogEvent{Event: "runner-auto-restart-skipped", Severity: "critical", Reason: "marker-write-failed", Detail: err.Error()})
+		report.Exit = maxExit(report.Exit, 2)
+		return
+	}
+	executeRestarts(ctx, opts, toRestart, report)
+}
+
+// parseBrokenSentinels lê o tail do hooks.jsonl compartilhado e devolve, por
+// work_root, o timestamp do sentinel de broken-runner mais recente dentro da
+// janela de 1h. Um log ausente/ilegível/truncado, ou sem sentinels na janela,
+// resulta num mapa vazio — nunca um erro (best-effort, DT-8).
+func parseBrokenSentinels(opts WatchdogOptions, now time.Time) map[string]time.Time {
+	data, err := opts.ReadFileFn(opts.HooksLogPath)
+	if err != nil || len(strings.TrimSpace(string(data))) == 0 {
+		return nil
+	}
 	cutoff := now.Add(-time.Hour)
 	lines := strings.Split(string(data), "\n")
 	if len(lines) > 500 {
@@ -411,10 +449,14 @@ func detectBrokenRunner(ctx context.Context, opts WatchdogOptions, systemd []Sta
 			sentinelAt[rec.WorkRoot] = ts
 		}
 	}
-	if len(sentinelAt) == 0 {
-		return
-	}
-	// Map work_root -> unit deterministically, keeping the newest sentinel time.
+	return sentinelAt
+}
+
+// mapSentinelsToUnits resolve deterministicamente cada work_root para a unit
+// dona (via WorkingDirectory) e devolve, por unit, o timestamp do sentinel mais
+// recente. work_roots sem unit dona viram um skip "no-unit-for-work-root" no
+// report (nunca um chute num box compartilhado).
+func mapSentinelsToUnits(sentinelAt map[string]time.Time, systemd []Status, report *WatchdogReport) map[string]time.Time {
 	unitSentinel := map[string]time.Time{}
 	for workRoot, ts := range sentinelAt {
 		unit := unitForWorkRoot(workRoot, systemd)
@@ -426,14 +468,15 @@ func detectBrokenRunner(ctx context.Context, opts WatchdogOptions, systemd []Sta
 			unitSentinel[unit] = ts
 		}
 	}
-	if len(unitSentinel) == 0 {
-		return
-	}
-	state, err := loadRerunState(opts)
-	if err != nil {
-		report.add(WatchdogEvent{Event: "runner-auto-restart-skipped", Severity: "warning", Reason: "marker-read-failed", Detail: err.Error()})
-		return
-	}
+	return unitSentinel
+}
+
+// selectUnitsToRestart percorre as units (em ordem estável) aplicando o cap por
+// hora e o dedup F2, e reserva o slot no `state` em memória para cada unit que
+// vai de fato restartar. O caller é quem PERSISTE `state` antes de chamar
+// executeRestarts (invariante F1 persist-before-restart). Em dry-run apenas
+// surfaceia o candidato e nunca acrescenta à lista de restart.
+func selectUnitsToRestart(opts WatchdogOptions, now time.Time, unitSentinel map[string]time.Time, state *rerunState, report *WatchdogReport) []string {
 	units := make([]string, 0, len(unitSentinel))
 	for u := range unitSentinel {
 		units = append(units, u)
@@ -469,18 +512,13 @@ func detectBrokenRunner(ctx context.Context, opts WatchdogOptions, systemd []Sta
 		state.AutoRestarts[unit] = w
 		toRestart = append(toRestart, unit)
 	}
-	if len(toRestart) == 0 {
-		return
-	}
-	// F1 fail-closed: persist the reserved cap/dedup state BEFORE restarting. If
-	// the marker cannot be written, abort without restarting — a missed recovery
-	// is safer than an uncapped restart loop (a write failure is correlated with
-	// the disk/permission fault that wedged the runner in the first place).
-	if err := writeRerunState(opts, state); err != nil {
-		report.add(WatchdogEvent{Event: "runner-auto-restart-skipped", Severity: "critical", Reason: "marker-write-failed", Detail: err.Error()})
-		report.Exit = maxExit(report.Exit, 2)
-		return
-	}
+	return toRestart
+}
+
+// executeRestarts restarta cada unit já reservada (e persistida) via RestartFn.
+// Uma falha de restart vira evento crítico + exit 2, mas não aborta as demais —
+// cada unit é independente no box compartilhado.
+func executeRestarts(ctx context.Context, opts WatchdogOptions, toRestart []string, report *WatchdogReport) {
 	for _, unit := range toRestart {
 		event := WatchdogEvent{Event: "runner-auto-restarted", Severity: "warning", Unit: unit, Reason: "broken-runner-sentinel", Executed: true}
 		if err := opts.RestartFn(ctx, unit); err != nil {
@@ -530,57 +568,11 @@ func rerunWatchdogNetworkFailures(ctx context.Context, opts WatchdogOptions, rep
 		}
 		for _, run := range runs {
 			report.Metrics.RunsConsidered++
-			if reason := skipRunBeforeLog(opts, repo, run, state); reason != "" {
-				report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "info", Repo: repo, RunID: run.ID, HeadSHA: run.HeadSHA, Reason: reason})
-				continue
+			// Um erro fatal de rerun (gh run rerun falhou) aborta toda a função, igual
+			// ao comportamento anterior do `return err` inline no loop.
+			if err := evaluateNetworkRerun(ctx, opts, repo, run, &state, &mutated, report); err != nil {
+				return err
 			}
-			pr, reason, err := openPullRequestForRun(ctx, opts, repo, run)
-			if err != nil {
-				report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "warning", Repo: repo, RunID: run.ID, HeadSHA: run.HeadSHA, Reason: "pr-check-failed", Detail: err.Error()})
-				report.Exit = maxExit(report.Exit, 1)
-				continue
-			}
-			if reason != "" {
-				report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "info", Repo: repo, RunID: run.ID, HeadSHA: run.HeadSHA, Reason: reason})
-				continue
-			}
-			log, err := opts.RunLogFn(ctx, repo, run.ID)
-			if err != nil {
-				report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "warning", Repo: repo, RunID: run.ID, HeadSHA: run.HeadSHA, Reason: "log-fetch-failed", Detail: err.Error()})
-				report.Exit = maxExit(report.Exit, 1)
-				continue
-			}
-			classification := ClassifyFailureLog(log)
-			if classification.Kind != FailureNetworkCheckout {
-				report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "info", Repo: repo, RunID: run.ID, HeadSHA: run.HeadSHA, Reason: string(classification.Kind), Detail: classification.Detail})
-				continue
-			}
-			event := WatchdogEvent{
-				Event:    "rerun-triggered",
-				Severity: "info",
-				Repo:     repo,
-				RunID:    run.ID,
-				HeadSHA:  run.HeadSHA,
-				Reason:   "network-checkout",
-				Detail:   fmt.Sprintf("pr=%d signature=%s", pr.Number, classification.Signature),
-				Executed: opts.Execute,
-			}
-			if opts.Execute {
-				if err := opts.RerunFn(ctx, repo, run.ID); err != nil {
-					event.Severity = "critical"
-					event.Detail = fmt.Sprintf("gh run rerun: %v", err)
-					report.add(event)
-					return err
-				}
-				state.Reruns[rerunMarkerKey(run.ID, run.HeadSHA)] = RerunMarker{
-					Repo:    repo,
-					RunID:   run.ID,
-					HeadSHA: run.HeadSHA,
-					RerunAt: opts.NowFn().UTC(),
-				}
-				mutated = true
-			}
-			report.add(event)
 		}
 	}
 	if mutated {
@@ -589,6 +581,67 @@ func rerunWatchdogNetworkFailures(ctx context.Context, opts WatchdogOptions, rep
 			return err
 		}
 	}
+	return nil
+}
+
+// evaluateNetworkRerun processa um único workflow run: filtra runs não elegíveis,
+// busca o PR aberto e o log, classifica a falha e — só quando é network-checkout
+// e Execute está ligado — dispara o rerun e grava o marker de dedup. Devolve um
+// erro NÃO-nil apenas no caso fatal de `RerunFn` falhar (o caller aborta a função
+// inteira); todos os outros caminhos são skips registrados no report e retornam
+// nil para o run seguinte. Pode setar `*mutated=true` quando grava um marker novo.
+func evaluateNetworkRerun(ctx context.Context, opts WatchdogOptions, repo string, run WatchdogRun, state *rerunState, mutated *bool, report *WatchdogReport) error {
+	if reason := skipRunBeforeLog(opts, repo, run, *state); reason != "" {
+		report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "info", Repo: repo, RunID: run.ID, HeadSHA: run.HeadSHA, Reason: reason})
+		return nil
+	}
+	pr, reason, err := openPullRequestForRun(ctx, opts, repo, run)
+	if err != nil {
+		report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "warning", Repo: repo, RunID: run.ID, HeadSHA: run.HeadSHA, Reason: "pr-check-failed", Detail: err.Error()})
+		report.Exit = maxExit(report.Exit, 1)
+		return nil
+	}
+	if reason != "" {
+		report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "info", Repo: repo, RunID: run.ID, HeadSHA: run.HeadSHA, Reason: reason})
+		return nil
+	}
+	log, err := opts.RunLogFn(ctx, repo, run.ID)
+	if err != nil {
+		report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "warning", Repo: repo, RunID: run.ID, HeadSHA: run.HeadSHA, Reason: "log-fetch-failed", Detail: err.Error()})
+		report.Exit = maxExit(report.Exit, 1)
+		return nil
+	}
+	classification := ClassifyFailureLog(log)
+	if classification.Kind != FailureNetworkCheckout {
+		report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "info", Repo: repo, RunID: run.ID, HeadSHA: run.HeadSHA, Reason: string(classification.Kind), Detail: classification.Detail})
+		return nil
+	}
+	event := WatchdogEvent{
+		Event:    "rerun-triggered",
+		Severity: "info",
+		Repo:     repo,
+		RunID:    run.ID,
+		HeadSHA:  run.HeadSHA,
+		Reason:   "network-checkout",
+		Detail:   fmt.Sprintf("pr=%d signature=%s", pr.Number, classification.Signature),
+		Executed: opts.Execute,
+	}
+	if opts.Execute {
+		if err := opts.RerunFn(ctx, repo, run.ID); err != nil {
+			event.Severity = "critical"
+			event.Detail = fmt.Sprintf("gh run rerun: %v", err)
+			report.add(event)
+			return err
+		}
+		state.Reruns[rerunMarkerKey(run.ID, run.HeadSHA)] = RerunMarker{
+			Repo:    repo,
+			RunID:   run.ID,
+			HeadSHA: run.HeadSHA,
+			RerunAt: opts.NowFn().UTC(),
+		}
+		*mutated = true
+	}
+	report.add(event)
 	return nil
 }
 
@@ -842,37 +895,74 @@ func rerunMarkerKey(runID int64, headSHA string) string {
 
 func applyWatchdogDefaults(opts *WatchdogOptions) {
 	defaults := DefaultWatchdogOptions()
-	if opts.NetworkTimeout == 0 {
-		opts.NetworkTimeout = defaults.NetworkTimeout
+	applyWatchdogScalarDefaults(opts, defaults)
+	applyWatchdogIOFnDefaults(opts, defaults)
+	applyWatchdogCommandFnDefaults(opts)
+}
+
+// applyWatchdogScalarDefaults preenche cada campo escalar zero-valued com o
+// default do mesmo campo. Tabela em vez de staircase: cada linha pareia o
+// "está zerado?" do campo com a ação que aplica o default — o set de campos com
+// fallback fica óbvio numa varredura só.
+func applyWatchdogScalarDefaults(opts *WatchdogOptions, defaults WatchdogOptions) {
+	scalarDefaults := []struct {
+		isZero func() bool
+		apply  func()
+	}{
+		{func() bool { return opts.NetworkTimeout == 0 }, func() { opts.NetworkTimeout = defaults.NetworkTimeout }},
+		{func() bool { return opts.RestartDelay == 0 }, func() { opts.RestartDelay = defaults.RestartDelay }},
+		{func() bool { return opts.MaxRunAge == 0 }, func() { opts.MaxRunAge = defaults.MaxRunAge }},
+		{func() bool { return opts.RunLimit == 0 }, func() { opts.RunLimit = defaults.RunLimit }},
+		{func() bool { return opts.MarkerPath == "" }, func() { opts.MarkerPath = defaults.MarkerPath }},
+		{func() bool { return opts.HooksLogPath == "" }, func() { opts.HooksLogPath = defaults.HooksLogPath }},
+		{func() bool { return opts.AutoRestartPerHour == 0 }, func() { opts.AutoRestartPerHour = defaults.AutoRestartPerHour }},
 	}
-	if opts.RestartDelay == 0 {
-		opts.RestartDelay = defaults.RestartDelay
+	for _, d := range scalarDefaults {
+		if d.isZero() {
+			d.apply()
+		}
 	}
-	if opts.MaxRunAge == 0 {
-		opts.MaxRunAge = defaults.MaxRunAge
-	}
-	if opts.RunLimit == 0 {
-		opts.RunLimit = defaults.RunLimit
-	}
-	if opts.MarkerPath == "" {
-		opts.MarkerPath = defaults.MarkerPath
-	}
-	if opts.HooksLogPath == "" {
-		opts.HooksLogPath = defaults.HooksLogPath
-	}
-	if opts.AutoRestartPerHour == 0 {
-		opts.AutoRestartPerHour = defaults.AutoRestartPerHour
-	}
+}
+
+// applyWatchdogIOFnDefaults preenche os hooks de I/O puro (sem closure sobre
+// opts) com as implementações do DefaultWatchdogOptions. Idêntico ao bloco
+// escalar, mas separado porque o tipo de campo é func, não valor.
+func applyWatchdogIOFnDefaults(opts *WatchdogOptions, defaults WatchdogOptions) {
 	if opts.RunFn == nil {
 		opts.RunFn = defaults.RunFn
 	}
+	if opts.ActivityFn == nil {
+		opts.ActivityFn = defaults.ActivityFn
+	}
+	if opts.HookInstallFn == nil {
+		opts.HookInstallFn = defaults.HookInstallFn
+	}
+	if opts.ReadFileFn == nil {
+		opts.ReadFileFn = defaults.ReadFileFn
+	}
+	if opts.WriteFileFn == nil {
+		opts.WriteFileFn = defaults.WriteFileFn
+	}
+	if opts.MkdirAllFn == nil {
+		opts.MkdirAllFn = defaults.MkdirAllFn
+	}
+	if opts.NowFn == nil {
+		opts.NowFn = defaults.NowFn
+	}
+	if opts.SleepFn == nil {
+		opts.SleepFn = defaults.SleepFn
+	}
+}
+
+// applyWatchdogCommandFnDefaults instala os hooks que precisam de closure sobre
+// `opts` (cada um delega ao RunFn já resolvido, por isso rodam DEPOIS do I/O Fn
+// default acima). Cada fallback é o caminho command-backed (gh / systemctl /
+// git) usado fora dos testes herméticos.
+func applyWatchdogCommandFnDefaults(opts *WatchdogOptions) {
 	if opts.RestartFn == nil {
 		opts.RestartFn = func(ctx context.Context, unit string) error {
 			return defaultWatchdogRestart(ctx, *opts, unit)
 		}
-	}
-	if opts.ActivityFn == nil {
-		opts.ActivityFn = defaults.ActivityFn
 	}
 	if opts.SystemRunnersFn == nil {
 		opts.SystemRunnersFn = func(ctx context.Context) ([]Status, error) {
@@ -885,9 +975,6 @@ func applyWatchdogDefaults(opts *WatchdogOptions) {
 		opts.GitHubRunnersFn = func(ctx context.Context, repo string) ([]WatchdogGitHubRunner, error) {
 			return listWatchdogGitHubRunners(ctx, repo, opts.RunFn)
 		}
-	}
-	if opts.HookInstallFn == nil {
-		opts.HookInstallFn = defaults.HookInstallFn
 	}
 	if opts.ListRunsFn == nil {
 		opts.ListRunsFn = func(ctx context.Context, repo string, limit int) ([]WatchdogRun, error) {
@@ -909,21 +996,6 @@ func applyWatchdogDefaults(opts *WatchdogOptions) {
 			_, err := opts.RunFn(ctx, "gh", "run", "rerun", strconv.FormatInt(runID, 10), "--repo", repo, "--failed")
 			return err
 		}
-	}
-	if opts.ReadFileFn == nil {
-		opts.ReadFileFn = defaults.ReadFileFn
-	}
-	if opts.WriteFileFn == nil {
-		opts.WriteFileFn = defaults.WriteFileFn
-	}
-	if opts.MkdirAllFn == nil {
-		opts.MkdirAllFn = defaults.MkdirAllFn
-	}
-	if opts.NowFn == nil {
-		opts.NowFn = defaults.NowFn
-	}
-	if opts.SleepFn == nil {
-		opts.SleepFn = defaults.SleepFn
 	}
 	if opts.NetworkFn == nil {
 		opts.NetworkFn = func(ctx context.Context, timeout time.Duration) error {

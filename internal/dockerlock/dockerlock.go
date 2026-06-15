@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/procstat"
 )
 
 // defaultScope is the only enumerated scope; it is an observability label, the
@@ -139,7 +140,7 @@ func DefaultOptions() Options {
 		RemoveFn:        os.Remove,
 		MkdirAllFn:      os.MkdirAll,
 		PidAliveFn:      defaultPidAlive,
-		PidStartTicksFn: defaultPidStartTicks,
+		PidStartTicksFn: procstat.PidStartTicks,
 	}
 }
 
@@ -187,7 +188,7 @@ func applyDefaults(opts *Options) {
 		opts.PidAliveFn = defaultPidAlive
 	}
 	if opts.PidStartTicksFn == nil {
-		opts.PidStartTicksFn = defaultPidStartTicks
+		opts.PidStartTicksFn = procstat.PidStartTicks
 	}
 }
 
@@ -510,44 +511,4 @@ func defaultPidAlive(pid int) bool {
 	}
 	// EPERM means the process exists but is owned by another user.
 	return errors.Is(err, syscall.EPERM)
-}
-
-// defaultPidStartTicks reads field 22 (starttime, clock ticks since boot) from
-// /proc/<pid>/stat. The comm field (2) may contain spaces and parentheses, so
-// parsing resumes after the final ')'.
-func defaultPidStartTicks(pid int) (uint64, error) {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return 0, fmt.Errorf("ler /proc/%d/stat: %w", pid, err)
-	}
-	return parseStartTicks(string(data))
-}
-
-// parseStartTicks extracts field 22 from a /proc/<pid>/stat line. Field 2
-// (comm) is wrapped in parentheses and may itself contain spaces and ')';
-// parsing the remaining fields starts after the last ')'.
-func parseStartTicks(stat string) (uint64, error) {
-	commEnd := strings.LastIndexByte(stat, ')')
-	if commEnd < 0 || commEnd+2 > len(stat) {
-		return 0, fmt.Errorf("stat sem campo comm: %q", truncateStat(stat))
-	}
-	rest := strings.Fields(stat[commEnd+1:])
-	// After comm (field 2), rest[0] is field 3 (state). starttime is field 22,
-	// i.e. index 19 of rest.
-	const startTimeIdx = 19
-	if len(rest) <= startTimeIdx {
-		return 0, fmt.Errorf("stat com poucos campos (%d)", len(rest))
-	}
-	ticks, err := strconv.ParseUint(rest[startTimeIdx], 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse starttime %q: %w", rest[startTimeIdx], err)
-	}
-	return ticks, nil
-}
-
-func truncateStat(s string) string {
-	if len(s) > 64 {
-		return s[:64]
-	}
-	return s
 }
