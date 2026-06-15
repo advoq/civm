@@ -7,8 +7,8 @@ issues: []
 
 # SPEC — Isolamento docker-heavy multi-projeto como primitivo do civm
 
-> Gerado a partir de `docs/specs/multi-project-isolation/PRD.md` (PASSO 2 SSDV3).
-> Fecha decisões, remove ambiguidade e traduz os RF-1..RF-7 em mudanças exatas no repo `civm`.
+> Gerado de `docs/specs/multi-project-isolation/PRD.md` (PASSO 2 SSDV3).
+> Fecha decisões, remove ambiguidade e traduz RF-1..RF-7 em mudanças exatas no repo `civm`.
 > Disciplinas: `disciplines/KAHNEMAN-DISCIPLINES.md`. Validação: `go test`, `golangci-lint run`, `npm run docs:check`.
 
 ## Escopo fechado desta implementação
@@ -23,7 +23,7 @@ issues: []
 - Observabilidade: `capacity.Report` estendido + linhas `lock_*` em `hooks.jsonl` — RF-6.
 - Contrato único publicado: runbook, templates, checklist — RF-7.
 
-**Fica explicitamente fora agora:**
+**Fica fora agora:**
 
 - dockerd rootless / `DOCKER_HOST` por runner (isolamento real de daemon) — deferido atrás de gate de expansão de disco/RAM.
 - Implementação do lado advoq (#1006) — consumidor, vira slice fina separada no repo advoq.
@@ -52,23 +52,23 @@ issues: []
 
 | # | Decisão | Justificativa |
 | --- | --- | --- |
-| DT-1 | `CIVM_PORT_BASE` é um **bloco de 64 portas por runner**, base sticky persistida em `/var/lib/civm/port-blocks.json` (mapa `slot→base`), alocando o próximo bloco livre para `short` novo. | Mantém base estável entre re-runs de `hook install` e garante disjunção determinística sem colisão por hash. Mesmo diretório de estado já usado pelo civm (`/var/lib/civm/runner-watchdog-reruns.json`). |
+| DT-1 | `CIVM_PORT_BASE` é um **bloco de 64 portas por runner**, base sticky persistida em `/var/lib/civm/port-blocks.json` (mapa `slot→base`), alocando o próximo bloco livre para `short` novo. | Base estável entre re-runs de `hook install` e disjunção determinística sem colisão por hash. Mesmo diretório de estado já usado pelo civm (`/var/lib/civm/runner-watchdog-reruns.json`). |
 | DT-2 | Janela de portas civm = **[20000, 32000)** (≈187 blocos de 64). | Acima dos defaults conhecidos dos peers (minio 9020/9021, evolution 8110/8111, nginx 81, prometheus 9100, grafana 3011, ms-* 8081-8089) e **abaixo** da faixa ephemeral do kernel Linux (32768-60999) usada por testcontainers/`findAvailablePort`. Evita colisão com ambos. |
 | DT-3 | `civmctl lock --exec -- <cmd>` é a forma **primária**; `acquire`/`release` existem para scripts shell. | `--exec` libera o lock por `defer` mesmo em falha/sinal do comando interno (fail-safe). O par acquire/release é frágil (release pode não rodar) — só para quem não pode envolver o comando. |
-| DT-4 | Lock = `syscall.Flock(LOCK_EX\|LOCK_NB)` em `/run/civm/docker-heavy.lock` + arquivo heartbeat `/run/civm/docker-heavy.lock.hb` (JSON `{pid, scope, acquiredAt, expiresAt, repo, runId}`) atualizado a cada `DefaultDockerHeavyHeartbeatSeconds`. | flock dá exclusão entre processos; heartbeat dá detecção de stale (PID morto OU `expiresAt < now`) e a semântica de orçamento que o cleanup/watchdog consultam. Não há helper flock pré-existente (Confirmado — busca zero). |
+| DT-4 | Lock = `syscall.Flock(LOCK_EX\|LOCK_NB)` em `/run/civm/docker-heavy.lock` + arquivo heartbeat `/run/civm/docker-heavy.lock.hb` (JSON `{pid, scope, acquiredAt, expiresAt, repo, runId}`) atualizado a cada `DefaultDockerHeavyHeartbeatSeconds`. | flock dá exclusão entre processos; heartbeat dá detecção de stale (PID morto OU `expiresAt < now`) e a semântica de orçamento que cleanup/watchdog consultam. Não há helper flock pré-existente (Confirmado — busca zero). |
 | DT-5 | Dois orçamentos: **WAIT** (`DefaultDockerHeavyLockWaitMinutes`, falha alto se não adquirir) e **HOLD** (`DefaultDockerHeavyLockBudgetMinutes`, após o qual o heartbeat não é mais estendido → cleanup pode reclamar). | Separa "esperei demais para começar" (fail-high) de "segurei demais" (perde proteção do watchdog → fail-closed). Resolve a starvação documentada no PRD §9 sem precisar matar o comando interno. |
 | DT-6 | `ci-guard` tem `--mode=report\|enforce` e waiver inline por comentário `# civm:ci-guard-allow <rule> <motivo>` (espelha o padrão `invariant-waive` já usado no runbook). | Rollout report→enforce evita bloquear peers de surpresa; waiver documentado evita falso-positivo travando merge legítimo (Kahneman #5 worst-case). |
-| DT-7 | Slot do runner = basename do dir menos prefixo `actions-runner-` (ex.: `/home/x/actions-runner-cmpx` → `cmpx`); fallback = basename completo. | É a identidade estável já existente (`AddOptions.Short`, `internal/runner/runner.go:19-32`); o dir é o que `install.go` itera. |
+| DT-7 | Slot do runner = basename do dir menos prefixo `actions-runner-` (ex.: `/home/x/actions-runner-cmpx` → `cmpx`); fallback = basename completo. | Identidade estável já existente (`AddOptions.Short`, `internal/runner/runner.go:19-32`); o dir é o que `install.go` itera. |
 | DT-8 | Label da classe pesada = `civm-e2e` adicionada via `runner add --label civm,civm-e2e`. Sem novo conceito de "grupo". | Labels CSV já suportados (Confirmado — `runner.go:142-145`); `runs-on: [self-hosted, civm, civm-e2e]` no peer roteia só ao runner dedicado. Custo near-zero. |
 
 ## Fronteira de atomicidade e política de rollback
 
 - **Fronteira de atomicidade desta implementação:**
-  - Atômico nesta entrega: a aquisição/liberação de um único lock por processo (flock é atômico no kernel); a escrita de cada `.env` (`os.WriteFile` substitui o arquivo inteiro); a alocação de um bloco de porta novo (escrita do mapa sob lock do próprio arquivo de estado).
-  - **Fora da atomicidade:** a propagação do `.env` para jobs (depende de `systemctl restart` dos runners e do boot do serviço); a consistência entre o `CIVM_PORT_BASE` injetado e o uso real pelo peer (garantida por `ci-guard`, não por transação). Estados parciais aceitos nesta fase: runner reiniciado mas peer ainda não adotou o contrato → degrada para o comportamento atual (sem o primitivo), nunca colide silenciosamente porque `ci-guard` recusa.
+  - Atômico nesta entrega: aquisição/liberação de um único lock por processo (flock é atômico no kernel); escrita de cada `.env` (`os.WriteFile` substitui o arquivo inteiro); alocação de um bloco de porta novo (escrita do mapa sob lock do próprio arquivo de estado).
+  - **Fora da atomicidade:** propagação do `.env` para jobs (depende de `systemctl restart` dos runners e do boot do serviço); consistência entre o `CIVM_PORT_BASE` injetado e o uso real pelo peer (garantida por `ci-guard`, não por transação). Estados parciais aceitos nesta fase: runner reiniciado mas peer ainda não adotou o contrato → degrada para o comportamento atual (sem o primitivo), nunca colide silenciosamente porque `ci-guard` recusa.
 - **Política de rollback:**
   - **Rollback de app (binário):** `civmctl self-upgrade` para a versão anterior; `civmctl lock`/`ci-guard` viram no-ops se não invocados; `Report` estendido é aditivo (consumidores antigos ignoram campos novos).
-  - **Rollback de "migração":** N/A — não há schema. Reverter as 3 chaves do `.env` = re-rodar `hook install` da versão anterior (reescreve `.env` sem as chaves). Apagar `/var/lib/civm/port-blocks.json` reseta a alocação (re-alocada no próximo `hook install`).
+  - **Rollback de "migração":** N/A — sem schema. Reverter as 3 chaves do `.env` = re-rodar `hook install` da versão anterior (reescreve `.env` sem as chaves). Apagar `/var/lib/civm/port-blocks.json` reseta a alocação (re-alocada no próximo `hook install`).
   - **Rollback de dados:** N/A — Day-0, sem produção viva, sem dados de tenant.
   - **Proibido em VM ativa:** force-release do lock enquanto há `Runner.Worker`/`docker compose` ativo sem passar pelo abort trigger de orçamento (poderia podar sob um build legítimo). O cleanup só reclama lock com heartbeat **vencido** (DT-5).
   - **`forward-only`?** Não — todas as mudanças são reversíveis por troca de binário + reescrita de `.env`; nenhuma é destrutiva irreversível.
@@ -99,7 +99,7 @@ issues: []
 
 ## Migrações SQL
 
-**N/A — civm é CLI/systemd, sem banco.** Backfill = **N/A — Day-0, sem produção viva**. Único estado novo: arquivo `/var/lib/civm/port-blocks.json` (mapa `slot→base`), criado on-demand pelo `hook install`; não é migração de schema.
+**N/A — civm é CLI/systemd, sem banco.** Backfill = **N/A — Day-0, sem produção viva**. Único estado novo: `/var/lib/civm/port-blocks.json` (mapa `slot→base`), criado on-demand pelo `hook install`; não é migração de schema.
 
 ## Arquivos a CRIAR
 
@@ -129,7 +129,7 @@ issues: []
   - `type Lock struct { /* file handle + opts + ticker */ }`
 - **Funções:**
   - `func DefaultOptions() Options` — paths de `civm.DefaultDockerHeavyLockPath`/`.hb`, budgets de `civm.Default*`, `FlockFn=syscall.Flock`.
-  - `func Acquire(ctx context.Context, opts Options) (*Lock, error)` — loop `LOCK_EX|LOCK_NB` com backoff até `WaitBudget`; ao adquirir, escreve heartbeat e inicia goroutine de heartbeat até `HoldBudget` (depois para de estender); retorna `ErrWaitBudgetExceeded` se não adquirir.
+  - `func Acquire(ctx context.Context, opts Options) (*Lock, error)` — loop `LOCK_EX|LOCK_NB` com backoff até `WaitBudget`; ao adquirir, escreve heartbeat e inicia goroutine de heartbeat até `HoldBudget` (depois para de estender); `ErrWaitBudgetExceeded` se não adquirir.
   - `func (l *Lock) Release() error` — para heartbeat, `LOCK_UN`, fecha fd, remove `.hb`.
   - `func IsActive(opts Options) (bool, error)` — lê heartbeat: ativo sse `ExpiresAt > now` **e** PID vivo (`syscall.Kill(pid, 0)`); usado por cleanup/watchdog/job-started (RF-3).
   - `func reclaimStale(opts Options) (bool, error)` — remove `.hb` vencido (heartbeat morto), permitindo nova aquisição.
@@ -223,7 +223,7 @@ issues: []
   RunnerPortBlocks      map[string]int `json:"runner_port_blocks,omitempty"` // slot->base
   ```
   Em `Check`: setar `DockerHeavyLockActive` via `dockerlock.IsActive(dockerlock.DefaultOptions())`; popular `RunnerPortBlocks` lendo `/var/lib/civm/port-blocks.json` (best-effort, erro→omitido).
-- **Impacto:** aditivo; `RenderText` ganha 1 linha; consumidores JSON antigos ignoram campos novos. Cuidado para `capacity` não criar import cycle com `dockerlock` (ambos importam só `civm`/stdlib — OK).
+- **Impacto:** aditivo; `RenderText` ganha 1 linha; consumidores JSON antigos ignoram campos novos. `capacity` não pode criar import cycle com `dockerlock` (ambos importam só `civm`/stdlib — OK).
 - **Testes requeridos:** serialização do `Report` estendido; `Check` com lock mockado ativo/inativo.
 
 ### `internal/cleanup/cleanup.go` — ITEM-10
@@ -232,7 +232,7 @@ issues: []
 - **Requisitos cobertos:** RF-3, DT-5.
 - **Função/bloco afetado:** `Run()` (sequência linhas 96-118), antes de `dockerPrune` (337-345) / dentro de `ensureIdle()`.
 - **Depois:** antes de qualquer mutação destrutiva (`dockerPrune`, `rm -rf`), checar `dockerlock.IsActive(...)`: se **ativo (heartbeat fresco)**, **adiar** o prune e logar evento `deferred-by-docker-heavy-lock` (sem mutar); se **vencido**, `reclaimStale` + prosseguir. Adicionar campo de resultado/evento indicando o defer.
-- **Impacto:** cleanup já gated por `ensureIdle`; a checagem de lock é uma segunda condição. Sem mudança de assinatura pública se `IsActive` for chamado internamente. Garantir que o `flock /run/civmctl-cleanup.lock` (shell) e o `dockerlock` sejam paths distintos (são).
+- **Impacto:** cleanup já gated por `ensureIdle`; a checagem de lock é segunda condição. Sem mudança de assinatura pública se `IsActive` for chamado internamente. `flock /run/civmctl-cleanup.lock` (shell) e o `dockerlock` são paths distintos.
 - **Testes requeridos:** `cleanup_test.go` — lock fresco → prune adiado + evento; lock vencido → prune ocorre; sem lock → comportamento atual.
 - **Disciplina Kahneman:** #5 — ver Mapa (abort: podar sob lock fresco).
 
@@ -240,7 +240,7 @@ issues: []
 
 - **O que muda:** mesma consciência de lock antes do cleanup agressivo (threshold 60%).
 - **Requisitos cobertos:** RF-3.
-- **Depois:** o watchdog consulta `dockerlock.IsActive`; sob lock fresco, **não** dispara prune agressivo (adia + evento); sob lock vencido OU disco ≥ `DefaultHardFailPct`, prossegue (fail-closed). Reusa a mesma lógica de ITEM-10.
+- **Depois:** o watchdog consulta `dockerlock.IsActive`; sob lock fresco, **não** dispara prune agressivo (adia + evento); sob lock vencido OU disco ≥ `DefaultHardFailPct`, prossegue (fail-closed). Reusa a lógica de ITEM-10.
 - **Impacto:** evita que o watchdog horário derrube um bring-up legítimo segurando o lock.
 - **Testes requeridos:** watchdog com lock fresco (adia) vs disco ≥90% (prossegue mesmo com lock).
 
@@ -271,7 +271,7 @@ issues: []
 
 - **O que muda:** `doctor` reporta presença/ausência do runner com label `civm-e2e` quando o peer declara que o usa (flag `--expect-e2e` ou inferência por labels via `gh api`).
 - **Requisitos cobertos:** RF-5.
-- **Depois:** novo check `RUNNER_E2E_LABEL` em severidade `ok`/`warn` (ausente quando esperado). Reusa o padrão de `hook_checks` do `doctor`.
+- **Depois:** novo check `RUNNER_E2E_LABEL` em severidade `ok`/`warn` (ausente quando esperado). Reusa o padrão `hook_checks` do `doctor`.
 - **Impacto:** aditivo no JSON do `doctor`.
 - **Testes requeridos:** `doctor` com/sem runner `civm-e2e`.
 

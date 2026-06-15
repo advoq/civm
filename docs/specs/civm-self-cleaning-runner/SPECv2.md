@@ -11,10 +11,10 @@ supersedes: SPEC.md
 > **Regra de saída do Passo 2.5 — registro obrigatório.**
 >
 > **(a) SPEC.md foi auditado** (red-team adversarial, 2026-06-06) **sobre o código
-> que já existe no working tree** (não sobre o esqueleto no papel): o gate de duas
-> fases do autoreclaim e a constante `ScratchBudgetGB=11` já estão landados (não
-> commitados). O Passo 2.5 deu **NO-GO no SPEC.md** porque o próprio SPEC.md está
-> materialmente desatualizado vs o código e porque o caminho privilegiado tem um
+> no working tree** (não sobre o esqueleto no papel): o gate de duas fases do
+> autoreclaim e a constante `ScratchBudgetGB=11` já estão landados (não
+> commitados). Passo 2.5 deu **NO-GO no SPEC.md** porque o SPEC.md está
+> materialmente desatualizado vs o código e porque o caminho privilegiado tem
 > modo de falha silencioso (fstrim fail-hard sem sudoers).
 >
 > **(b) Findings bloqueantes endereçados** (cada um com DT concreto, rastreável por
@@ -28,9 +28,9 @@ supersedes: SPEC.md
 >
 > **(c) SPECv2 é o candidato ativo para nova auditoria.** SPEC.md é preservado como
 > registro do estado auditado; **toda divergência SPEC.md ↔ código foi resolvida a
-> favor do código real** (o gate está LIVE) salvo onde o código tem um defeito
-> (B1), caso em que SPECv2 manda corrigir o código. Promover a IMPL somente após
-> nova passada de Passo 2.5 sobre este SPECv2.
+> favor do código real** (o gate está LIVE) salvo onde o código tem defeito (B1),
+> caso em que SPECv2 manda corrigir o código. Promover a IMPL só após nova passada
+> de Passo 2.5 sobre este SPECv2.
 
 > Tradução do `docs/specs/civm-self-cleaning-runner/PRD.md` em mudanças exatas no
 > repo. Rastreável por `RF-N`. Decisão central: **RF-2 (gate autoritativo
@@ -46,7 +46,7 @@ Estado **real** do working tree, verificado linha a linha (2026-06-06):
 | Afirmação do SPEC.md (stale) | Realidade no código | Veredito |
 | --- | --- | --- |
 | "O fix do #106 está INERTE no host; worker roda com default 0" | `civm-vhdx-autoreclaim.ps1:53` → `[int]$ScratchBudgetGB = 11`. O `register-*.ps1` não passa o arg, então **o default do worker (11) é o valor efetivo**. A Fase 1 NÃO aborta por `emergency_disabled_no_budget`. | **FALSO.** O gate está **LIVE em 11**. |
-| "`EmergencyAdmits` não tem caller de produção → RF-1/RF-2 são no-op" | Verdade que `EmergencyAdmits` (reclaim.go:19) **não tem caller Go de produção** (só def + `reclaim_test.go`). Mas o gate **não vive em Go** — vive no PowerShell (`autoreclaim.ps1:338`, aritmética `liveFreeAfterOff - HardFloor >= ScratchBudget` inline). | **PARCIALMENTE FALSO.** O gate é **PowerShell-autoritativo** (DT-11). Não é no-op. |
+| "`EmergencyAdmits` não tem caller de produção → RF-1/RF-2 são no-op" | `EmergencyAdmits` (reclaim.go:19) **não tem caller Go de produção** (só def + `reclaim_test.go`). Mas o gate **não vive em Go** — vive no PowerShell (`autoreclaim.ps1:338`, aritmética `liveFreeAfterOff - HardFloor >= ScratchBudget` inline). | **PARCIALMENTE FALSO.** Gate **PowerShell-autoritativo** (DT-11). Não é no-op. |
 | "Threadar `-ScratchBudgetGB` do `register-*.ps1` é fix obrigatório, senão RF-1/RF-2 são no-op" | Não é obrigatório p/ o gate funcionar (o default do worker já é 11). É **hygiene anti-drift** (a const Go e o default do ps1 podem divergir). | **REBAIXADO** a MEDIUM (DT-11). |
 | "Lint falso-verde: `specv3_reclaim_test.go` exige `autoreclaim_abort_insufficient_slack`, token só em comentário" | `TestAutoreclaimAdmissionGate` (specv3_reclaim_test.go:79-92) **já assere os tokens reais** (`autoreclaim_post_off_remeasure`, `autoreclaim_skip_insufficient_slack_post_off`, `vmrs_release_gb`, `emergency_reclaim_start`). | **FALSO** para o estado atual. |
 | Esqueleto com `$StopMarginGB` / `autoreclaim_abort_pre_stop_unsafe` / `$skipOptimize` / `autoreclaim_post_stop_measure` | **Nenhum existe** no código. Fase 1 só checa `ScratchBudget>0` (`autoreclaim_abort_headroom`, exit 2); skip pós-Off é `exit 0` direto via `finally`. | Esqueleto **descartado**; design relaxado real é canônico (DT-1). |
@@ -60,9 +60,9 @@ futura é breaking change de contrato de log e exige sync do lint + runbook.
 **Resíduo de lint (hygiene, DT-1):** os checks de token em
 `TestAutoreclaimAdmissionGate:79-92` usam `strings.Contains` (substring) — passam
 mesmo se o token só aparecer em **comentário**. O check de `Stop-Job` (linhas
-98-107) já faz a coisa certa (varre linha a linha, pula `#`). Endurecer os checks
-de token para assertar **evento emitido** (mesmo padrão do `Stop-Job`) fecha a
-porta a falsos-verdes **futuros** (Kahneman #13: existência ≠ função). Não urgente
+98-107) já faz certo (varre linha a linha, pula `#`). Endurecer os checks de token
+para assertar **evento emitido** (mesmo padrão do `Stop-Job`) fecha a porta a
+falsos-verdes **futuros** (Kahneman #13: existência ≠ função). Não urgente
 (hoje os tokens são reais), mas é parte do IMPL de RF-2.
 
 ---
@@ -114,7 +114,7 @@ Start-VM 3× (autoreclaim.ps1:389-442); `internal/admit` + `memwatchdog` + `idle
 
 | # | Decisão | Justificativa |
 | --- | --- | --- |
-| **DT-1** | **Gate de duas fases no autoreclaim; Fase 2 re-mede `Get-VFreeGB` (= `Get-PSDrive V` LIVE, def autoreclaim.ps1:120-126) após `Wait-VMState Off`.** A admissão usa `liveFreeAfterOff − HardFloor ≥ ScratchBudget` (autoreclaim.ps1:338), não `beforeFreeGB` pré-stop. **Fase 1 é deliberadamente relaxada** (só `ScratchBudget>0`; sem `$StopMarginGB`), porque `Stop-VM` é empiricamente space-positivo em `V:` (+8.02 GB observado, 06/06/2026). Nomes de evento canônicos fixados; lint endurecido para assertar evento emitido, não substring. | O VMRS (~8 GB) só libera no Off; medir pós-stop é o número real que o Optimize terá. Resolve a espiral a 6.6 GB **sem adivinhar** o VMRS, **sem realocar o deadlock** a um piso menor e **sem abortar** o Optimize ininterruptível. Refina SPECv3 DT-v3-1. |
+| **DT-1** | **Gate de duas fases no autoreclaim; Fase 2 re-mede `Get-VFreeGB` (= `Get-PSDrive V` LIVE, def autoreclaim.ps1:120-126) após `Wait-VMState Off`.** Admissão usa `liveFreeAfterOff − HardFloor ≥ ScratchBudget` (autoreclaim.ps1:338), não `beforeFreeGB` pré-stop. **Fase 1 é deliberadamente relaxada** (só `ScratchBudget>0`; sem `$StopMarginGB`), porque `Stop-VM` é empiricamente space-positivo em `V:` (+8.02 GB observado, 06/06/2026). Nomes de evento canônicos fixados; lint endurecido para assertar evento emitido, não substring. | O VMRS (~8 GB) só libera no Off; medir pós-stop é o número real que o Optimize terá. Resolve a espiral a 6.6 GB **sem adivinhar** o VMRS, **sem realocar o deadlock** a um piso menor e **sem abortar** o Optimize ininterruptível. Refina SPECv3 DT-v3-1. |
 | **DT-2** | **`ScratchBudget=11` aceito no Day-0 como EXCEÇÃO EXPLÍCITA registrada** (não como campanha cumprida). Slice 1 reaberto: instrumentar `optimize.ps1` com `vmrs_release_gb` e rodar ≥5 ciclos; **enquanto isso, o `autoreclaim_post_off_remeasure` (que JÁ loga `vmrs_release_gb` a cada emergência) é o coletor da campanha em produção.** Rollback-trigger numérico abaixo. | Número, não adjetivo. O gate é **fail-closed** e re-mede ao vivo a cada run, então um 11 errado **não causa dano** (over-budget → skip+restart; o número autoritativo é o pós-Off). A exceção satisfaz a política Day-0 (razão+deadline+rollback+evidência). |
 | **DT-3** | **`HeavyMaxMB = ceil(p95 RSS)+margem`** medido em ≥5 jobs heavy reais. | Fecha #113; admissão deixa de ser cap generoso e passa a enforçar. |
 | **DT-4** | **`fstrim` do autoreclaim vira best-effort EPERM/EOPNOTSUPP-tolerante (B1).** Trocar `if ($trim.ExitCode -ne 0) { throw }` (autoreclaim.ps1:302-304) por `Write-ReclaimLog -Event 'autoreclaim_fstrim_warn' -Level 'WARN'` e **seguir para o Stop-VM/Fase 2**; corrigir a doc-header linha 18 (remover "sudo -n fstrim must succeed before Stop-VM"). Saúde do fstrim continua sinal estruturado (`fstrim_ineffective` no hook + check `doctor`). | O `fstrim` é **otimização de yield**, não pré-condição de segurança. A pré-condição de segurança é o gate pós-Off (Fase 2) + o `finally` Start-VM. Um fstrim que falha (EPERM por sudoers ausente) **não pode abortar o reclaim e re-armar a espiral silenciosamente** (Kahneman #13). Reconcilia a divergência autoreclaim(fail-hard)↔optimize(best-effort): **ambos best-effort**. |
@@ -122,7 +122,7 @@ Start-VM 3× (autoreclaim.ps1:389-442); `internal/admit` + `memwatchdog` + `idle
 | **DT-6** | **Registro Day-0 das 3 tasks + sudoers + `/run/civm` é gate go/no-go, AMPLIADO (B1):** a sudoers deve conter **`emdev ALL=(root) NOPASSWD: /usr/sbin/fstrim`** além do `civm-safedelete`; a chave SSH `C:\ProgramData\civm\ssh\id_ed25519` deve ser **0600 SYSTEM-only** e provisionada no guest (`authorized_keys`); validar `sudo -n fstrim -av` exit 0 **antes** de registrar a task autoreclaim. Rollout cancel-safe por task (copy+Test-Path antes de `schtasks /create`). | Sem `host-metrics.json` nada do reclaim observa o estado; é o bloqueador raiz operacional. **Com DT-4 (best-effort) o fstrim ausente não trava o reclaim, mas reduz yield** — por isso a sudoers fstrim entra como pré-req de **yield**, não de segurança. Defesa em profundidade: as duas pontas (best-effort + sudoers). |
 | **DT-7** | **OS patching security-only com `Package-Blacklist` versionado em `deploy/apt/`.** | Patch de segurança não pode trocar gcc/go/docker/kernel mid-CI (reprodutibilidade). |
 | **DT-8** | **`VHDXBlockSizeBytes > 1 MiB` eleva `level` para `warn`** (não só render). | BlockSize alto = UNMAP não honrado = reclaim offline obrigatório; é bloqueador, deve gateiar o nível. |
-| **DT-9** | **Reconciliação por nota, não SPEC vizinha duplicada.** O IMPL adiciona um adendo curto a `host-volume-reclamation/SPECv3.md` apontando que DT-1 (pós-Off) refina DT-v3-1, no mesmo commit do RF-2. | Evita duplicar a árvore de decisão; mantém a fonte única do contrato de reclaim com cross-reference. |
+| **DT-9** | **Reconciliação por nota, não SPEC vizinha duplicada.** O IMPL adiciona adendo curto a `host-volume-reclamation/SPECv3.md` apontando que DT-1 (pós-Off) refina DT-v3-1, no mesmo commit do RF-2. | Evita duplicar a árvore de decisão; mantém a fonte única do contrato de reclaim com cross-reference. |
 | **DT-10** | **Anti-leak do `Optimize-VHD` em hard-kill.** Hoistar `$optJob` para escopo externo ao `try` (ambos os scripts) e `Remove-Job -Force` no `finally`; **documentar que o guard anti-corrupção real é o Hyper-V recusar `Start-VM` enquanto `CompactVirtualDisk` mantém o `.vhdx` bloqueado** (0x80070020), já honrado pelo watchdog (`register-civm-vhdx-optimize.ps1:218-225`). | `Task Scheduler ExecutionTimeLimit` pode hard-kill o processo no meio do `while` (autoreclaim.ps1:370-373 / optimize.ps1:387-395); `finally` não roda em hard-kill, vazando o background job. A correção (escopo externo) é defensiva; a **integridade** do VHDX é garantida pelo lock do Hyper-V, não pelo cleanup do job. |
 | **DT-11** | **Gate é PowerShell-autoritativo; `EmergencyAdmits` (Go) é espelho testável, sem caller de produção — por design.** O drift entre `civm.go:93` (11) e `autoreclaim.ps1:53` (11) é **hygiene anti-drift MEDIUM**: ou threadar `-ScratchBudgetGB`/`-HardFloorGB` do `register-civm-vhdx-autoreclaim.ps1` a partir da const Go, **ou** declarar o default do worker como fonte de verdade e o `civm.go:93` como documentação espelhada (sync rule). **Escolha Day-0:** worker-default é a fonte de verdade; `civm.go:93` espelha; `reclaim_test.go:57` trava ambos em 11. | Remove a alegação enganosa de "gate inerte". O número vive onde o gate executa (PowerShell). O Go documenta e o teste trava — anti-noise. |
 | **DT-12** | **Alinhar `cleanup.go:425` ao `hook.go:240-243`.** Trocar `docker system prune -af --volumes` (caminho cron idle) por `docker buildx prune --force --filter until=24h` + `docker image prune -f` (dangling). | `ensureIdle` (cleanup.go:482) é **idle do runner local**, não box-wide; com 8 repos sibling há TOCTOU entre o check e o prune, e `--volumes` pode apagar o volume anônimo do registry-cache se o container for recriado. O `hook.go:225-227` já documenta que `system prune --volumes` corrompe `docker pull` concorrente. |
@@ -138,7 +138,7 @@ Start-VM 3× (autoreclaim.ps1:389-442); `internal/admit` + `memwatchdog` + `idle
   `finally` (Start-VM 3×). **Fronteira explícita (resolve a ambiguidade B3):** a
   ÚNICA seção que não tolera estado parcial é `Stop-VM ... Optimize-VHD`: enquanto
   `CompactVirtualDisk` roda, o Hyper-V mantém o `.vhdx` bloqueado, então nem o
-  `finally` nem o watchdog conseguem `Start-VM` (0x80070020) — o que é o **guard
+  `finally` nem o watchdog conseguem `Start-VM` (0x80070020) — o **guard
   anti-corrupção** (DT-10), não um bug. Tudo antes do `Stop-VM` é abortável sem
   efeito; tudo depois cai no `finally`. A entrega SSH de métricas é best-effort.
 - **Rollback de app:** `civmctl self-upgrade` para o binário anterior; RF-4/5/8
@@ -170,8 +170,8 @@ Start-VM 3× (autoreclaim.ps1:389-442); `internal/admit` + `memwatchdog` + `idle
 - [ ] **TOCTOU idle→Stop-VM (ressalva):** adicionar 2º `civmctl idle-check`
       imediatamente antes do `Stop-VM` (autoreclaim.ps1:~315), pois há janela entre
       o `Wait-GuestIdle` (293) e o `Stop-VM` (315) onde um job pode iniciar.
-      Documentar que, sob pressão real de disco, **interromper um job é
-      comportamento aceitável** (rollback-trigger já no header do `.ps1`).
+      Documentar que, sob pressão real de disco, **interromper um job é aceitável**
+      (rollback-trigger já no header do `.ps1`).
 - [ ] Exec safety: `runreaper`/`doctor` usam `exec.CommandContext` sem shell; o
       `.ps1` não introduz `Invoke-Expression` de input externo.
 - [ ] Privilégio: tasks SYSTEM só com direito Hyper-V; sudoers escopado a
@@ -295,9 +295,9 @@ DefaultAdmitHeavyMaxMB = 0 // -> ceil(p95 RSS)+margem; tabela RSS anexada <DATA>
 
 - **O que muda:** a action `fstrim` (linha 250) captura exit/stderr e, quando o
   FITRIM ioctl falha (`Operation not permitted` / `not supported`), grava
-  `fstrim_ineffective: true` no record de `hooks.jsonl` (mantém best-effort,
-  fail-open). **Reforça o par do DT-4/B1:** no host (autoreclaim) o fstrim é
-  best-effort; no guest (hook) a inefetividade vira sinal estruturado.
+  `fstrim_ineffective: true` no record de `hooks.jsonl` (best-effort, fail-open).
+  **Reforça o par do DT-4/B1:** no host (autoreclaim) o fstrim é best-effort; no
+  guest (hook) a inefetividade vira sinal estruturado.
 - **Testes:** `RunFn` simula fstrim com stderr `Operation not permitted` → record
   traz `fstrim_ineffective:true`; pareado com exit 0 → `false`.
 
@@ -367,8 +367,8 @@ DefaultAdmitHeavyMaxMB = 0 // -> ceil(p95 RSS)+margem; tabela RSS anexada <DATA>
 > entregue ANTES do Slice 1 (medição) estar fechado, por intervenção de emergência
 > (V: a 6.59 GB, CI #1092 quebrada — ver IMPL.md). Racional: quebrar a espiral
 > agora > ordem formal; o gate é fail-closed e re-mede ao vivo, então não depende da
-> campanha para ser seguro. Slice 1 segue REABERTO; a auditoria futura encontra
-> aqui o racional do número 11.
+> campanha para ser seguro. Slice 1 segue REABERTO; a auditoria futura acha aqui o
+> racional do número 11.
 
 ## Plano de testes
 
@@ -429,7 +429,7 @@ SYSTEM tem modo de falha silencioso — `fstrim` fail-hard (autoreclaim.ps1:302-
 B2 (DT-2 exceção Day-0 com rollback numérico + Slice 1 reaberto + coletor em
 produção) e B3 (reconciliação SPEC↔código↔lint + DT-1 nomes canônicos + DT-11
 drift rebaixado). O mecanismo `Stop→Optimize→Start` foi validado end-to-end
-**uma vez** (manual, 6.59→14.61→31.52, 06/06/2026); o que falta para o GO é: rodar
-o caminho **automatizado** (SYSTEM task) com a sudoers correta, fechar a campanha
+**uma vez** (manual, 6.59→14.61→31.52, 06/06/2026); falta para o GO: rodar o
+caminho **automatizado** (SYSTEM task) com a sudoers correta, fechar a campanha
 de 5 medições (ou consumir a exceção até os triggers), e aplicar DT-4/DT-6/DT-10/
 DT-12 + lint endurecido. **Re-auditar este SPECv2 no próximo Passo 2.5.**

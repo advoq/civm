@@ -15,7 +15,7 @@ issues: []
 **Entra agora:**
 
 - `civmctl disk-doctor` (guest): diagnóstico do pipeline de discard (controlador, `discard`, TRIM, efetividade) — RF-1.
-- Procedimento + verificação de auto-shrink online (VHDX em SCSI + discard efetivo) — RF-2 (runbook one-time + verificação por `disk-doctor`).
+- Auto-shrink online (VHDX em SCSI + discard efetivo): procedimento + verificação — RF-2 (runbook one-time + verificação por `disk-doctor`).
 - Observabilidade do host: `deploy/windows/civm-host-metrics.ps1` + Scheduled Task → JSON entregue ao guest; `civmctl host-disk` consome — RF-3.
 - Compactação offline segura e não-interativa: `deploy/windows/civm-vhdx-optimize.ps1` + Scheduled Task SYSTEM — RF-4.
 - `civmctl maintenance enter|exit` (guest): drain idempotente — RF-5.
@@ -47,7 +47,7 @@ issues: []
 
 | # | Decisão | Justificativa |
 | --- | --- | --- |
-| DT-1 | O guest **não vê** o `V:`. O host-metrics task escreve `V:\civm-host-metrics.json` **e entrega uma cópia ao guest** em `/var/lib/civm/host-metrics.json` pelo mesmo canal SSH que o host já usa; `civmctl host-disk` lê a cópia guest-local. | Mantém `civmctl` guest-side autoritativo; dá awareness ao guest sem o guest precisar montar `V:`. Freshness via `timestamp` + warn se stale. |
+| DT-1 | O guest **não vê** o `V:`. O host-metrics task escreve `V:\civm-host-metrics.json` **e entrega uma cópia ao guest** em `/var/lib/civm/host-metrics.json` pelo canal SSH que o host já usa; `civmctl host-disk` lê a cópia guest-local. | Mantém `civmctl` guest-side autoritativo; dá awareness ao guest sem montar `V:`. Freshness via `timestamp` + warn se stale. |
 | DT-2 | Compactação como **Scheduled Task SYSTEM** acionada por `schtasks /run`, não por `Start-Process -Verb RunAs`. | SYSTEM tem direito de Hyper-V sem UAC interativo; elimina o "pendurado no UAC" observado. |
 | DT-3 | A task de compactação **proíbe zero-fill** e **aborta** se `v_free_gb < DefaultHostVolumeHeadroomGB`. | Zero-fill cresce o VHDX; sob baixo headroom estoura o `V:` (risco real observado a 3 GB). |
 | DT-4 | Caminho **primário é online** (RF-2: SCSI+discard→VHDX encolhe via `fstrim` existente). Offline `Optimize-VHD` é **fallback**. | Conserta a raiz; evita downtime recorrente; Codex tratava só o sintoma offline. |
@@ -58,7 +58,7 @@ issues: []
 ## Fronteira de atomicidade e política de rollback
 
 - **Atômico nesta entrega:** cada escrita de `/var/lib/civm/maintenance.json` e `host-metrics.json` (`os.WriteFile` substitui o arquivo); cada `Optimize-VHD` é uma operação Hyper-V única; o par `maintenance enter/exit` é idempotente mas **não** transacional entre si.
-- **Fora da atomicidade:** o ciclo drain→shutdown→optimize→start→restore (multi-passo, com a VM mudando de estado); a entrega SSH das métricas (best-effort). Estados parciais aceitos: VM drenada mas não compactada (restore traz de volta); métricas ausentes/stale (civm degrada para guest-only).
+- **Fora da atomicidade:** o ciclo drain→shutdown→optimize→start→restore (multi-passo, VM mudando de estado); a entrega SSH das métricas (best-effort). Estados parciais aceitos: VM drenada mas não compactada (restore traz de volta); métricas ausentes/stale (civm degrada para guest-only).
 - **Política de rollback:**
   - **App:** `civmctl self-upgrade` anterior; subcomandos novos viram no-op.
   - **Host:** `schtasks /delete /tn civm-host-metrics` e `/tn civm-vhdx-optimize`; reverter SCSI→IDE (janela) se a troca quebrar boot.
@@ -102,10 +102,10 @@ issues: []
 - **Structs/Funções:**
   - `type Options struct { RootPath string; ReadFileFn func(string)([]byte,error); RunFn func(ctx,name,...string)([]byte,error); HostMetricsPath string }`
   - `type Report struct { Device string `json:"device"`; Controller string `json:"controller"` /* scsi|ide|virtio|unknown */; MountDiscard bool `json:"mount_discard"`; DiscGranBytes int64 `json:"disc_gran_bytes"`; DiscMaxBytes int64 `json:"disc_max_bytes"`; TrimEffective bool `json:"trim_effective"`; RootCause string `json:"root_cause"`; HostHeadroomViolation bool `json:"host_headroom_violation,omitempty"` }`
-  - `func DefaultOptions() Options`; `func Diagnose(ctx, opts) (Report, error)` — passos: resolver device de `RootPath` (`findmnt`/`/proc/mounts`); ler `discard` em `/proc/mounts`; `lsblk -D -b -o NAME,DISC-GRAN,DISC-MAX` para o device; classificar controlador (via `/sys/block/.../device` ou `lsblk -o TRAN`); compor `RootCause` (ex.: "controlador IDE não repassa UNMAP" / "discard não suportado" / "TRIM ok — VHDX deve encolher online"); `TrimEffective = DiscMaxBytes>0`.
+  - `func DefaultOptions() Options`; `func Diagnose(ctx, opts) (Report, error)` — passos: resolver device de `RootPath` (`findmnt`/`/proc/mounts`); ler `discard` em `/proc/mounts`; `lsblk -D -b -o NAME,DISC-GRAN,DISC-MAX` para o device; classificar controlador (`/sys/block/.../device` ou `lsblk -o TRAN`); compor `RootCause` (ex.: "controlador IDE não repassa UNMAP" / "discard não suportado" / "TRIM ok — VHDX deve encolher online"); `TrimEffective = DiscMaxBytes>0`.
   - `RenderJSON/RenderText`.
 - **Padrão de referência:** `internal/capacity/capacity.go` (Statfs/Options), `internal/diskaudit` (RunFn injetável).
-- **Testes:** `/proc/mounts` com/sem discard; `lsblk -D` DISC-MAX 0 vs >0; controlador ide vs scsi; `RootCause` correto por caso.
+- **Testes:** `/proc/mounts` com/sem discard; `lsblk -D` DISC-MAX 0 vs >0; controlador ide vs scsi; `RootCause` por caso.
 - **Disciplina Kahneman:** #3 — ver Mapa.
 
 ### `internal/maintenance/maintenance.go` (+ test) — ITEM-4
@@ -118,7 +118,7 @@ issues: []
   - `func Enter(ctx, opts) (State, error)` — checa `idle.Check` (não interrompe build), para `actions.runner.*` (`systemctl stop`) e/ou remove label `civm` via `gh api -X DELETE .../labels/civm`, grava `State` em `StatePath`.
   - `func Exit(ctx, opts) error` — lê `State`, re-adiciona labels (`gh api -X POST .../labels`), `systemctl start` das units, remove `StatePath`.
 - **Padrão de referência:** `internal/idle` (Check), `internal/runner` (gh/systemctl), `internal/hook/install.go` (WriteFile state).
-- **Testes:** enter grava state; exit restaura exatamente; re-run no-op; dry-run não muta; idle-busy bloqueia enter.
+- **Testes:** enter grava state; exit restaura; re-run no-op; dry-run não muta; idle-busy bloqueia enter.
 - **Disciplina Kahneman:** #5 — ver Mapa.
 
 ### `internal/hostdisk/hostdisk.go` (+ test) — ITEM-5
@@ -129,7 +129,7 @@ issues: []
   - `type Metrics struct { VFreeGB int64 `json:"v_free_gb"`; VSizeGB int64 `json:"v_size_gb"`; VHDXFileSizeGB int64 `json:"vhdx_file_size_gb"`; VHDXMinSizeGB int64 `json:"vhdx_min_size_gb"`; VHDXMaxSizeGB int64 `json:"vhdx_max_size_gb"`; GuestFreeGB int64 `json:"guest_free_gb"`; GapGB int64 `json:"gap_gb"`; Timestamp string `json:"timestamp"` }`
   - `type Report struct { Metrics; Stale bool `json:"stale"`; Level string `json:"level"` /* ok|warn|crit */; HeadroomViolation bool `json:"headroom_violation"`; Reason string `json:"reason,omitempty"` }`
   - `func DefaultOptions() Options` (Path `/var/lib/civm/host-metrics.json`, `MaxAge` from `DefaultHostMetricsMaxAgeMinutes`, warn/crit/headroom from `civm.Default*`).
-  - `func Check(opts) (Report, error)` — lê JSON; `Stale` se `Timestamp` mais velho que `MaxAge`; `Level` por `VFreeGB` vs warn/crit; `HeadroomViolation` se `VSizeGB-VHDXMaxSizeGB < headroom`.
+  - `func Check(opts) (Report, error)` — lê JSON; `Stale` se `Timestamp` > `MaxAge`; `Level` por `VFreeGB` vs warn/crit; `HeadroomViolation` se `VSizeGB-VHDXMaxSizeGB < headroom`.
 - **Padrão de referência:** `internal/capacity` (Report+Render).
 - **Testes:** níveis ok/warn/crit; stale; headroom violation; arquivo ausente → `Stale`+reason.
 
@@ -146,7 +146,7 @@ issues: []
 - **Propósito:** emitir métricas do host e entregá-las ao guest.
 - **Requisitos:** RF-3, DT-1, DT-7.
 - **Lógica (passos):** `Get-Volume -DriveLetter V` (free/size); `Get-VHD -Path <vhdx>` (FileSize/MinimumSize/Size); `df`/`ssh gha-ubuntu-2404 'df -B1 /'` para `guest_free`; calcular `gap`; escrever `V:\civm-host-metrics.json` (JSON com `timestamp` ISO); `scp`/`ssh ... 'cat > /var/lib/civm/host-metrics.json'` entrega ao guest. Read-only no host (sem `Optimize`/`Stop`).
-- **Task:** trigger a cada N min (ex.: 15), conta com direito de leitura Hyper-V; registro versionado (XML ou comando `schtasks /create`).
+- **Task:** trigger a cada N min (ex.: 15), com direito de leitura Hyper-V; registro versionado (XML ou `schtasks /create`).
 - **Testes:** validação manual (rodar a task; checar JSON no host e no guest); PSScriptAnalyzer se disponível.
 
 ### `deploy/windows/civm-vhdx-optimize.ps1` (+ Scheduled Task SYSTEM) — ITEM-11
@@ -205,11 +205,11 @@ issues: []
 - **O que muda:** `Check` pode incluir, best-effort, o nível do host se `hostdisk` disponível.
 - **Requisitos:** RF-3.
 - **Depois:** acrescentar campo `HostLevel string `json:"host_level,omitempty"`` ao `Report` (ok/warn/crit/unknown), populado via `hostdisk.Check` (erro→`unknown`, omitido). Sem acoplar capacity à presença do arquivo (degrada para `unknown`).
-- **Impacto:** aditivo; consumidores antigos ignoram. Evitar import cycle (`capacity`→`hostdisk`→`civm` apenas).
+- **Impacto:** aditivo; consumidores antigos ignoram. Evitar import cycle (`capacity`→`hostdisk`→`civm`).
 
 ### `runbooks/MULTI-PROJECT-RUNNER.md` — ITEM-13
 
-- **O que muda:** §Disk pressure / §Rollback trigger ganham bloco "Host VHDX e volume `V:`": o gap guest×host, observabilidade (`host-disk`), o pipeline SCSI/discard, a Scheduled Task de compactação, `civmctl maintenance`, e a **proibição de zero-fill sob baixo headroom**. Cross-link para o novo runbook.
+- **O que muda:** §Disk pressure / §Rollback trigger ganham bloco "Host VHDX e volume `V:`": gap guest×host, observabilidade (`host-disk`), pipeline SCSI/discard, Scheduled Task de compactação, `civmctl maintenance`, e a **proibição de zero-fill sob baixo headroom**. Cross-link para o novo runbook.
 - **Requisitos:** RF-7.
 - **Impacto:** documentação; `npm run docs:check`.
 
@@ -219,7 +219,7 @@ issues: []
 
 - **Propósito:** procedimento canônico de reclamação de volume do host.
 - **Requisitos:** RF-2, RF-4, RF-6, RF-7.
-- **Conteúdo:** diagnóstico (`civmctl disk-doctor`), correção SCSI/discard one-time (com `fstab` por UUID), instalação/uso/segurança das Scheduled Tasks (`civm-host-metrics`, `civm-vhdx-optimize` SYSTEM), `civmctl maintenance enter|exit`, invariante de headroom + como aplicar (`Resize-VHD`/expandir `V:`/mover), e a **ordem segura** (online discard primeiro; offline só com headroom; nunca zero-fill sob baixo espaço). Inclui o caminho de emergência observado (host a 3 GB) com o passo seguro correto.
+- **Conteúdo:** diagnóstico (`civmctl disk-doctor`), correção SCSI/discard one-time (`fstab` por UUID), instalação/uso/segurança das Scheduled Tasks (`civm-host-metrics`, `civm-vhdx-optimize` SYSTEM), `civmctl maintenance enter|exit`, invariante de headroom + como aplicar (`Resize-VHD`/expandir `V:`/mover), e a **ordem segura** (online discard primeiro; offline só com headroom; nunca zero-fill sob baixo espaço). Inclui o caminho de emergência observado (host a 3 GB) com o passo seguro correto.
 
 ## Arquivos a DELETAR (se houver)
 
@@ -253,7 +253,7 @@ Sem PII, sem segredo, sem label de alta cardinalidade.
 
 ## Ordem de implementação
 
-1. **ITEM-1 — Diagnóstico/baseline (Slice 0):** `disk-doctor` manual + medir VHDX × guest free (sem código). Colar no IMPL.
+1. **ITEM-1 — Diagnóstico/baseline (Slice 0):** `disk-doctor` manual + medir VHDX × guest free (sem código); colar no IMPL.
 2. **ITEM-2 — Constantes** (`internal/civm/civm.go`).
 3. **ITEM-3 — `internal/diskdoctor`** + testes.
 4. **ITEM-4 — `internal/maintenance`** + testes.

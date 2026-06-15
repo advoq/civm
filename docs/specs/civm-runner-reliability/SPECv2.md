@@ -25,7 +25,7 @@ quando aplicável, **substitui** o trecho correspondente do baseline. PASSO 3 im
 A auditoria deu **no-go provisório** por blockers de **precisão de implementação e de segurança**, não de
 arquitetura. A direção (escalada `safedelete` escopada ao `_work`, fail-open no `job-completed`,
 1 MB BlockSize + Optimize offline como primário, watchdog sem falsa-falha + auto-recuperação,
-observabilidade via `hooks.jsonl`) está correta. O que estava errado: o caminho de restart referenciava
+observabilidade via `hooks.jsonl`) está correta. O que estava errado: o restart referenciava
 campos/sintaxe/unidades inexistentes; o sudoers tinha mismatch de path que faria a escalada falhar-fechada
 em todo box; PRD e SPEC discordavam sobre o escopo do sudoers; o contador anti restart-loop não tinha onde
 morar; e vários pontos de fiação (ctx, ordem de leitura de host-metrics, `go:embed` impossível) não eram
@@ -33,7 +33,7 @@ implementáveis como escritos.
 
 ### Fatos verificados no box (WYSIATI — #1: declarar o não-visto)
 
-Antes de fechar os blockers, o que foi confirmado diretamente:
+Confirmado diretamente antes de fechar os blockers:
 
 - **Este box de dev é WSL2** (`6.6.87.2-microsoft-standard-WSL2`), **sem systemd runner units**
   (`systemctl list-units 'actions.runner.*'` e `'civm-*'` retornam 0) e **sem `/run/civm`**. Logo
@@ -93,7 +93,7 @@ Antes de fechar os blockers, o que foi confirmado diretamente:
 | **DT-v2-10** | **HIGH — `collectHookChecks` não recebe ctx; check do sudoers precisa de capacidade, não de leitura de arquivo 0440** | (a) `collectHookChecks` passa a receber `ctx` (e `Collect` o repassa) — mudança de assinatura **explícita**, não "aditiva". (b) `checkScopedSudoers` é um **probe de capacidade**, não leitura de arquivo (o drop-in é 0440 root:root e `doctor` roda como `emdev`): `sudo -n /usr/local/bin/civm-safedelete --check` (no-op que sai 0) — testa o que `safedelete` realmente fará. Ver §"doctor self-check". |
 | **DT-v2-11** | **HIGH — host-metrics.ps1: campo só num dos três blocos `$metrics`** | `vhdx_block_size_bytes = [int64]$vhd.BlockSize` é montado **uma vez** numa função base e referenciado nas **três** emissões (host-only-failed 119-130, sucesso 144-154, re-stamp 168-173). `$vhd` já está em escopo. Ver §"host-metrics.ps1". |
 | **DT-v2-12** | **MEDIUM — classificador fail-open por substring frágil** | A classe de erro decide por **erro tipado** (`errors.Is(err, fs.ErrPermission)`, `syscall.ENOTEMPTY`, `errors.Is(err, fs.ErrNotExist)`) propagado por `safedelete`/cleanup, **não** por `strings.Contains` da mensagem. Substring fica só como último recurso quando o tipo é inacessível, com conjunto documentado. Erro **não-reconhecido** no `job-completed` permanece fatal. Ver §"Classificador fail-open". |
-| **DT-v2-13** | **MEDIUM — ctx-cancel mid-cleanup conflado com fail-open** | Em `ctx.Err()!=nil`, a Action recebe `escalation="aborted"` (distinta de `failed`), o run **não** é marcado limpo, e a sentinela/doctor distinguem "incompleto-por-cancel" de "tentou-tudo-com-warning". Exit 0 mantido (contrato do hook), mas a incompletude é observável e o próximo cron/hook retoma. Ver §"Atomicidade e ctx". |
+| **DT-v2-13** | **MEDIUM — ctx-cancel mid-cleanup conflado com fail-open** | Em `ctx.Err()!=nil`, a Action recebe `escalation="aborted"` (distinta de `failed`), o run **não** é marcado limpo, e sentinela/doctor distinguem "incompleto-por-cancel" de "tentou-tudo-com-warning". Exit 0 mantido (contrato do hook), mas a incompletude é observável e o próximo cron/hook retoma. Ver §"Atomicidade e ctx". |
 | **DT-v2-14** | **MEDIUM — `secure_path` do sudo não verificado** | ITEM-0 (baseline, no guest) verifica `which chown rm` sob `/usr/bin` **e** que `sudo -n /usr/local/bin/civm-safedelete --check` casa após `hook install --execute`. Como DT-v2-3 escopa um caminho único de wrapper, a ambiguidade `secure_path` some (o wrapper é absoluto e único). Ver §ITEM-0. |
 | **DT-v2-15** | **MEDIUM — fail-safe quando `hooks.jsonl` ausente/truncado** | `detectBrokenRunner` e `checkBuildxCapability`: se `ReadFileFn(HooksLogPath)` falha/retorna vazio/JSONL truncado → **não** dispara restart e **não** marca CRITICAL (degrada para info/no-op). O parsing tolera linha final truncada (ignora a última se não-JSON). Ver §"Auto-recuperação" e §"doctor self-check". |
 | **DT-v2-16** | **MEDIUM — baseline numérico não persistido; rollback-trigger não-falsificável** | ITEM-0 **produz um artefato commitado** `docs/specs/civm-runner-reliability/baseline-<YYYY-MM-DD>.txt` (coletado **no guest**) antes de qualquer código. O rollback-trigger numérico referencia esse artefato. Ver §ITEM-0 e §"Rollback trigger v2". |
@@ -111,7 +111,7 @@ Substitui DT-4/DT-9 e os ITENS-1/6 do baseline naquilo que conflita.
 
 **Mecanismo de escalada — wrapper validado, não NOPASSWD em binário cru.**
 
-1. Day-0 envia para o guest (provisioning, **fora** do binário Go):
+1. Day-0 envia ao guest (provisioning, **fora** do binário Go):
    - `/opt/civm/deploy/bin/civm-safedelete` (versionado em `deploy/bin/civm-safedelete`), instalado como
      `/usr/local/bin/civm-safedelete`, **root-owned 0755**. É um script/binário pequeno que recebe
      `chown <uid>:<gid> <path>` ou `rm <path>`, **re-valida o path in-process** (abs; sem NUL; `!= /`;
@@ -161,12 +161,12 @@ root-owned (a entrada top-level sempre do runner); na prática a própria entrad
 Docker quebrava o próximo no box.
 
 **Decisão.** A checagem de dono aceita `uid == runner` (happy path, remove sem
-sudo) **OU** `uid == 0` (root — a sobra que a escalada existe pra limpar via
-`chown -R` + `rm` no wrapper). Qualquer outro uid continua recusado (o runner
-nunca escala-deleta arquivo de terceiro). As guardas reais de blast-radius
-permanecem: `GuardFn` (prefixo `_work`), re-validação do path resolvido (symlink
-que escapa é reprovado) e o wrapper root-side com `realpath` +
-`--one-file-system`. Aceitar root **não** alarga o escopo além do `_work`.
+sudo) **OU** `uid == 0` (root — a sobra que a escalada limpa via `chown -R` +
+`rm` no wrapper). Qualquer outro uid continua recusado (o runner nunca
+escala-deleta arquivo de terceiro). As guardas de blast-radius permanecem:
+`GuardFn` (prefixo `_work`), re-validação do path resolvido (symlink que escapa é
+reprovado) e o wrapper root-side com `realpath` + `--one-file-system`. Aceitar
+root **não** alarga o escopo além do `_work`.
 
 **Por que o SPEC não previu (raiz de processo — disciplina #13 do
 `KAHNEMAN-DISCIPLINES.md`, ilusão de validade):** o teste
@@ -178,7 +178,7 @@ verdade?". Existência ≠ função.
 **Gate novo (o que segura pra não repetir):**
 
 - Unit: `TestRemoveEscalatesRootOwnedTarget` afirma que root-owned **escala**
-  (propósito), e `TestRemoveRejectsThirdUserOwnedTarget` mantém a recusa só pra
+  (propósito); `TestRemoveRejectsThirdUserOwnedTarget` mantém a recusa só pra
   terceiro usuário.
 - Integração: `safedelete_integration_test.go` (`//go:build integration`) cria
   um dir root-owned **real** via sudo e prova que a detecção de dono real deixa
@@ -376,7 +376,7 @@ Adicionar/ajustar em `internal/civm/civm.go`:
 
 ## ITEM-0 — Baseline (Slice 0, bloqueante) — fecha DT-v2-14, DT-v2-16
 
-**Coletado NO GUEST `gha-ubuntu-2404` (não no box de dev WSL2, que não tem runners nem `/run/civm`).** Produz um
+**Coletado NO GUEST `gha-ubuntu-2404` (não no box de dev WSL2, que não tem runners nem `/run/civm`).** Produz o
 artefato commitado `docs/specs/civm-runner-reliability/baseline-<YYYY-MM-DD>.txt` **antes** de qualquer código:
 
 - `grep -c '"decision":"error"' /var/log/civm/hooks.jsonl` (e quantos por filesystem/`permission denied`/`unlinkat`);
@@ -387,7 +387,7 @@ artefato commitado `docs/specs/civm-runner-reliability/baseline-<YYYY-MM-DD>.txt
   `sudo -n /usr/local/bin/civm-safedelete --check` deve sair 0 (DT-v2-14);
 - `cat /proc/sys/net/ipv4/ip_local_port_range`, `systemctl list-units 'actions.runner.*'`.
 
-O rollback-trigger numérico (§abaixo) referencia esse artefato; sem o pré-imagem persistido, o gate "→0 em 3 dias"
+O rollback-trigger numérico (§abaixo) referencia esse artefato; sem a pré-imagem persistida, o gate "→0 em 3 dias"
 é não-falsificável.
 
 ## Mapa Kahneman v2 (overrides/adições)
@@ -449,7 +449,7 @@ Reverter a slice se, **referenciado ao artefato `baseline-<data>.txt`**:
 
 A arquitetura do `SPEC.md` é aprovada. PASSO 3 implementa `SPEC.md` **com os overrides DT-v2-1..DT-v2-19 acima**.
 Os 4 blockers CRÍTICOS (sudoers path-mismatch, watchdog unit/sintaxe inexistentes, PRD↔SPEC sudoers divergente,
-contador anti-loop sem home) estão fechados com decisão de código exata. Os HIGH/MEDIUM/LOW idem.
+contador anti-loop sem home) estão fechados com decisão de código exata; os HIGH/MEDIUM/LOW idem.
 
 **Gates obrigatórios antes de declarar a slice pronta (bloqueiam o merge):**
 

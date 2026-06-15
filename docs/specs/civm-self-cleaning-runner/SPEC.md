@@ -18,22 +18,21 @@ issues: [106, 113]
 >   própria definição) e `EmergencyAdmits` **não tem caller de produção** (só def +
 >   teste). O worker `autoreclaim.ps1` recebe `$ScratchBudgetGB` só por parâmetro
 >   CLI, default `0` (linha 50); `register-civm-vhdx-autoreclaim.ps1` monta `/tr`
->   como `powershell -File <script>` **sem** `-ScratchBudgetGB` (o próprio
->   comentário do register, linhas 76-78, diz que valores custom exigem "editing
->   the installed script"). Logo, em runtime `$ScratchBudgetGB = 0` → a Fase 1
->   **ainda aborta** `emergency_disabled_no_budget` (linha 255). A constante, o gate
->   de duas fases e o teste verde de `EmergencyAdmits` **não quebram a espiral**
->   porque o número nunca chega ao worker (Kahneman #13: teste verde de helper
->   não-chamado ≠ host funcionando). **Fix obrigatório:** threadar `-ScratchBudgetGB`
->   (e `-HardFloorGB`) do `register-*.ps1` a partir da constante, ou um config que o
->   worker leia — senão RF-1/RF-2 são no-op.
+>   como `powershell -File <script>` **sem** `-ScratchBudgetGB` (o comentário do
+>   register, linhas 76-78, diz que valores custom exigem "editing the installed
+>   script"). Logo, em runtime `$ScratchBudgetGB = 0` → a Fase 1 **ainda aborta**
+>   `emergency_disabled_no_budget` (linha 255). A constante, o gate de duas fases e
+>   o teste verde de `EmergencyAdmits` **não quebram a espiral** porque o número
+>   nunca chega ao worker (Kahneman #13: teste verde de helper não-chamado ≠ host
+>   funcionando). **Fix obrigatório:** threadar `-ScratchBudgetGB` (e `-HardFloorGB`)
+>   do `register-*.ps1` a partir da constante, ou um config que o worker leia —
+>   senão RF-1/RF-2 são no-op.
 > - **RF-1 já aplicado:** `civm.go:93` `DefaultHostVolumeScratchBudgetGB = 11`
->   (era 0). Porém o critério "5 medições via `optimize.ps1` `vmrs_release_gb`"
+>   (era 0). Mas o critério "5 medições via `optimize.ps1` `vmrs_release_gb`"
 >   **não foi cumprido**: `optimize.ps1` **não foi instrumentado** (não está em
 >   `git status`); o 11 vem de "p100 scratch observado (logs do host)=10 +1" e de
 >   um único "vmrs_release medido = 8.02GB" no comentário, não da campanha de 5
->   ciclos. Kahneman #3/#13: a constante foi habilitada sem a evidência que o
->   próprio RF-1 exige.
+>   ciclos. Kahneman #3/#13: constante habilitada sem a evidência que o RF-1 exige.
 > - **RF-2 já aplicado** em `autoreclaim.ps1`, mas com **nomes de evento e fluxo
 >   diferentes** do esqueleto abaixo: código usa `autoreclaim_post_off_remeasure`
 >   e `autoreclaim_skip_insufficient_slack_post_off` (**WARN, exit 0**); **não**
@@ -108,11 +107,11 @@ consumidores.
 | **DT-1** | **Gate de duas fases no autoreclaim; Fase 2 re-mede `Get-PSDrive V` após `Wait-VMState Off`.** A admissão do `Optimize` de emergência usa `liveFreeAfterOff − HardFloor ≥ ScratchBudget`, não o `beforeFreeGB` pré-stop. | O VMRS (~8 GB) só libera no Off; medir pós-stop é o número real que o Optimize terá. Resolve a espiral a 6.6 GB **sem adivinhar** o VMRS e **sem abortar** o Optimize ininterruptível. Refina SPECv3 DT-v3-1. |
 | **DT-2** | **Medir antes de habilitar (executa SPECv3 DT-v3-2) + registrar `vmrs_release_gb`.** `ScratchBudget = ceil(p100 scratch)+1`. | Número, não adjetivo. `vmrs_release_gb` valida empiricamente a premissa do DT-1. |
 | **DT-3** | **`HeavyMaxMB = ceil(p95 RSS)+margem`** medido em ≥5 jobs heavy reais. | Fecha #113; admissão deixa de ser cap generoso e passa a enforçar. |
-| **DT-4** | **`fstrim` inefetivo é sinal, não erro silencioso.** Hook grava `fstrim_ineffective` em `hooks.jsonl`; `doctor` adiciona check `TRIM_EFFECTIVE` (`lsblk -D` DISC-MAX>0). | Discard morto significa reclaim 100% dependente do Optimize offline; precisa ser visível (Kahneman #13: existência ≠ função). |
-| **DT-5** | **Classificar HTTP 409/422 como `already-transitioned` (info).** `cancelRun` detecta via `*exec.ExitError.Stderr`; `reapRepo` não conta como `cancelled` nem sobe exit. | 409 = run já saiu de `queued`/em transição; é benigno, não falha. Para de poluir o JSON do journal. |
+| **DT-4** | **`fstrim` inefetivo é sinal, não erro silencioso.** Hook grava `fstrim_ineffective` em `hooks.jsonl`; `doctor` adiciona check `TRIM_EFFECTIVE` (`lsblk -D` DISC-MAX>0). | Discard morto = reclaim 100% dependente do Optimize offline; precisa ser visível (Kahneman #13: existência ≠ função). |
+| **DT-5** | **Classificar HTTP 409/422 como `already-transitioned` (info).** `cancelRun` detecta via `*exec.ExitError.Stderr`; `reapRepo` não conta como `cancelled` nem sobe exit. | 409 = run já saiu de `queued`/em transição; benigno, não falha. Para de poluir o JSON do journal. |
 | **DT-6** | **Registro Day-0 das 3 tasks + sudoers + `/run/civm` é gate go/no-go.** | Sem `host-metrics.json` nada do reclaim observa o estado; é o bloqueador raiz operacional. |
 | **DT-7** | **OS patching security-only com `Package-Blacklist` versionado em `deploy/apt/`.** | Patch de segurança não pode trocar gcc/go/docker/kernel mid-CI (reprodutibilidade). |
-| **DT-8** | **`VHDXBlockSizeBytes > 1 MiB` eleva `level` para `warn`** (não só render). | BlockSize alto = UNMAP não honrado = reclaim offline obrigatório; é bloqueador, deve gateiar o nível. |
+| **DT-8** | **`VHDXBlockSizeBytes > 1 MiB` eleva `level` para `warn`** (não só render). | BlockSize alto = UNMAP não honrado = reclaim offline obrigatório; bloqueador, deve gateiar o nível. |
 | **DT-9** | **Reconciliação por nota, não SPECv4 vizinha.** O IMPL adiciona um adendo curto a `host-volume-reclamation/SPECv3.md` apontando que DT-1 (pós-Off) refina DT-v3-1, no mesmo commit do RF-2. | Evita duplicar a árvore de decisão; mantém a fonte única do contrato de reclaim com cross-reference. |
 
 ## Fronteira de atomicidade e política de rollback
@@ -179,8 +178,8 @@ DefaultAdmitHeavyMaxMB = 2048 // p95 RSS heavy medido (1850) + ~200 margem; tabe
 - **Quem lê:** `ScratchBudgetGB` → **hoje: ninguém** (gap). Nenhum Go o lê;
   `EmergencyAdmits` (que o usaria) não tem caller; e o `autoreclaim.ps1`/
   `optimize.ps1` recebem `$ScratchBudgetGB` por parâmetro CLI que o `register-*.ps1`
-  **não passa** → worker roda com default 0. Para o RF-1/RF-2 valerem é preciso
-  threadar `-ScratchBudgetGB` no `register-*.ps1` (ou config lida pelo worker).
+  **não passa** → worker roda com default 0. Para RF-1/RF-2 valerem, threadar
+  `-ScratchBudgetGB` no `register-*.ps1` (ou config lida pelo worker).
   `HeavyMaxMB` → **wired de fato**: `cmd/civmctl/admit.go:97,145` (`effectiveMemMB`,
   cgroup `MemoryMax`).
 - **Invariante:** `HardFloor(1) < Headroom(8) < Pressure(25)`; `ScratchBudget ≥ 0`;
@@ -236,7 +235,7 @@ DefaultAdmitHeavyMaxMB = 2048 // p95 RSS heavy medido (1850) + ~200 margem; tabe
 > no topo): o código já implementa Fase 1+2, mas com `autoreclaim_post_off_remeasure`
 > / `autoreclaim_skip_insufficient_slack_post_off` (WARN, exit 0), **sem**
 > `$StopMarginGB`/`autoreclaim_abort_pre_stop_unsafe` e **sem** `$skipOptimize`
-> (faz `exit 0` direto). Tratar este esqueleto como o desenho proposto, não como o
+> (faz `exit 0` direto). Tratar este esqueleto como o desenho proposto, não o
 > estado do código; reconciliar nomes/fluxo no Passo 2.5.
 
 - **O que muda:** (1) novo `param` `$StopMarginGB` (default 2); (2) Fase 1
@@ -302,7 +301,7 @@ DefaultAdmitHeavyMaxMB = 2048 // p95 RSS heavy medido (1850) + ~200 margem; tabe
 - **Impacto:** muda o contrato de admissão de emergência (refina SPECv3 DT-v3-1 —
   ver DT-9, adendo no SPECv3). Não quebra assinatura Go. Afeta o lint host.
 - **Testes:** estender `specv3_reclaim_test.go` (lint do gate, ver §Plano de
-  testes) + janela supervisionada (Slice 2). O `ps1_safety_test.go` cobre só o
+  testes) + janela supervisionada (Slice 2). `ps1_safety_test.go` cobre só o
   clamp Int32.
 - **Disciplina Kahneman:** #2 + #5 (tabela acima).
 
@@ -315,7 +314,7 @@ DefaultAdmitHeavyMaxMB = 2048 // p95 RSS heavy medido (1850) + ~200 margem; tabe
   `$liveFreeAfterOff = (Get-PSDrive V).Free/1GB`; (c) gravar
   `vmrs_release_gb = $liveFreeAfterOff - $liveFreeBeforeStop` no `optimize_end`
   (~linha 402). O baseline live pós-Off já existe como `$liveFreeBeforeGB`
-  (linha 374) e pode ser reutilizado se preferível.
+  (linha 374) e pode ser reutilizado.
 - **Requisitos cobertos:** RF-1, DT-2.
 - **Antes:** `optimize_end` (linha 402-407) loga `scratch_high_water_gb`; o poll
   de 1 s ao vivo já existe em `civm-vhdx-optimize.ps1:387-395` (loop
@@ -356,7 +355,7 @@ DefaultAdmitHeavyMaxMB = 2048 // p95 RSS heavy medido (1850) + ~200 margem; tabe
 - **O que muda:** a action `fstrim` (linha 250) deixa de só rebaixar erro a
   warning silencioso: captura exit/stderr e, quando o FITRIM ioctl falha
   (`Operation not permitted` / `not supported`), grava `fstrim_ineffective: true`
-  no record de `hooks.jsonl` daquele job-completed.
+  no record de `hooks.jsonl` do job-completed.
 - **Requisitos cobertos:** RF-4, DT-4.
 - **Antes:** `commandActionWarn(opts, ctx, "fstrim", "sudo", "fstrim", "-av")`
   (erro → warning, sem sinal estruturado).
@@ -368,10 +367,10 @@ DefaultAdmitHeavyMaxMB = 2048 // p95 RSS heavy medido (1850) + ~200 margem; tabe
   ANTES do `Stop-VM` (a doc-header linha 18 declara "fstrim must succeed before
   Stop-VM"). Se no box o `sudo -n fstrim -av` sai com código ≠0 (EPERM observado),
   o autoreclaim aborta em `autoreclaim_error` e o gate pós-Off (RF-2) **nunca
-  roda** — o #106 continua bloqueado mesmo com `ScratchBudget=11`. RF-4 deve
-  incluir tornar esse `fstrim` best-effort (como `optimize.ps1:345-347`, que só
-  loga `fstrim_warn`) ou tratar EPERM/EOPNOTSUPP como não-fatal. Sem isso, a saúde
-  do fstrim é só observada, não desbloqueada.
+  roda** — #106 continua bloqueado mesmo com `ScratchBudget=11`. RF-4 deve incluir
+  tornar esse `fstrim` best-effort (como `optimize.ps1:345-347`, que só loga
+  `fstrim_warn`) ou tratar EPERM/EOPNOTSUPP como não-fatal. Sem isso, a saúde do
+  fstrim é só observada, não desbloqueada.
 - **Testes:** `internal/hook/hook_test.go` — `RunFn` simula fstrim com stderr
   `Operation not permitted` → record traz `fstrim_ineffective:true`; pareado com
   fstrim exit 0 → `false`.
@@ -388,7 +387,7 @@ DefaultAdmitHeavyMaxMB = 2048 // p95 RSS heavy medido (1850) + ~200 margem; tabe
 
 ### `internal/runreaper/runreaper.go` (RF-5 / DT-5)
 
-- **O que muda:** `cancelRun` (284-295) classifica falha como benigna quando o
+- **O que muda:** `cancelRun` (284-295) classifica falha como benigna quando
   `*exec.ExitError.Stderr` contém `HTTP 409`/`HTTP 422`/`Conflict`/`already`,
   retornando um sentinel `ErrAlreadyTransitioned`. `reapRepo` (148-155) trata
   `errors.Is(err, ErrAlreadyTransitioned)` como evento `already-transitioned`
@@ -507,14 +506,13 @@ job-completed; `civmctl host-disk` → `level` (ok/warn/crit), `stale`,
   contenha os tokens **reais do código** `autoreclaim_post_off_remeasure` e
   `autoreclaim_skip_insufficient_slack_post_off` (NÃO os nomes do esqueleto antigo
   `autoreclaim_post_stop_measure`/`autoreclaim_abort_post_stop_insufficient_slack`,
-  que não existem) e a re-leitura `Get-VFreeGB` após `Wait-VMState Off`; que
-  assertar o token de skip como **evento emitido**, não substring em comentário
-  (o `autoreclaim_abort_insufficient_slack` antigo só sobrevive em comentário —
-  falso-verde); que **não** contenha `Stop-Job` no
-  caminho do Optimize (já coberto por `TestAutoreclaimAdmissionGate`); que contenha
-  o lock canônico (já coberto por `TestReclaimersShareCanonicalLock`); e que o
-  optimize contenha `vmrs_release_gb` + duas amostras `Get-PSDrive V` ao redor do
-  shutdown/Off.
+  que não existem) e a re-leitura `Get-VFreeGB` após `Wait-VMState Off`; assertar
+  o token de skip como **evento emitido**, não substring em comentário (o
+  `autoreclaim_abort_insufficient_slack` antigo só sobrevive em comentário —
+  falso-verde); que **não** contenha `Stop-Job` no caminho do Optimize (já coberto
+  por `TestAutoreclaimAdmissionGate`); que contenha o lock canônico (já coberto por
+  `TestReclaimersShareCanonicalLock`); e que o optimize contenha `vmrs_release_gb`
+  + duas amostras `Get-PSDrive V` ao redor do shutdown/Off.
 - `internal/hostdisk/ps1_safety_test.go` (escopo: APENAS o clamp Int32,
   invariante #17): permanece garantindo que nenhum `[math]::Max(0,…)` literal novo
   entre nos `.ps1`. Não é o arquivo dos tokens de gate/lock/scratch acima.
@@ -571,7 +569,7 @@ job-completed; `civmctl host-disk` → `level` (ok/warn/crit), `stale`,
 
 **Estado real (auditoria 2026-06-06): RF-1 e RF-2 já estão no working tree
 (não commitados), antecipando este SPEC e divergindo dele** — ver a callout de
-reconciliação no topo. Portanto o Passo 2.5 (red-team), obrigatório por mutar
+reconciliação no topo. O Passo 2.5 (red-team), obrigatório por mutar
 `Stop-VM`/`Optimize-VHD`, deve ser feito **sobre o código que já existe** (não
 sobre o esqueleto): validar nomes de evento, ausência de `$StopMarginGB`, o `exit
 0` em vez de `exit 2`+`$skipOptimize`, e o lint que assertou um token só presente
