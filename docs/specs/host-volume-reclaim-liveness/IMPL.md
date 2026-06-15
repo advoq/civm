@@ -58,6 +58,22 @@ civm-vhdx-optimize-watchdog   State=Ready    ExecTimeLimit=PT72H  (Enabled)
 | Regressão | `go test ./... -race` (civm) verde; `golangci-lint` 0 issues; parse PS dos 2 scripts OK. |
 | Firefight (incidente) | V: recuperado 5.9→28GB; VM Running; runner online. |
 
+## Correção pós-validação (disciplina SSDV3: efeito > código)
+
+A validação ao vivo (re-run do CI advoq #1155 que dirigiu o V: ao piso, F3)
+expôs um **bug de placement no RF-3**: o guest-prune estava DEPOIS do
+`Wait-GuestIdle`, ou seja, DEPOIS do `autoreclaim_skip_low_gap`. Com o gap baixo
+(0.82GB, guest cheio), o reclaim saía em `skip_low_gap` ANTES de chegar ao
+prune — então o prune nunca corrigia o gap (o caso exato que deveria curar).
+Kahneman #13: o código "existia" mas não funcionava no efeito.
+
+**Fix (re-implementado + re-deployado):** o prune passou para DENTRO do
+gap-check — se `gap < MinReclaimable`, pruna o guest, RE-busca o guest-free e
+RE-computa o gap; só se AINDA baixo (dados ATIVOS, F3) faz `skip_low_gap`
+(`after_prune=true`). Roda antes do `Wait-GuestIdle` (prune de docker UNUSED não
+interrompe job). Provado ao vivo: prune liberou ~13GB de docker leftover, o gap
+subiu de <1GB para >20GB, e o Optimize liberou o V: (2.8→recuperando).
+
 ## Limitações conhecidas (do PRD)
 
 - **F3 (fora de escopo):** working set ativo de uma rajada concorrente pesada >
