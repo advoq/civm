@@ -7,6 +7,12 @@ issues: []
 
 # PRD — Arquitetura unificada do runner box: uma raiz, uma solução
 
+> **Supersedido por [`SPECv4.md`](./SPECv4.md)** (3ª rodada / re-fundação): o
+> veredito grounded é GO no delta mínimo Day-0 (D1 + per-runner cache slot + D3).
+> Os deep-dives ephemeral-clean-slate-ci / vm-disk-budget / guest-access-resilience
+> e os DATA-REPORTs citados aqui **não existem** — provenância fantasma. Use o
+> mapa real shipped/gap do SPECv4. Este doc fica como trilha de auditoria.
+
 > SSDV3 PASSO 1. Slug: `civm-runner-architecture`. Repo: `civm`.
 > Este é o documento **guarda-chuva** que reconcilia a saga distribuída do box
 > (cachetrim, multi-project-isolation, host-volume-reclaim-liveness,

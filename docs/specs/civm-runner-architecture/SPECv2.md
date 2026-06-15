@@ -1,5 +1,9 @@
 # SPECv2 — Arquitetura unificada do runner box civm
 
+> **Supersedido por [`SPECv4.md`](./SPECv4.md)** (3ª rodada / re-fundação): GO
+> no delta mínimo Day-0. Refs a deep-dives/DATA-REPORTs aqui são provenância
+> fantasma — ver o mapa real shipped/gap no SPECv4. Trilha de auditoria.
+
 > Versão melhorada após auditoria do Passo 2.5 (red-team cross-cutting).
 > Baseline preservado: `SPEC.md`.
 > Motivo: o `SPEC.md` guarda-chuva fecha a ORDEM, mas a auditoria achou 5 riscos

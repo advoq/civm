@@ -1,5 +1,10 @@
 # SPECv3 — Arquitetura unificada do runner box civm
 
+> **Convergido por [`SPECv4.md`](./SPECv4.md)** (3ª rodada / re-fundação): este
+> NO-GO estava certo. O SPECv4 re-fundou no código e isolou o subconjunto
+> shippável Day-0 (GO no delta mínimo D1 + per-runner slot + D3). Trilha de
+> auditoria — onde conflitar, o SPECv4 prevalece.
+
 > Versão melhorada após a 2ª rodada de auditoria do Passo 2.5 (red-team).
 > Baseline preservado: `SPEC.md` e camada anterior `SPECv2.md`.
 > Motivo: a 1ª rodada (SPECv2, X1–X5) fechou **GO** auditando a JUNÇÃO LÓGICA dos

@@ -1,5 +1,9 @@
 # SPEC — Arquitetura unificada do runner box civm
 
+> **Supersedido por [`SPECv4.md`](./SPECv4.md)** (3ª rodada / re-fundação): GO
+> no delta mínimo Day-0. Refs a deep-dives/DATA-REPORTs aqui são provenância
+> fantasma — ver o mapa real shipped/gap no SPECv4. Trilha de auditoria.
+
 > SSDV3 PASSO 2. Traduz `docs/specs/civm-runner-architecture/PRD.md` em escopo
 > fechado, rastreabilidade por requisito e ordem de migração. Este SPEC é o
 > **guarda-chuva**: ele fecha a ORDEM e os GATES cross-cutting; cada ITEM delega o
