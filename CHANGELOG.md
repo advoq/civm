@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.7](https://github.com/advoq/civm/compare/v1.18.6...v1.18.7) (2026-06-15)
+
+
+### Bug Fixes
+
+* **hook:** idle-gate cache trim so it never races a sibling build ([#133](https://github.com/advoq/civm/issues/133)) ([3722f63](https://github.com/advoq/civm/commit/3722f637d6562d3fef875352a89288c7f0469150))
+
 ## [1.18.6](https://github.com/advoq/civm/compare/v1.18.5...v1.18.6) (2026-06-15)
 
 
