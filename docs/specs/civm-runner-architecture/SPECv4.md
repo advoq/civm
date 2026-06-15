@@ -108,10 +108,43 @@ Estes precisam de spec/decisão net-new e **não** entram no Day-0:
 - **RF-3 wipe agressivo / prune `-a` no caminho busy** — hazard de concorrência
   conhecido; o `DefaultDockerImagePruneFilter='until=168h'` é constante órfã
   (zero call-sites), deliberadamente não-cabeada.
-- **RF-7 serialização out-of-band** + hook de job-cancel — deferidos.
+- **RF-7 serialização out-of-band (fila "um PR por vez")** — **REJEITADA** (não
+  só deferida). A fila existia para evitar a corrupção sob concorrência; isso foi
+  resolvido na raiz por isolamento (per-runner cache slot) + caps + `admit`,
+  mantendo a concorrência. Serializar desperdiçaria 7 dos 8 runners e enfileiraria
+  PRs por horas (a box serve 7 projetos), sem ganho de correção. Cache efêmero por
+  PR (a forma forte de RF-2) é PIOR pro disco — cold start re-baixa ~2GB/job, mais
+  picos — não melhor; o cap backstop limita o estado estável com menos churn. O
+  controle cross-PR que importa é o `admit MaxHeavy=2` (protege a RAM de 7G).
+  Evidência viva: o #1155 roda concorrente e seguro. O hook de job-cancel segue
+  deferido.
 - **Aposentadoria do `dockerlock`** (DT-v3-8) — planejada, não executada;
   exige migrar os workflows que ainda usam `civmctl lock` para
   `civmctl admit --exclusive docker`.
+
+## Correções da gap audit (3ª rodada operacional, 2026-06-15)
+
+Uma auditoria multi-agente com verificação adversarial (15 agents, 47 achados,
+**1 confirmado**) revisou os fixes desta sessão contra código + logs reais:
+
+- **D-slot + cap raise CONFIRMADOS corretos**, não band-aids. As 3 mortes de job
+  do #1155 NÃO tinham assinatura de OOM (`grep 137|oom|signal killed` = zero) —
+  eram corrupção de cache no path bare (anterior ao slot) + um working-dir
+  deletado (race classe civm#117). `cachetrim.go:310` curto-circuita antes do
+  Pass 2, então o cap 12GB elimina o trim in-flight no path normal.
+- **Gap confirmado e corrigido: emergency in-flight floor.** Sob
+  `EmergencyBypassIdle` (≥75% disco) o cache trim rodava sem idle guard e o Pass 2
+  ignora o MinProtect → podia deletar o working-set de um install vivo. Fix:
+  `Options.InFlightFloor` pula dirs com escrita < 15min (só no emergency path).
+  civm **#126**, com teste FS-real que fecha o buraco `GlobFn→nil` (#13).
+- **`admit` é SHIPPED mas INERTE para advoq (#13: existência ≠ função).** O motor
+  (`MaxHeavy=2`, cgroup `MemoryMax`) é real e validado, mas é **opt-in** e nenhum
+  dos 17 workflows advoq o chama (`grep CIVM_JOB_WEIGHT|civmctl admit` = 0). O
+  hook do runner (`JOB_STARTED`/`JOB_COMPLETED`, sem `STEP_*`) **não consegue**
+  envelopar o comando de um step. Como as mortes do #1155 não eram OOM, gatear a
+  RAM é **enhancement futuro**, não o fix atual — e o único caminho viável é
+  envelopar o step pesado (`civmctl admit --weight=heavy --exec -- <cmd>` via
+  composite action) + um CI guard, não um rewrite do hook.
 
 ## Matriz de rastreabilidade (delta GO → código)
 
