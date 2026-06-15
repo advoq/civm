@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.18.5](https://github.com/advoq/civm/compare/v1.18.4...v1.18.5) (2026-06-15)
+
+
+### Bug Fixes
+
+* **cleanup:** floor in-flight cache dirs in the emergency reclaim ([#126](https://github.com/advoq/civm/issues/126)) ([12780ad](https://github.com/advoq/civm/commit/12780ad0d48a6628eb1c22fc581a5ba26478ede5))
+
+
+### Documentation
+
+* **specs:** re-ground runner architecture with SPECv4 (Slice -1) ([#127](https://github.com/advoq/civm/issues/127)) ([b587de6](https://github.com/advoq/civm/commit/b587de65225315ce91e204c46b7fe9f7e60e2435))
+* tighten redundant prose across specs, runbooks, prompts ([#128](https://github.com/advoq/civm/issues/128)) ([9537e21](https://github.com/advoq/civm/commit/9537e21db50cb74337bdd68f8ed1360bd9dbd8ca))
+
 ## [1.18.4](https://github.com/advoq/civm/compare/v1.18.3...v1.18.4) (2026-06-15)
 
 
