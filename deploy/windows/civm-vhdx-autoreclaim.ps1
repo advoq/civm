@@ -419,6 +419,15 @@ try {
         exit 0
     }
 
+    # RF-3 (SPEC docs/specs/host-volume-reclaim-liveness/SPECv2.md): prune do
+    # GUEST antes do fstrim+Optimize. O Optimize so libera V: se o VHDX tiver
+    # slack reclamavel; um guest cheio de docker/cache deixa gap ~0 e o reclaim
+    # sai em autoreclaim_skip_low_gap. Confirmado 2026-06-15: docker prune liberou
+    # 17.5GB e o gap subiu de 2.4GB para ~28GB. Best-effort: a falha NAO aborta
+    # (fstrim/Optimize seguem). Roda apos Wait-GuestIdle, entao nao interrompe job.
+    $prune = Invoke-Guest -RemoteCommand 'civmctl disk-watchdog --threshold-pct=0 --execute'
+    Write-ReclaimLog -Event 'reclaim_liveness_guest_prune' -Data @{ exit_code = $prune.ExitCode }
+
     Write-ReclaimLog -Event 'autoreclaim_fstrim_start' -Data @{ target = $GuestSshTarget }
     $trim = Invoke-Guest -RemoteCommand 'sudo -n fstrim -av'
     if ($trim.ExitCode -ne 0) {
