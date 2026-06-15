@@ -67,11 +67,15 @@ const (
 	// ~/.yarn/cache) e os dirs nomeados cresciam SEM LIMITE — go-build-advoq-services
 	// chegou a 13GB num cap de 5GB, enchendo o VHDX até o host dar PausedCritical.
 	DefaultCacheTrimMinProtectHours = 24
-	DefaultCacheGoBuildMaxGB        = 5
-	DefaultCacheNPMMaxGB            = 3
-	DefaultCacheYarnMaxGB           = 3
-	DefaultCachePNPMMaxGB           = 5
-	DefaultCacheGolangciLintMaxGB   = 2
+	// go-build é WipeWhole (refs cruzadas opacas: sub-trim orfana entrada e o vet
+	// quebra). O cap é generoso de propósito — backstop para crescimento
+	// descontrolado, não o working-set normal (~2.2GB/dir; 12GB/3dirs = 4GB/dir).
+	// O go auto-trima entradas > 5 dias, então normalmente o wipe nunca dispara.
+	DefaultCacheGoBuildMaxGB      = 12
+	DefaultCacheNPMMaxGB          = 3
+	DefaultCacheYarnMaxGB         = 3
+	DefaultCachePNPMMaxGB         = 5
+	DefaultCacheGolangciLintMaxGB = 2
 
 	// Filtros do docker prune em modo rotineiro. Mantêm layers quentes < 24h
 	// e imagens unused < 7 dias, em vez do agressivo system prune --volumes.

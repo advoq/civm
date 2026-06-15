@@ -167,6 +167,129 @@ func TestTrimByAgeHardCeilingTrimsRecentWhenAllProtected(t *testing.T) {
 	}
 }
 
+// TestTrimByAgeDirAtomicRemovesWholePackages prova o fix do incidente 2026-06-15:
+// num cache yarn-shape (pacote = diretório multi-arquivo), o trim DirAtomic remove
+// o diretório de pacote INTEIRO do mais antigo, e nunca deixa um pacote parcial —
+// que quebraria o `yarn install --frozen-lockfile` com ENOENT no arquivo sumido.
+func TestTrimByAgeDirAtomicRemovesWholePackages(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	// mkpkg cria um pacote yarn-shape: v6/<pkg>/{node_modules/<pkg>/index.js,
+	// .yarn-metadata.json} — múltiplos arquivos sob um dir de pacote.
+	mkpkg := func(pkg string, sizeEach int64, age time.Duration) string {
+		root := filepath.Join(dir, "v6", pkg)
+		inner := filepath.Join(root, "node_modules", pkg)
+		if err := os.MkdirAll(inner, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []string{filepath.Join(inner, "index.js"), filepath.Join(root, ".yarn-metadata.json")} {
+			if err := os.WriteFile(f, make([]byte, sizeEach), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(f, now.Add(-age), now.Add(-age)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return root
+	}
+	oldPkg := mkpkg("npm-old-1.0.0", 5<<20, 72*time.Hour) // 10MB, 3 dias → trimável
+	hotPkg := mkpkg("npm-hot-2.0.0", 5<<20, 1*time.Hour)  // 10MB, 1h → protegido
+
+	var removed []string
+	opts := Options{
+		Execute:     true,
+		Now:         now,
+		RemoveAllFn: func(p string) error { removed = append(removed, p); return nil },
+	}
+	// cap 12MB, total 20MB → libera ~8MB removendo o pacote mais antigo INTEIRO.
+	// PackageDepth 2 = pacote yarn v1 em <root>/v6/<pkg>.
+	c := Cap{Path: dir, MaxBytes: 12 << 20, MinProtect: 24 * time.Hour, PackageDepth: 2}
+	r := TrimByAge(opts, c)
+	if r.Err != nil {
+		t.Fatalf("unexpected err: %v", r.Err)
+	}
+	if r.BytesFound != 20<<20 {
+		t.Errorf("BytesFound=%d, want 20MB", r.BytesFound)
+	}
+	// Uma única RemoveAll, no dir do pacote velho — atômico, nunca arquivo solto.
+	if len(removed) != 1 || removed[0] != oldPkg {
+		t.Errorf("esperava 1 RemoveAll do dir do pacote velho %s, removed=%v", oldPkg, removed)
+	}
+	if removed[0] == hotPkg {
+		t.Errorf("removeu o pacote quente %s", hotPkg)
+	}
+}
+
+// TestTrimByAgePackageDepthShallowFilesAreFileUnits prova que um cache de unidade
+// de arquivo único (yarn berry `<pkg>.zip`, ou um blob content-addressed) sob
+// PackageDepth > 0 cai sozinho no modo por arquivo: os arquivos rasos não casam a
+// profundidade de pacote, então o trim remove o arquivo inteiro mais antigo sem
+// tocar no quente — nada de remoção parcial. É a garantia para npm/pnpm/berry.
+func TestTrimByAgePackageDepthShallowFilesAreFileUnits(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	mkfile := func(name string, size int64, age time.Duration) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, make([]byte, size), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, now.Add(-age), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	old := mkfile("pkg-old-1.0.0.zip", 8<<20, 72*time.Hour) // raso → unidade de arquivo
+	hot := mkfile("pkg-hot-2.0.0.zip", 8<<20, 1*time.Hour)
+
+	var removed []string
+	opts := Options{Execute: true, Now: now, RemoveAllFn: func(p string) error { removed = append(removed, p); return nil }}
+	// PackageDepth 2, mas os arquivos estão em profundidade 1 → modo por arquivo.
+	c := Cap{Path: dir, MaxBytes: 10 << 20, MinProtect: 24 * time.Hour, PackageDepth: 2}
+	r := TrimByAge(opts, c)
+	if r.Err != nil {
+		t.Fatalf("unexpected err: %v", r.Err)
+	}
+	if len(removed) != 1 || removed[0] != old {
+		t.Errorf("esperava remover o arquivo velho %s, removed=%v", old, removed)
+	}
+	if removed[0] == hot {
+		t.Errorf("removeu o arquivo quente %s", hot)
+	}
+}
+
+// TestTrimByAgeWipeWholeRemovesEntireDir prova o backstop go-build/golangci: um
+// cache com refs cruzadas (WipeWhole) acima do cap é removido por INTEIRO num único
+// RemoveAll do dir — nunca arquivo a arquivo, que orfanaria uma entrada (`-a` sem
+// o `-d` em outro prefixo) e quebraria o `go vet` com "can't import facts".
+func TestTrimByAgeWipeWholeRemovesEntireDir(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	// go-build-shape: `-a` (ação) e `-d` (dados) em diretórios de prefixo distintos.
+	for _, f := range []string{"d4/aaa-a", "42/bbb-d", "66/ccc-d"} {
+		p := filepath.Join(dir, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, make([]byte, 5<<20), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var removed []string
+	opts := Options{Execute: true, Now: now, RemoveAllFn: func(p string) error { removed = append(removed, p); return nil }}
+	// total 15MB > cap 10MB → wipe do dir inteiro (atômico).
+	c := Cap{Path: dir, MaxBytes: 10 << 20, MinProtect: 24 * time.Hour, WipeWhole: true}
+	r := TrimByAge(opts, c)
+	if r.Err != nil {
+		t.Fatalf("unexpected err: %v", r.Err)
+	}
+	if r.BytesFreed != 15<<20 {
+		t.Errorf("BytesFreed=%d, want 15MB (wipe inteiro)", r.BytesFreed)
+	}
+	if len(removed) != 1 || removed[0] != dir {
+		t.Errorf("esperava 1 RemoveAll do dir inteiro %s, removed=%v", dir, removed)
+	}
+}
+
 func TestTrimByAgeNoOpUnderCap(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "f"), make([]byte, 1<<20), 0o600); err != nil {

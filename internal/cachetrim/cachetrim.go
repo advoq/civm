@@ -21,11 +21,41 @@ import (
 )
 
 // Cap is a per-directory size budget: trim Path to at most MaxBytes by removing
-// the oldest files, preserving anything modified within MinProtect.
+// the oldest units, preserving anything modified within MinProtect.
+//
+// PackageDepth controla a granularidade do trim:
+//
+//   - 0 (default) — por arquivo. Vale para todo cache cujo arquivo já é uma
+//     unidade completa e independente: Go build, golangci, e os caches
+//     content-addressed (npm `_cacache`, pnpm store, zips do yarn berry). Nesses,
+//     remover um arquivo remove uma unidade inteira e a ferramenta re-busca o que
+//     faltar — nunca há estado parcial.
+//   - N > 0 — por diretório de pacote. Agrupa os arquivos pelos N primeiros
+//     segmentos de path (o diretório de pacote) e remove o pacote INTEIRO. É
+//     necessário quando o pacote é um diretório multi-arquivo cuja remoção parcial
+//     corrompe. Hoje o único caso é o yarn v1 (`<root>/v6/<pkg>/...`,
+//     PackageDepth=2): tirar um arquivo do meio deixa o pacote parcial e o
+//     `yarn install --frozen-lockfile` quebra com ENOENT em vez de re-buscar.
+//
+// Um manager futuro com pacote em diretório (ex.: outra estrutura de profundidade
+// fixa) entra setando a sua PackageDepth.
+//
+// WipeWhole é a terceira via, para caches cuja entrada tem referências CRUZADAS
+// opacas que o trim externo não consegue agrupar: o Go build cache guarda cada
+// entrada como par `<actionID>-a` + `<outputID>-d`, e o `-a` aponta o `-d` por um
+// hash de conteúdo que pode estar em OUTRO diretório de prefixo — remover qualquer
+// um dos dois orfana a entrada e o `go vet` quebra com "can't import facts ... no
+// such file or directory" (golangci é igual). Como nem por arquivo nem por
+// diretório é seguro, acima do cap só o wipe do diretório inteiro é atômico. É um
+// backstop: o go/golangci auto-trimam o working-set normal (entradas > 5 dias), e
+// o cap fica generoso para o wipe só disparar em crescimento descontrolado.
+// Ver docs/specs/cachetrim-yarn-atomic.
 type Cap struct {
-	Path       string
-	MaxBytes   int64
-	MinProtect time.Duration
+	Path         string
+	MaxBytes     int64
+	MinProtect   time.Duration
+	PackageDepth int
+	WipeWhole    bool
 }
 
 // Deps injects filesystem access so callers and tests stay hermetic.
@@ -85,7 +115,7 @@ func Caps(homes []string, deps Deps) []Cap {
 	// family expands a glob (plus optional fixed sub-paths) across every home into
 	// one Cap per existing dir, splitting the family budget evenly so the family
 	// total is bounded no matter how many named variants exist.
-	family := func(familyMaxGB int, glob string, extraSubs ...string) {
+	family := func(familyMaxGB, pkgDepth int, wipeWhole bool, glob string, extraSubs ...string) {
 		var dirs []string
 		for _, home := range homes {
 			if home == "" {
@@ -105,12 +135,18 @@ func Caps(homes []string, deps Deps) []Cap {
 			per = 1
 		}
 		for _, d := range dirs {
-			caps = append(caps, Cap{Path: d, MaxBytes: per, MinProtect: protect})
+			caps = append(caps, Cap{Path: d, MaxBytes: per, MinProtect: protect, PackageDepth: pkgDepth, WipeWhole: wipeWhole})
 		}
 	}
-	family(civm.DefaultCacheGoBuildMaxGB, ".cache/go-build*")
-	family(civm.DefaultCacheYarnMaxGB, ".cache/yarn*", ".yarn/cache")
-	family(civm.DefaultCacheGolangciLintMaxGB, ".cache/golangci-lint*")
+	// yarn v1: pacote = diretório multi-arquivo em `<root>/v6/<pkg>` → atômico por
+	// pacote (PackageDepth 2; o `.yarn/cache` berry tem zips rasos e cai no modo por
+	// arquivo sozinho). go-build/golangci: entrada com refs cruzadas opacas (o `-a`
+	// aponta um `-d` em outro prefixo) → não dá para sub-trimar, só WipeWhole acima
+	// do cap (backstop; ambos auto-trimam o working-set normal). npm/pnpm (abaixo)
+	// são content-addressed → seguros por arquivo (cada blob é uma unidade).
+	family(civm.DefaultCacheGoBuildMaxGB, 0, true, ".cache/go-build*")
+	family(civm.DefaultCacheYarnMaxGB, 2, false, ".cache/yarn*", ".yarn/cache")
+	family(civm.DefaultCacheGolangciLintMaxGB, 0, true, ".cache/golangci-lint*")
 	// npm/pnpm use a single well-known dir per home (no named variants) and the
 	// budget is not divided, so no division skew — they enter per home
 	// unconditionally (trim/wipe on an absent dir is a no-op).
@@ -174,20 +210,23 @@ type cacheEntry struct {
 	mtime time.Time
 }
 
-// TrimByAge walks c.Path, sorts files by mtime ascending, and removes the oldest
-// until total <= c.MaxBytes. Files newer than Now-c.MinProtect are preserved —
-// protects the hot cache of a job that just wrote. No-op if the cache is absent
-// or already under the cap.
-func TrimByAge(opts Options, c Cap) Result {
-	opts = opts.withDefaults()
-	r := Result{Path: c.Path, Executed: opts.Execute}
-	if strings.TrimSpace(c.Path) == "" || c.Path == "/" || c.Path == os.Getenv("HOME") {
-		r.Err = errors.New("unsafe cache path")
-		return r
+// collectUnits reúne as unidades de trim de um cache e o total de bytes. Com
+// PackageDepth 0, cada arquivo é uma unidade — Go build / golangci e os caches
+// content-addressed, onde cada arquivo já é uma entrada completa. Com PackageDepth
+// > 0 (yarn v1), os arquivos sob um diretório de pacote são agregados em UMA
+// unidade identificada por esse diretório (size = soma, mtime = o mais novo, para
+// o MinProtect proteger pacote recém-escrito); arquivos rasos (zips do yarn berry,
+// locks, `.tmp`) entram como unidades de arquivo. Assim o RemoveAll remove um
+// pacote inteiro, nunca parcial.
+func collectUnits(c Cap, walkDir func(string, fs.WalkDirFunc) error) ([]cacheEntry, int64, error) {
+	type agg struct {
+		size  int64
+		mtime time.Time
 	}
-	var entries []cacheEntry
+	pkgs := make(map[string]*agg)
+	var files []cacheEntry
 	var total int64
-	walkErr := opts.WalkDirFn(c.Path, func(p string, d fs.DirEntry, err error) error {
+	err := walkDir(c.Path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -201,10 +240,65 @@ func TrimByAge(opts Options, c Cap) Result {
 			}
 			return err
 		}
-		entries = append(entries, cacheEntry{path: p, size: info.Size(), mtime: info.ModTime()})
 		total += info.Size()
+		if root := packageRoot(c, p); root != "" {
+			a := pkgs[root]
+			if a == nil {
+				a = &agg{}
+				pkgs[root] = a
+			}
+			a.size += info.Size()
+			if info.ModTime().After(a.mtime) {
+				a.mtime = info.ModTime()
+			}
+			return nil
+		}
+		files = append(files, cacheEntry{path: p, size: info.Size(), mtime: info.ModTime()})
 		return nil
 	})
+	if err != nil {
+		return nil, total, err
+	}
+	units := files
+	for root, a := range pkgs {
+		units = append(units, cacheEntry{path: root, size: a.size, mtime: a.mtime})
+	}
+	return units, total, nil
+}
+
+// packageRoot devolve o diretório de pacote atômico (os PackageDepth primeiros
+// segmentos do path de p) que contém o arquivo p, ou "" se p deve ser tratado como
+// arquivo solto. Só age com PackageDepth > 0. Para o yarn v1 (PackageDepth=2) o
+// pacote fica em `<root>/<ver>/<pkg>` e seus arquivos estão mais fundo; arquivos
+// rasos (no próprio dir de pacote ou acima — ex.: zips do berry, locks, `.tmp`)
+// retornam "" e caem no modo por arquivo.
+func packageRoot(c Cap, p string) string {
+	if c.PackageDepth <= 0 {
+		return ""
+	}
+	rel, err := filepath.Rel(c.Path, p)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) <= c.PackageDepth {
+		return ""
+	}
+	return filepath.Join(append([]string{c.Path}, parts[:c.PackageDepth]...)...)
+}
+
+// TrimByAge walks c.Path, sorts files by mtime ascending, and removes the oldest
+// until total <= c.MaxBytes. Files newer than Now-c.MinProtect are preserved —
+// protects the hot cache of a job that just wrote. No-op if the cache is absent
+// or already under the cap.
+func TrimByAge(opts Options, c Cap) Result {
+	opts = opts.withDefaults()
+	r := Result{Path: c.Path, Executed: opts.Execute}
+	if strings.TrimSpace(c.Path) == "" || c.Path == "/" || c.Path == os.Getenv("HOME") {
+		r.Err = errors.New("unsafe cache path")
+		return r
+	}
+	entries, total, walkErr := collectUnits(c, opts.WalkDirFn)
 	if walkErr != nil {
 		if errors.Is(walkErr, fs.ErrNotExist) {
 			return r
@@ -214,6 +308,18 @@ func TrimByAge(opts Options, c Cap) Result {
 	}
 	r.BytesFound = total
 	if total <= c.MaxBytes {
+		return r
+	}
+	if c.WipeWhole {
+		// Cache com refs cruzadas opacas (go-build/golangci): sub-trimar orfana uma
+		// entrada. Acima do cap, só o wipe do dir inteiro é atômico — backstop raro.
+		if opts.Execute {
+			if err := opts.RemoveAllFn(c.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				r.Err = err
+				return r
+			}
+		}
+		r.BytesFreed = total
 		return r
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].mtime.Before(entries[j].mtime) })
