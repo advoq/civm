@@ -35,7 +35,7 @@ mesmas versões de Go/Node/Python/Docker/gh) com mais hardware (4+ cores,
 3. Ler `CODEX.md` (automação, DEFERRED, pause rules).
 4. Ler `MEMORY.md` de baixo para cima (contexto temporal append-only).
 
-### Sync rule (invariante #5)
+### Sync rule (invariante #14)
 
 `README.md`, `AGENTS.md`, `CODEX.md` e `rules/*.md` são documentos
 autoritativos. Mudança em um requer mudança nos outros no mesmo commit.
@@ -129,7 +129,7 @@ PR e issue compartilham assignee.
 
 ## Decision hygiene (Kahneman)
 
-Fonte: [`disciplines/KAHNEMAN-DISCIPLINES.md`](disciplines/KAHNEMAN-DISCIPLINES.md) — 12 disciplinas operacionais derivadas de _Thinking, Fast and Slow_ (Kahneman, 2011) e _Noise_ (Kahneman/Sibony/Sunstein, 2021). **Estas regras valem para toda mudança neste repo — todo commit, toda PR, todo runbook, todo template, toda ADR.** Não estão presas a milestone ou release. civm é repo source-of-truth de regras portáteis; quem porta para peer repos espelha estas mesmas 5 regras críticas.
+Fonte: [`disciplines/KAHNEMAN-DISCIPLINES.md`](disciplines/KAHNEMAN-DISCIPLINES.md) — 16 disciplinas operacionais derivadas de _Thinking, Fast and Slow_ (Kahneman, 2011) e _Noise_ (Kahneman/Sibony/Sunstein, 2021). **Estas regras valem para toda mudança neste repo — todo commit, toda PR, todo runbook, todo template, toda ADR.** Não estão presas a milestone ou release. civm é repo source-of-truth de regras portáteis; quem porta para peer repos espelha estas mesmas 5 regras críticas.
 
 Top-5 regras de operação diária:
 
@@ -143,7 +143,7 @@ Quando a pergunta é qualitativa ("essa arquitetura é boa?"), responder com mé
 
 ### Auditoria cross-repo do padrão
 
-O padrão Kahneman (doc + seção em CLAUDE/AGENTS) é auditado em 14 peer repos via:
+O padrão Kahneman (doc + seção em CLAUDE/AGENTS) é auditado em 13 peer repos via:
 
 - **Manifest:** [`disciplines/kahneman-sync-manifest.json`](disciplines/kahneman-sync-manifest.json) — source-of-truth dos forks autorizados, com estilo por surface (`h2_top5` ou `inline_bold`) e variante rule 5 (`en_canonical`, `pt_libraries`, `pt_generic`).
 - **Script:** [`scripts/check-kahneman-consistency.sh`](scripts/check-kahneman-consistency.sh) — bash, dep apenas `jq`. Roda em ~2s. `--json` pra pipe, `--strict` pra promover warn em fail.
@@ -198,7 +198,7 @@ commit, push, rollback ou alteração automática em peer repo.
 - `runbooks/VM-CREDENTIALS.md` — segurança de credenciais
 - `runbooks/PEER-ADOPTION-CHECKLIST.md` — adoção manual em peer repo
 - `templates/CIVM-USAGE.md` — fonte para `docs/CIVM.md` nos peer repos
-- `disciplines/KAHNEMAN-DISCIPLINES.md` — 12 disciplinas Sistema 1 vs 2
+- `disciplines/KAHNEMAN-DISCIPLINES.md` — 16 disciplinas Sistema 1 vs 2
 - `disciplines/SUPERPROMPT.md` — superprompt de auditoria de ruído arquitetural (Kahneman + DDD)
 - `disciplines/INVARIANTS.md` — catálogo de invariantes portáveis
 

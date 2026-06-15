@@ -24,7 +24,7 @@ SSDV3 é **mandatório** para mudanças em:
    o wrapper `civm-safedelete`.
 5. **Constantes que gateiam comportamento** em `internal/civm/civm.go` (headroom,
    faixas de porta, pre-cleanup %, ScratchBudget).
-6. **Quebra de invariante documentado** (`docs/INVARIANTS.md`): sync rule,
+6. **Quebra de invariante documentado** (`disciplines/INVARIANTS.md`): sync rule,
    anti-skynet, cobertura ≥80%.
 
 ## Opcional
@@ -35,13 +35,14 @@ Tudo o mais é opcional. Exemplos onde SSDV3 é **overhead**:
 - Refactors internos sem mudança de contrato público.
 - Bugfixes localizados (regression test + fix).
 - Atualização de docs.
-- Atualização de deps (com entrada em `docs/LIBRARIES.md`).
+- Atualização de deps (com justificativa no PR — alternativas, custo, rollback;
+  Kahneman #11 em `disciplines/KAHNEMAN-DISCIPLINES.md`).
 
 ## Pipeline
 
 ### PASSO 1 — PRD
 
-Copie o prompt de `docs/SSDV3-PROMPTS.md` (PASSO 1 PRD), substitua placeholders, cole no chat.
+Copie o prompt de `disciplines/SSDV3-PROMPTS.md` (PASSO 1 PRD), substitua placeholders, cole no chat.
 
 Output: `docs/specs/<feature-slug>/PRD.md`. 14 seções fixas:
 
@@ -94,7 +95,7 @@ Output: `docs/specs/<feature-slug>/IMPL.md` documentando o que foi feito (commit
 
 ## Localização
 
-- Prompts copiáveis: `docs/SSDV3-PROMPTS.md`.
+- Prompts copiáveis: `disciplines/SSDV3-PROMPTS.md`.
 - Artifacts: `docs/specs/<feature-slug>/{PRD,SPEC,IMPL}.md`. Slug em kebab-case inglês.
 - Disciplinas Kahneman: `disciplines/KAHNEMAN-DISCIPLINES.md`.
 

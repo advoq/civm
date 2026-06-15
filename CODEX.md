@@ -131,7 +131,7 @@ PAT/GITHUB_TOKEN sao contingencias, nao o caminho principal. Detalhes em
 
 Quando os artefatos `release-please-*.json` ou `release.yml` mudarem,
 sincronizar `README.md` §"Versionamento" e `AGENTS.md` §"Commits" no
-mesmo commit (invariante #5).
+mesmo commit (invariante #14).
 
 ## Pause rules (modo autônomo)
 
@@ -197,12 +197,6 @@ incidente de PAT expirado.
 funciona em self-hosted runner se `RUNNER_TOOL_CACHE` estiver
 configurado corretamente.
 **Gate:** medição mostrar >30% do tempo de build em cache miss.
-
-### `civmctl metrics` (Prometheus exporter)
-
-**Estado:** não planejado.
-**Por que adiar:** observability da VM faz-se via `node_exporter` padrão.
-**Gate:** necessidade de métrica custom não-coberta por node_exporter.
 
 ### Suporte a `windows-latest` e `macos-latest`
 
