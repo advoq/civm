@@ -40,6 +40,8 @@ linters:
         - comando
         - comandos
         - exclusivos
+        - independente
+        - independentes
         - inferir
         - operacional
         - variante
