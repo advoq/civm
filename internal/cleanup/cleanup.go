@@ -210,8 +210,11 @@ func Run(ctx context.Context, opts Options) []Action {
 			// pull, então uma imagem recém-baixada vendor-antiga (redis/minio/
 			// postgres) era apagada debaixo de um sibling em build->up no daemon
 			// compartilhado ("No such image", a corrida que derrubava o
-			// tenant-isolation-smoke). O reclaim de imagens taggeadas antigas fica
-			// só no branch idle (system prune -af), onde nenhum deploy corre.
+			// tenant-isolation-smoke). Nenhum branch faz mais `-a`: o branch idle
+			// agora também usa `system prune -f` (sem `-a`), porque a deteccao de
+			// idle teve falso "idle" no meio de um deploy de 66min e o `-af` rodou
+			// mesmo assim. O reclaim de imagens taggeadas migra pro teardown
+			// per-job (cada job derruba o proprio stack).
 			// No Err: a busy host is a deferral, not a failure.
 			var out []Action
 			if opts.DockerPrune {
@@ -512,6 +515,16 @@ func dirSize(opts Options, root string, info fs.FileInfo) int64 {
 	return total
 }
 
+// dockerPrune faz o reclaim de docker do branch idle: containers parados, networks
+// sem uso, imagens DANGLING, build cache e volumes orfaos (`system prune -f
+// --volumes`). NAO usa `-a`: o `-a` apaga TODA imagem taggeada sem uso, e numa box
+// com um daemon compartilhado por 8 runners isso wipa as imagens vendor recem-
+// PUXADAS (redis/alpine/postgres) de um sibling em `compose up --build` debaixo
+// dele — "No such image", a corrida que derrubava o tenant-isolation-smoke. O
+// idle-gate sozinho nao basta: a deteccao de idle teve um falso "idle" no meio de
+// um deploy de 66min (build com lulls) e o `-af` rodou mesmo assim. O reclaim de
+// imagens taggeadas antigas migra para o teardown per-job (cada job derruba o
+// proprio stack), nao para um prune global que corre com deploys.
 func dockerPrune(ctx context.Context, opts Options) Action {
 	a := Action{Name: "docker_prune", Path: "(docker daemon)"}
 	if !opts.Execute {
@@ -526,7 +539,7 @@ func dockerPrune(ctx context.Context, opts Options) Action {
 		a.Err = err
 		return a
 	}
-	out, err := opts.RunFn(ctx, "docker", "system", "prune", "-af", "--volumes")
+	out, err := opts.RunFn(ctx, "docker", "system", "prune", "-f", "--volumes")
 	if err != nil {
 		a.Err = err
 		return a

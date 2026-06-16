@@ -520,7 +520,9 @@ func TestDockerPrune_DryRun(t *testing.T) {
 func TestDockerPrune_Execute(t *testing.T) {
 	t.Parallel()
 	opts := testExecuteOptions()
+	var got string
 	opts.RunFn = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		got = name + " " + strings.Join(args, " ")
 		return []byte("Total reclaimed space: 3.5GB\n"), nil
 	}
 	a := dockerPrune(context.Background(), opts)
@@ -529,6 +531,13 @@ func TestDockerPrune_Execute(t *testing.T) {
 	}
 	if !a.Executed {
 		t.Errorf("Executed = false")
+	}
+	// REFUTACAO (Kahneman #13): o prune idle NUNCA pode usar `-a`. O `-a` apaga
+	// imagens taggeadas unused, incluindo as vendor recem-puxadas de um deploy
+	// concorrente no daemon compartilhado -> "No such image". Tem que ser `-f`.
+	const want = "docker system prune -f --volumes"
+	if got != want {
+		t.Errorf("dockerPrune cmd = %q, want %q (nunca -af: apaga imagens de deploy concorrente)", got, want)
 	}
 }
 
