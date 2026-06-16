@@ -551,21 +551,24 @@ func dockerPrune(ctx context.Context, opts Options) Action {
 
 // dockerPruneSafe reclaims only UNUSED docker space and is safe to run while a
 // build/job is active: `docker image prune -f` removes dangling (untagged,
-// unreferenced) images, and `docker builder prune -f --filter until=24h` removes
-// build cache not used in the last 24h (BuildKit's `until` is last-used based);
-// an active build's cache graph is "in use" and excluded regardless. Neither can
+// unreferenced) images, and `docker builder prune -f -a` removes ALL unused
+// build cache — dropping the former until=24h filter, because this runs under
+// disk pressure and today's <24h cache is exactly the bulk that filled the
+// guest to 95% mid-build (2026-06-16). BuildKit excludes an active build's
+// in-use cache graph regardless, so -a stays concurrency-safe: it only drops a
+// finished sibling's reusable cache (a cache-HIT, never correctness). Neither can
 // remove a resource a running container or build holds, so it needs no idle
 // guard (issue #70). Called only from the host-busy branch of Run, which is
 // reached only when opts.Execute is true (ensureIdle is a no-op otherwise), so
 // there is no dry-run path here — the idle-path dockerPrune handles dry-run.
 func dockerPruneSafe(ctx context.Context, opts Options) Action {
-	a := Action{Name: "docker_prune_safe", Path: "(docker unused: dangling images + old build cache)"}
+	a := Action{Name: "docker_prune_safe", Path: "(docker unused: dangling images + all unused build cache)"}
 	images, err := opts.RunFn(ctx, "docker", "image", "prune", "-f")
 	if err != nil {
 		a.Err = err
 		return a
 	}
-	cache, err := opts.RunFn(ctx, "docker", "builder", "prune", "-f", "--filter", "until=24h")
+	cache, err := opts.RunFn(ctx, "docker", "builder", "prune", "-f", "-a")
 	if err != nil {
 		a.Err = err
 		return a
