@@ -279,7 +279,11 @@ func buildSteps(opts Options) []Step {
 
 // timerList retorna lista de systemd timers a instalar conforme opts.
 func timerList(opts Options) []string {
-	timers := []string{"civmctl-cleanup.timer"}
+	// civmctl-buildcache-prune.timer e hygiene base (sempre ligada): um `docker
+	// builder prune -af` frequente e BuildKit-safe que roda SEM deferir ao
+	// docker-heavy-lock, fechando a lacuna do acumulo de build cache DENTRO de um
+	// build pesado (o disk-watchdog defere ao heavy-lock e deixa o disco encher).
+	timers := []string{"civmctl-cleanup.timer", "civmctl-buildcache-prune.timer"}
 	if opts.WatchdogTimer {
 		timers = append(timers, "civmctl-disk-watchdog.timer")
 	}
