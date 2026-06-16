@@ -90,10 +90,11 @@ const (
 	DefaultCachePNPMMaxGB         = 5
 	DefaultCacheGolangciLintMaxGB = 2
 
-	// Filtros do docker prune em modo rotineiro. Mantêm layers quentes < 24h
-	// e imagens unused < 7 dias, em vez do agressivo system prune --volumes.
+	// Filtro do buildx prune em modo rotineiro: mantém o build cache quente < 24h
+	// em vez do agressivo system prune --volumes. (O filtro de image prune por
+	// idade foi removido: `until` casa a data do vendor, não do pull, e apagava
+	// imagens recém-baixadas debaixo de um deploy concorrente — ver cleanup.go.)
 	DefaultDockerBuildxPruneFilter = "until=24h"
-	DefaultDockerImagePruneFilter  = "until=168h"
 
 	// Timeout por comando dentro do hook cleanup. Evita que um docker travado
 	// segure o runner durante todo o TimeoutStartSec do systemd (30 min).

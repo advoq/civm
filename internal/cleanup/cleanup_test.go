@@ -10,7 +10,6 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/advoq/civm/internal/civm"
 	"github.com/advoq/civm/internal/safedelete"
 )
 
@@ -579,41 +578,6 @@ func TestDockerVolumePruneSafe_Error(t *testing.T) {
 	}
 }
 
-func TestDockerImagePruneOld_UsesFilterConstant(t *testing.T) {
-	t.Parallel()
-	opts := testExecuteOptions()
-	var got string
-	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		got = name + " " + strings.Join(args, " ")
-		return []byte("Total reclaimed space: 6.0GB\n"), nil
-	}
-	a := dockerImagePruneOld(context.Background(), opts)
-	// `-a` amplia para imagens taggeadas sem container; o filtro liga a constante
-	// civm.DefaultDockerImagePruneFilter (antes órfã) protegendo as recém-baixadas.
-	want := "docker image prune -a -f --filter " + civm.DefaultDockerImagePruneFilter
-	if got != want {
-		t.Fatalf("comando errado:\n got %q\nwant %q", got, want)
-	}
-	if a.Name != "docker_image_prune_old" {
-		t.Fatalf("Name = %q, esperava docker_image_prune_old", a.Name)
-	}
-	if !a.Executed || a.BytesFreed == 0 {
-		t.Fatalf("esperava executado com bytes liberados: %+v", a)
-	}
-}
-
-func TestDockerImagePruneOld_Error(t *testing.T) {
-	t.Parallel()
-	opts := testExecuteOptions()
-	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
-		return nil, errors.New("docker daemon not running")
-	}
-	a := dockerImagePruneOld(context.Background(), opts)
-	if a.Err == nil || a.Executed {
-		t.Fatalf("esperava erro propagado e não-executado: %+v", a)
-	}
-}
-
 func TestAptClean(t *testing.T) {
 	t.Parallel()
 	opts := testExecuteOptions()
@@ -829,14 +793,17 @@ func TestRun_ExecuteBusyReclaimsUnusedDockerAndDefersPrivilegedCleanup(t *testin
 	opts.ActivityFn = func(context.Context) ([]Activity, error) {
 		return []Activity{{PID: 1234, Command: "/home/emdev/actions-runner/bin/Runner.Worker run"}}, nil
 	}
-	var ranDanglingImagePrune, ranBuilderPrune, ranVolumePrune, ranImagePruneOld, sawDangerous bool
+	var ranDanglingImagePrune, ranBuilderPrune, ranVolumePrune, sawImagePruneA, sawDangerous bool
 	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		joined := name + " " + strings.Join(args, " ")
 		switch {
 		case strings.Contains(joined, "image prune") && strings.Contains(joined, "-a"):
-			// `-a --filter until=168h` = poda agressiva de imagens unused velhas.
-			ranImagePruneOld = true
-			return []byte("Total reclaimed space: 6GB\n"), nil
+			// `image prune -a` NUNCA pode rodar com host busy: o filtro until casa
+			// a data de build do VENDOR, não a do pull, então apaga uma imagem
+			// recém-baixada vendor-antiga debaixo de um deploy concorrente no
+			// daemon compartilhado ("No such image"). Marca como perigoso — o
+			// branch busy NÃO deve mais emitir isso (deve ficar FALSE).
+			sawImagePruneA = true
 		case strings.Contains(joined, "image prune"):
 			// `image prune -f` (dangling-only) do dockerPruneSafe.
 			ranDanglingImagePrune = true
@@ -863,26 +830,29 @@ func TestRun_ExecuteBusyReclaimsUnusedDockerAndDefersPrivilegedCleanup(t *testin
 	if sawDangerous {
 		t.Fatalf("aggressive system prune / apt ran while host busy")
 	}
-	// Os três safe prunes (dangling+cache, volumes órfãos, imagens unused > 7d)
-	// DEVEM rodar mesmo com o host ocupado — todos só removem recursos órfãos.
-	if !ranDanglingImagePrune || !ranBuilderPrune || !ranVolumePrune || !ranImagePruneOld {
-		t.Fatalf("safe docker prune incompleto quando busy: dangling=%v builder=%v volume=%v imageOld=%v",
-			ranDanglingImagePrune, ranBuilderPrune, ranVolumePrune, ranImagePruneOld)
+	// POSITIVO: os dois safe prunes (dangling+cache, volumes órfãos) DEVEM rodar
+	// mesmo com o host ocupado — só removem recursos órfãos.
+	if !ranDanglingImagePrune || !ranBuilderPrune || !ranVolumePrune {
+		t.Fatalf("safe docker prune incompleto quando busy: dangling=%v builder=%v volume=%v",
+			ranDanglingImagePrune, ranBuilderPrune, ranVolumePrune)
+	}
+	// REFUTAÇÃO pareada (Kahneman #13): o `image prune -a` (corrida vendor-date)
+	// NUNCA pode rodar com host busy — apagaria imagens de um deploy concorrente.
+	if sawImagePruneA {
+		t.Fatalf("image prune -a rodou com host busy: apaga imagens recem-baixadas de um deploy concorrente (No such image)")
 	}
 	for _, a := range actions {
 		if a.Err != nil {
 			t.Fatalf("busy host surfaced an error action (should be a benign deferral): %+v", a)
 		}
 	}
-	var safe, volume, imageOld, deferred *Action
+	var safe, volume, deferred *Action
 	for i := range actions {
 		switch actions[i].Name {
 		case "docker_prune_safe":
 			safe = &actions[i]
 		case "docker_volume_prune":
 			volume = &actions[i]
-		case "docker_image_prune_old":
-			imageOld = &actions[i]
 		case deferredByHostBusy:
 			deferred = &actions[i]
 		}
@@ -892,9 +862,6 @@ func TestRun_ExecuteBusyReclaimsUnusedDockerAndDefersPrivilegedCleanup(t *testin
 	}
 	if volume == nil || !volume.Executed || volume.BytesFreed != 4*(1<<30) {
 		t.Fatalf("docker_volume_prune missing/not executed/wrong bytes: %+v", volume)
-	}
-	if imageOld == nil || !imageOld.Executed || imageOld.BytesFreed != 6*(1<<30) {
-		t.Fatalf("docker_image_prune_old missing/not executed/wrong bytes: %+v", imageOld)
 	}
 	if deferred == nil {
 		t.Fatalf("expected %q deferral action, got %+v", deferredByHostBusy, actions)

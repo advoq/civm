@@ -199,17 +199,24 @@ func Run(ctx context.Context, opts Options) []Action {
 			// Host busy: defer the privileged file cleanup and the aggressive
 			// docker/apt prune to an idle tick (benign, exit 0), but still
 			// reclaim UNUSED docker space now — the disk-pressure consumer on a
-			// perpetually busy box. As três safe prunes só removem recursos
+			// perpetually busy box. Os dois safe prunes só removem recursos
 			// órfãos, nunca um que um build ativo segura (issue #70):
 			// dockerPruneSafe = imagens dangling + build cache velho;
 			// dockerVolumePruneSafe = volumes sem container (fechava a lacuna dos
-			// ~86 volumes stale do E2E); dockerImagePruneOld = imagens unused > 7d.
+			// ~86 volumes stale do E2E).
+			//
+			// O dockerImagePruneOld (`image prune -a --filter until=168h`) foi
+			// REMOVIDO daqui: o `until` casa a data de build do VENDOR, não a do
+			// pull, então uma imagem recém-baixada vendor-antiga (redis/minio/
+			// postgres) era apagada debaixo de um sibling em build->up no daemon
+			// compartilhado ("No such image", a corrida que derrubava o
+			// tenant-isolation-smoke). O reclaim de imagens taggeadas antigas fica
+			// só no branch idle (system prune -af), onde nenhum deploy corre.
 			// No Err: a busy host is a deferral, not a failure.
 			var out []Action
 			if opts.DockerPrune {
 				out = append(out, dockerPruneSafe(ctx, opts))
 				out = append(out, dockerVolumePruneSafe(ctx, opts))
-				out = append(out, dockerImagePruneOld(ctx, opts))
 			}
 			if opts.EmergencyBypassIdle {
 				// Disk at emergency level: the busy job is the thing filling
@@ -565,27 +572,6 @@ func dockerPruneSafe(ctx context.Context, opts Options) Action {
 func dockerVolumePruneSafe(ctx context.Context, opts Options) Action {
 	a := Action{Name: "docker_volume_prune", Path: "(docker unused volumes)"}
 	out, err := opts.RunFn(ctx, "docker", "volume", "prune", "-f")
-	if err != nil {
-		a.Err = err
-		return a
-	}
-	a.BytesFreed = parseTotalReclaimed(string(out))
-	a.Executed = true
-	return a
-}
-
-// dockerImagePruneOld remove imagens NÃO-usadas mais velhas que
-// civm.DefaultDockerImagePruneFilter (`docker image prune -a -f --filter
-// until=168h`). O `-a` amplia o dangling-only de dockerPruneSafe para qualquer
-// imagem taggeada sem container, e o `--filter until=168h` (7 dias) protege as
-// recém-baixadas que um job a seguir ainda vai querer. É seguro com build
-// ativo: o docker nunca remove uma imagem que respalda um container vivo,
-// independente da idade. Liga a constante DefaultDockerImagePruneFilter, antes
-// órfã (zero call-site). Sem idle guard, mesma razão de dockerPruneSafe (#70);
-// chamada só do branch host-busy, sempre com opts.Execute true.
-func dockerImagePruneOld(ctx context.Context, opts Options) Action {
-	a := Action{Name: "docker_image_prune_old", Path: "(docker unused images > 7d)"}
-	out, err := opts.RunFn(ctx, "docker", "image", "prune", "-a", "-f", "--filter", civm.DefaultDockerImagePruneFilter)
 	if err != nil {
 		a.Err = err
 		return a
