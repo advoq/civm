@@ -803,6 +803,7 @@ func TestRun_ExecuteBusyReclaimsUnusedDockerAndDefersPrivilegedCleanup(t *testin
 		return []Activity{{PID: 1234, Command: "/home/emdev/actions-runner/bin/Runner.Worker run"}}, nil
 	}
 	var ranDanglingImagePrune, ranBuilderPrune, ranVolumePrune, sawImagePruneA, sawDangerous bool
+	var builderPruneCmd string
 	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		joined := name + " " + strings.Join(args, " ")
 		switch {
@@ -819,6 +820,7 @@ func TestRun_ExecuteBusyReclaimsUnusedDockerAndDefersPrivilegedCleanup(t *testin
 			return []byte("Total reclaimed space: 1GB\n"), nil
 		case strings.Contains(joined, "builder prune"):
 			ranBuilderPrune = true
+			builderPruneCmd = joined
 			return []byte("Total:  2GB\n"), nil
 		case strings.Contains(joined, "volume prune"):
 			ranVolumePrune = true
@@ -844,6 +846,17 @@ func TestRun_ExecuteBusyReclaimsUnusedDockerAndDefersPrivilegedCleanup(t *testin
 	if !ranDanglingImagePrune || !ranBuilderPrune || !ranVolumePrune {
 		t.Fatalf("safe docker prune incompleto quando busy: dangling=%v builder=%v volume=%v",
 			ranDanglingImagePrune, ranBuilderPrune, ranVolumePrune)
+	}
+	// Sob pressao o busy-branch reclama TODO o build cache nao-usado: o
+	// dockerPruneSafe usa `builder prune -f -a`, nao o filtro until=24h (que
+	// deixava o cache de hoje e era o que enchia o disco a 95% mid-build). Pin
+	// para uma reversao a until=24h falhar alto — Kahneman #13: afirma o EFEITO
+	// (poda tudo), nao so que algum prune rodou.
+	if !strings.Contains(builderPruneCmd, "-a") {
+		t.Fatalf("dockerPruneSafe deve usar builder prune -a, got: %q", builderPruneCmd)
+	}
+	if strings.Contains(builderPruneCmd, "until=24h") {
+		t.Fatalf("dockerPruneSafe nao deve mais filtrar until=24h, got: %q", builderPruneCmd)
 	}
 	// REFUTAÇÃO pareada (Kahneman #13): o `image prune -a` (corrida vendor-date)
 	// NUNCA pode rodar com host busy — apagaria imagens de um deploy concorrente.
