@@ -105,3 +105,33 @@ entrada).
 **Proxima acao:** ativar o orchestrator (remover `-Observe`) + desabilitar o
 autoreclaim quebrado (#18); medir o `pr_boundary_reclaim_done` (vhdx_gb,
 v_free_gb) no primeiro ciclo idle ativo.
+
+## 2026-06-17 09:59 -03 — Orchestrator ATIVO: ciclo scale-to-zero COMPLETO ✅
+
+**O que:** Validar o ciclo end-to-end do orchestrator ativo: stop+compact quando
+idle E start quando chega job na fila (o START path, que faltava ao vivo).
+
+**Dados medidos (log do orchestrator):**
+
+- COMPACT (idle → stop): `09:45` e `09:55` dois `pr_boundary_reclaim_done
+  vhdx_gb=68 v_free_gb=51`. **V: 31 → 51 GB.** O 2º foi a execução pendente do
+  autoreclaim subindo a VM de novo (LastRun `06:31` host) — transiente único,
+  não recorre (disabled).
+- START (fila → up): push do #1168 às 09:49 → o `Optimize-VHD` de ~8min bloqueou
+  os ticks até 09:55 (`MultipleInstances=IgnoreNew`); no 1º tick livre `09:57
+  queued:11 vm:Running` → `09:59 queued:9 running:2 idle_min:2`. **A VM subiu e 2
+  jobs já rodam na box**, fila 11→9 sendo consumida.
+
+**Veredito:** ✅ ciclo scale-to-zero COMPLETO e medido: idle→compacta (V:51) e
+fila→liga→jobs rodando. Os jobs eram REAIS (`running=2`), não fantasmas nem
+approval-pending — **sem flap**. O orchestrator substituiu o autoreclaim
+quebrado com sucesso.
+
+**Observações (tuning, não bloqueiam):** (1) o `Optimize-VHD` de ~8min bloqueia
+os ticks — um job que chega durante um compact espera ~10min (cold start pior);
+aceitável p/ CI. (2) `guest_full_clean_warn` (awk do `free_after` log) é
+cosmético: o `docker prune` roda antes do awk, então a limpeza ocorre. Fix
+pendente.
+
+**Proxima acao:** corpo do #1168 postado (29 commits); monitorar os checks até
+verde.
