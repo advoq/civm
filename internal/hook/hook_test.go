@@ -1081,7 +1081,7 @@ func TestCacheCapsGlobsNamedDirsAndDividesFamilyBudget(t *testing.T) {
 	}
 }
 
-func TestJobStartedUnderPressureUsesFilteredDockerPrune(t *testing.T) {
+func TestJobStartedUnderPressurePrunesAllBuildCache(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("RUNNER_TEMP", "")
 	t.Setenv("GITHUB_WORKSPACE", "")
@@ -1110,6 +1110,18 @@ func TestJobStartedUnderPressureUsesFilteredDockerPrune(t *testing.T) {
 	Run(context.Background(), opts)
 
 	joined := strings.Join(commands, "\n")
+	// Sob pressão real (purgeCaches=true) reclamamos TODO o build cache não-usado:
+	// o cache de hoje (<24h) é o que encheu a box a 95% mid-build, e o filtro
+	// until=24h o deixava intacto. buildx prune --all é concurrency-safe (o
+	// BuildKit exclui o cache em uso por um build ativo) — só sacrifica cache-hit.
+	if !strings.Contains(joined, "docker buildx prune --force --all") {
+		t.Errorf("job-started under pressure must prune ALL build cache (--all), got:\n%s", joined)
+	}
+	// O until=24h é o modo ROTINEIRO (job-completed); sob pressão ele deixaria o
+	// cache de hoje e a box seguiria cruzando o HardFail.
+	if strings.Contains(joined, "until=24h") {
+		t.Errorf("job-started under pressure must NOT use the until=24h filter, got:\n%s", joined)
+	}
 	// Unfiltered `docker system prune --volumes` is forbidden: it GCs content a
 	// sibling job is actively pulling and can be OOM-killed.
 	if strings.Contains(joined, "docker system prune") {

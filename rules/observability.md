@@ -57,6 +57,27 @@ com `WorkRoot`, disco, cleanup aplicado).
 scrape local. `host-metrics.json` (no host, `V:\`) carrega `v_free_gb` e o gap do
 VHDX, consumido pelo guard de headroom do reclaim.
 
+## Log de validação empírica (`validation.md`)
+
+`validation.md` na raiz é o log vivo de validações **empíricas** — a fonte de
+verdade para "isso está de fato funcionando?" (box, VHDX, orchestrator, compact,
+runners). Princípio Kahneman #13: **medir, não asseverar** — "código existe" ≠
+"função ativa". Complementa o `vm.md` (que inventaria o estado da máquina): aqui
+ficam as **medições que provam ou refutam** um comportamento (decision-table
+PASS/FAIL contra o módulo deployado, V: livre antes/depois do compact,
+`workers`/`idle_min` no instante).
+
+Regras:
+
+- Append-only como o `MEMORY.md`: entrada mais recente no fim; nunca delete,
+  reescreva nem reordene entradas antigas. Leia de baixo para cima.
+- Toda entrada registra DADOS medidos (números reais, sem adjetivo antes do
+  número) e um veredito explícito.
+- Schema por entrada: `## YYYY-MM-DD HH:MM -03 — <titulo>`, depois `**O que:**`,
+  `**Dados medidos:**`, `**Veredito:**` (✅ funciona / 🔴 não / 🟡 parcial) e
+  `**Proxima acao:**`.
+- Nunca persista secret/token/PAT/chave, valor de env ou PII.
+
 ## Não logar segredo
 
 Nunca logar token/PAT/chave raw (GitHub App key, SSH key, `gh` token). Mascarar

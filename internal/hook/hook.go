@@ -362,9 +362,23 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	//     remove and are the bulk of build churn, while tagged images another
 	//     job pulled or built are never touched.
 	//
-	// Build cache (the largest disk consumer) is still trimmed by buildx prune
-	// (until=24h), and HardFailPct guards genuinely-full disk.
-	actions = append(actions, commandActionWarn(opts, ctx, "docker_buildx_prune", "docker", "buildx", "prune", "--force", "--filter", civm.DefaultDockerBuildxPruneFilter))
+	// Build cache (the largest disk consumer) reaccumulates every run: one smoke
+	// building ~15 service images generates ~17G of cache. Under REAL pressure
+	// (purgeCaches=true at job-started, disk >= PreCleanupPct) we prune ALL unused
+	// build cache (--all), not just the >24h slice: today's cache is exactly what
+	// fills the disk, and the until=24h filter left it intact — so the box climbed
+	// to HardFail and REJECTED the job (the 2026-06-16 wall: a single re-run drove
+	// the guest 76%->95% mid-build). buildx prune touches ONLY build cache (never
+	// tagged images, so no "No such image" race like image prune -a) and BuildKit
+	// excludes records IN USE by a concurrent build — safe under load: it only
+	// sacrifices a sibling's cache-HIT (rebuild from scratch), never correctness.
+	// Routine mode (job-completed, purgeCaches=false) keeps the <24h cache so
+	// back-to-back jobs still get cache-hits.
+	if purgeCaches {
+		actions = append(actions, commandActionWarn(opts, ctx, "docker_buildx_prune", "docker", "buildx", "prune", "--force", "--all"))
+	} else {
+		actions = append(actions, commandActionWarn(opts, ctx, "docker_buildx_prune", "docker", "buildx", "prune", "--force", "--filter", civm.DefaultDockerBuildxPruneFilter))
+	}
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_image_prune", "docker", "image", "prune", "-f"))
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_container_prune", "docker", "container", "prune", "-f"))
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_volume_prune", "docker", "volume", "prune", "-f"))

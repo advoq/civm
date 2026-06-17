@@ -382,7 +382,8 @@ func TestRun_WatchdogTimer_OnlyCleanup(t *testing.T) {
 			key = name + " " + strings.Join(args, " ")
 		}
 		calls = append(calls, key)
-		if strings.Contains(key, "is-enabled civmctl-cleanup.timer") {
+		if strings.Contains(key, "is-enabled civmctl-cleanup.timer") ||
+			strings.Contains(key, "is-enabled civmctl-buildcache-prune.timer") {
 			return []byte("enabled\n"), nil
 		}
 		// outros: erro
