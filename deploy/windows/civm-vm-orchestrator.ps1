@@ -23,25 +23,41 @@
     estado expira por tempo, nunca trava pra sempre.
 
 .NOTES
-    Requer um PAT com actions:read em C:\ProgramData\civm\gh-token.txt (o host
-    nao tem gh). A lista de repos vem de Repos (derivada dos runners da box).
+    Requer um PAT actions:read por resource owner em
+    C:\ProgramData\civm\gh-token-{advoq,emersonbusson}.txt (o host nao tem gh).
+    DEVE rodar com o mesmo principal do civm-vhdx-autoreclaim (SYSTEM, que ja faz
+    SSH ao guest com sucesso); como elevated-user a ssh key fica ilegivel.
+    Ao ATIVAR (sem -WhatIf), DESABILITE o autoreclaim: o orchestrator subsume o
+    stop+compact dele (um dono so da VM — Kahneman #18).
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [string]$VMName = 'gha-ubuntu-2404',
     [string]$VhdxPath = 'V:\Hyper-V\gha-ubuntu-2404\Virtual Hard Disks\gha-ubuntu-2404.vhdx',
-    [string]$TokenPath = 'C:\ProgramData\civm\gh-token.txt',
+    # Um PAT fine-grained por resource owner (cada um cobre 1 dono). advoq cobre
+    # advoq/advoq; emersonbusson cobre os 5 repos pessoais.
+    [hashtable]$TokenPaths = @{
+        'advoq'         = 'C:\ProgramData\civm\gh-token-advoq.txt'
+        'emersonbusson' = 'C:\ProgramData\civm\gh-token-emersonbusson.txt'
+    },
     [string]$GuestSshTarget = 'emdev@gha-ubuntu-2404',
     [string]$SshKeyPath = 'C:\ProgramData\civm\ssh\id_ed25519',
-    # So repos que o PAT alcanca (fine-grained PAT = 1 resource owner). O token
-    # atual e do org advoq -> cobre advoq/advoq. Os 5 repos pessoais
-    # (emersonbusson/*) precisam de um 2o token; ate la o stop-guard via SSH
-    # (Get-GuestHasActiveJob) garante que a VM nunca desligue com job de QUALQUER
-    # repo rodando, mesmo os que o token nao enxerga.
-    [string[]]$Repos = @('advoq/advoq'),
+    # Os 7 runners da box -> 6 repos em 2 donos. Cada repo e consultado com o
+    # token do seu owner (TokenPaths). O stop-guard via SSH (Get-GuestHasActiveJob)
+    # continua a salvaguarda final, independente de token.
+    [string[]]$Repos = @(
+        'advoq/advoq',
+        'emersonbusson/advoqwhatsappapi', 'emersonbusson/chatwoot-realtime',
+        'emersonbusson/n8n-engine', 'emersonbusson/typebot-runtime',
+        'emersonbusson/vitae'
+    ),
     [ValidateRange(1, 120)][int]$IdleStopMinutes = 10,
     [string]$StatePath = 'V:\civm-orchestrator-state.json',
-    [string]$LogPath = 'V:\civm-orchestrator.log'
+    [string]$LogPath = 'V:\civm-orchestrator.log',
+    # Modo observe: loga "would_start"/"would_stop" em vez de agir. Valida a
+    # logica contra a box real sem mexer na VM — mais limpo que -WhatIf (que
+    # suprime ate o Add-Content do log e os New-Alias do modulo Hyper-V).
+    [switch]$Observe
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,21 +72,45 @@ function Write-OrcLog {
     Write-Host $line
 }
 
-function Get-GhToken {
-    if (-not (Test-Path -LiteralPath $TokenPath)) { throw "token ausente em $TokenPath" }
-    return (Get-Content -LiteralPath $TokenPath -Raw).Trim()
+$script:TokenCache = @{}
+function Get-GhTokenForOwner {
+    param([string]$Owner)
+    if ($script:TokenCache.ContainsKey($Owner)) { return $script:TokenCache[$Owner] }
+    $path = $TokenPaths[$Owner]
+    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) {
+        throw "token ausente para owner '$Owner' (esperado em $path)"
+    }
+    $tok = (Get-Content -LiteralPath $path -Raw).Trim()
+    $script:TokenCache[$Owner] = $tok
+    return $tok
 }
 
 # Conta runs de workflow num estado (queued|in_progress) somando todos os repos
 # vigiados. Falha de API NAO e ocioso: relanca para o caller decidir fail-safe.
+#
+# NAO confiar no total_count do filtro ?status= : o indice do GitHub fica STALE e
+# lista runs JA COMPLETED como "queued" (fantasmas — 2 runs de 3 semanas atras
+# travaram o scale-to-zero: o filtro os contava, mas "gh run cancel" respondia
+# "Cannot cancel a run that is completed"). Buscamos os runs e contamos so os que
+# REALMENTE estao no status pedido (run.status bate) E sao recentes
+# (< MaxAgeHours) — um job em fila nao espera horas; um in_progress legitimo nao
+# passa de algumas horas. Dupla guarda: status real + idade.
 function Get-RunCount {
-    param([string]$Token, [string]$Status)
+    param([string]$Status, [int]$MaxAgeHours = 12)
     $total = 0
-    $headers = @{ Authorization = "Bearer $Token"; 'User-Agent' = 'civm-orchestrator'; Accept = 'application/vnd.github+json' }
+    $cutoff = (Get-Date).ToUniversalTime().AddHours(-$MaxAgeHours)
     foreach ($repo in $Repos) {
-        $uri = "https://api.github.com/repos/$repo/actions/runs?status=$Status&per_page=1"
+        $owner = $repo.Split('/')[0]
+        $token = Get-GhTokenForOwner -Owner $owner
+        $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'civm-orchestrator'; Accept = 'application/vnd.github+json' }
+        $uri = "https://api.github.com/repos/$repo/actions/runs?status=$Status&per_page=30"
         $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
-        $total += [int]$resp.total_count
+        foreach ($run in $resp.workflow_runs) {
+            if ($run.status -ne $Status) { continue }
+            $created = [datetime]::Parse([string]$run.created_at).ToUniversalTime()
+            if ($created -lt $cutoff) { continue }
+            $total++
+        }
     }
     return $total
 }
@@ -115,70 +155,67 @@ function Get-GuestHasActiveJob {
     catch { Write-OrcLog 'guest_active_probe_failed' @{ error = $_.Exception.Message } 'WARN'; return $true }
 }
 
+# Carrega a funcao de decisao pura — o MESMO modulo que o teste exercita
+# (Kahneman #13: codigo deployado == codigo testado).
+. "$PSScriptRoot\civm-orchestrator-decision.ps1"
+
 # ---- decisao principal ----
 try {
-    $token = Get-GhToken
     $vm = Get-VM -Name $VMName -ErrorAction Stop
-    $queued = Get-RunCount -Token $token -Status 'queued'
-    $running = Get-RunCount -Token $token -Status 'in_progress'
+    $queued = Get-RunCount -Status 'queued'
+    $running = Get-RunCount -Status 'in_progress'
     $state = Get-State
 
-    Write-OrcLog 'tick' @{ vm = "$($vm.State)"; queued = $queued; running = $running }
-
-    if ($vm.State -eq 'Off') {
-        if ($queued -gt 0) {
-            if ($PSCmdlet.ShouldProcess($VMName, 'Start-VM (job na fila)')) {
-                Start-VM -Name $VMName -ErrorAction Stop
-                Write-OrcLog 'vm_started' @{ queued = $queued }
-            }
-        }
-        return
-    }
-
-    # VM Running: se ha trabalho, marca busy e segue.
-    if ($queued -gt 0 -or $running -gt 0) {
-        $state.lastBusyUtc = (Get-Date).ToUniversalTime().ToString('o')
-        Save-State $state
-        return
-    }
-
-    # Ocioso: so desliga depois de IdleStopMinutes sem trabalho (debounce).
     $last = [datetime]::Parse($state.lastBusyUtc).ToUniversalTime()
     $idleMin = ((Get-Date).ToUniversalTime() - $last).TotalMinutes
-    if ($idleMin -lt $IdleStopMinutes) {
-        Write-OrcLog 'idle_debounce' @{ idle_min = [math]::Round($idleMin, 1); need = $IdleStopMinutes }
-        return
-    }
+    Write-OrcLog 'tick' @{ vm = "$($vm.State)"; queued = $queued; running = $running; idle_min = [math]::Round($idleMin, 1) }
 
-    # Salvaguarda final ANTES de desligar: o token so ve advoq, entao confirma no
-    # proprio guest que nenhum job (de nenhum repo/dono) esta rodando. Se houver,
-    # remarca busy e nao desliga.
-    if (Get-GuestHasActiveJob) {
-        Write-OrcLog 'stop_aborted_active_job' @{ note = 'Runner.Worker ativo no guest (repo fora do escopo do token?)' }
-        $state.lastBusyUtc = (Get-Date).ToUniversalTime().ToString('o')
-        Save-State $state
-        return
-    }
+    # Decide no modulo puro testado (civm-orchestrator-decision.test.ps1); o
+    # switch abaixo so EXECUTA a acao. A probe SSH e lazy: Get-OrchestratorDecision
+    # so a chama no gate de stop.
+    $decision = Get-OrchestratorDecision -VmState "$($vm.State)" -Queued $queued -Running $running -IdleMinutes $idleMin -IdleStopMinutes $IdleStopMinutes -HasActiveJobProbe { Get-GuestHasActiveJob }
+    $nowUtc = (Get-Date).ToUniversalTime().ToString('o')
 
-    # Fronteira de PR: limpa o guest, desliga, compacta. VM fica Off ate o
-    # proximo job na fila (cold start).
-    Write-OrcLog 'pr_boundary_reclaim_start' @{ idle_min = [math]::Round($idleMin, 1) }
-    Invoke-GuestFullClean
-    if ($PSCmdlet.ShouldProcess($VMName, 'Stop-VM + Optimize-VHD')) {
-        Stop-VM -Name $VMName -Force -ErrorAction Stop
-        $deadline = (Get-Date).AddSeconds(180)
-        while ((Get-VM -Name $VMName).State -ne 'Off' -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
-        # Optimize-VHD exige o VHDX MONTADO read-only — so detached nao basta (sem
-        # o Mount o Optimize vira no-op e o VHDX NAO encolhe; confirmado
-        # 2026-06-17). O autoreclaim ja faz assim e compacta de verdade. Dismount
-        # no finally, sempre.
-        Mount-VHD -Path $VhdxPath -ReadOnly -ErrorAction Stop
-        try { Optimize-VHD -Path $VhdxPath -Mode Full -ErrorAction Stop }
-        finally { Dismount-VHD -Path $VhdxPath -ErrorAction SilentlyContinue }
-        $vhd = Get-VHD -Path $VhdxPath
-        Write-OrcLog 'pr_boundary_reclaim_done' @{
-            vhdx_gb   = [int]($vhd.FileSize / 1GB)
-            v_free_gb = [int]((Get-PSDrive V).Free / 1GB)
+    switch ($decision) {
+        'noop_off' { }
+        'start' {
+            if ($Observe) { Write-OrcLog 'would_start' @{ queued = $queued; running = $running } }
+            else {
+                Start-VM -Name $VMName -ErrorAction Stop
+                Write-OrcLog 'vm_started' @{ queued = $queued; running = $running }
+            }
+        }
+        'mark_busy' { $state.lastBusyUtc = $nowUtc; Save-State $state }
+        'idle_debounce' { Write-OrcLog 'idle_debounce' @{ idle_min = [math]::Round($idleMin, 1); need = $IdleStopMinutes } }
+        'stop_aborted_active_job' {
+            Write-OrcLog 'stop_aborted_active_job' @{ note = 'Runner.Worker ativo no guest (repo fora do escopo do token?)' }
+            $state.lastBusyUtc = $nowUtc; Save-State $state
+        }
+        'stop_and_compact' {
+            if ($Observe) {
+                Write-OrcLog 'would_stop_and_compact' @{ idle_min = [math]::Round($idleMin, 1) }
+            }
+            else {
+                # Fronteira de PR: limpa o guest, desliga, compacta. VM fica Off
+                # ate o proximo job na fila (cold start).
+                Write-OrcLog 'pr_boundary_reclaim_start' @{ idle_min = [math]::Round($idleMin, 1) }
+                Invoke-GuestFullClean
+                Stop-VM -Name $VMName -Force -ErrorAction Stop
+                $deadline = (Get-Date).AddSeconds(180)
+                while ((Get-VM -Name $VMName).State -ne 'Off' -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
+                # Optimize-VHD exige o VHDX MONTADO read-only — so detached nao
+                # basta (sem o Mount o Optimize vira no-op e o VHDX NAO encolhe;
+                # confirmado 2026-06-17). O autoreclaim ja faz assim. Dismount no
+                # finally, sempre.
+                Mount-VHD -Path $VhdxPath -ReadOnly -ErrorAction Stop
+                try { Optimize-VHD -Path $VhdxPath -Mode Full -ErrorAction Stop }
+                finally { Dismount-VHD -Path $VhdxPath -ErrorAction SilentlyContinue }
+                $vhd = Get-VHD -Path $VhdxPath
+                Write-OrcLog 'pr_boundary_reclaim_done' @{
+                    vhdx_gb   = [int]($vhd.FileSize / 1GB)
+                    v_free_gb = [int]((Get-PSDrive V).Free / 1GB)
+                }
+            }
         }
     }
 }
