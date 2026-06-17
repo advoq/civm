@@ -23,12 +23,25 @@ docker builder prune --force --all >/dev/null 2>&1 || true
 # runids cujo container esta vivo agora — o run ATIVO, que nao podemos tocar.
 active="$(docker ps --format '{{.Image}}' 2>/dev/null | grep -oE 'advoq-org-[0-9]+' | sort -u)"
 
+# Guarda de idade: `docker ps` NAO ve a run numa janela entre-jobs (imagem ja
+# buildada, container do passo anterior parado, o `up` do proximo passo ainda
+# nao subiu) -> sem isto o prune evictava a imagem de uma run ATIVA e o `up`
+# seguinte morria com "No such image" (2026-06-17, tenant-isolation-smoke). So
+# removemos imagens com mais de 3h: nenhuma run dura tanto, entao 3h sem
+# container = run garantidamente encerrada. Fail-safe: data que nao parseia
+# vira epoch futuro -> tratada como recente e NAO removida.
+cutoff="$(date -d '3 hours ago' +%s 2>/dev/null || echo 0)"
+
 docker images 'advoq-org-*' --format '{{.ID}} {{.Repository}}' 2>/dev/null \
   | sort -u | while read -r id repo; do
       rid="$(printf '%s' "$repo" | grep -oE 'advoq-org-[0-9]+')"
       [ -z "$rid" ] && continue
       # pula o run ativo; o rmi tambem recusa sozinho qualquer imagem in-use.
       printf '%s\n' "$active" | grep -qxF "$rid" && continue
+      # pula imagem recente (<3h): a run pode estar numa janela entre-jobs.
+      created="$(docker inspect --format '{{.Created}}' "$id" 2>/dev/null)"
+      created_epoch="$(date -d "$created" +%s 2>/dev/null || echo 9999999999)"
+      [ "$created_epoch" -gt "$cutoff" ] && continue
       docker rmi "$id" >/dev/null 2>&1 || true
     done
 
