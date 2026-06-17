@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.19.0](https://github.com/advoq/civm/compare/v1.18.7...v1.19.0) (2026-06-17)
+
+
+### Features
+
+* **civm:** scale-to-zero orchestrator + prune age-guard + parity docs ([0e97a12](https://github.com/advoq/civm/commit/0e97a12d24844b058006862ce0fa8c239ce599b9))
+* **disk:** frequent build-cache prune timer, no heavy-lock defer ([026aa4e](https://github.com/advoq/civm/commit/026aa4ee99098899d92e269a75c6acd8a0e4ff23))
+* **disk:** prune finished-run service images in the 3min hygiene timer ([42f2b78](https://github.com/advoq/civm/commit/42f2b780a5238010f5d17f05e5c8ef20f03ac7ea))
+* **orchestrator:** scale-to-zero VM orchestrator with tested decision module ([533d1bf](https://github.com/advoq/civm/commit/533d1bfa54ed5d32d60981ae7fd34a4f2f119a7d))
+* **vm:** scale-to-zero VM orchestrator + vm.md inventory ([1c70e22](https://github.com/advoq/civm/commit/1c70e22f32d7618f98662ecbee370e05a5d72bba))
+* **vm:** scope orchestrator to advoq token + SSH stop-guard ([7f6dc69](https://github.com/advoq/civm/commit/7f6dc69cbb0a39544940ac906d4386024d8438c5))
+
+
+### Bug Fixes
+
+* **ci:** age-guard per-run image prune to stop evicting active runs ([98c7557](https://github.com/advoq/civm/commit/98c7557325ca6e311dcc246771d41544133b4b71))
+* **cleanup:** drop -a from idle docker prune to stop image race ([811b435](https://github.com/advoq/civm/commit/811b4359c628f0edae8a94c571822af016e2e0e6))
+* **cleanup:** drop -a image prune from busy branch (vendor-date race) ([7e9cc0d](https://github.com/advoq/civm/commit/7e9cc0d5bb880428470029ba6901939374a8efb3))
+* **disk:** prune all unused build cache under pressure, not just &gt;24h ([718e2c8](https://github.com/advoq/civm/commit/718e2c802b057959995787f3a6cae904cc035ed9))
+* **orchestrator:** use df --output=avail to avoid awk escape in guest-clean ([309e24a](https://github.com/advoq/civm/commit/309e24ab6343342face2906c88fc67fef6964425))
+
+
+### Documentation
+
+* **ci:** add paid-CI parity adversarial anchor docs ([a00b812](https://github.com/advoq/civm/commit/a00b8123a47f4b2e573d74618cac1f56f251c33f))
+* institutionalize validation.md empirical-validation log ([d69aede](https://github.com/advoq/civm/commit/d69aede3a9c057cf639f603b7421d5a466b89651))
+* **validation:** record orchestrator compact+START cycle proven ([aff9184](https://github.com/advoq/civm/commit/aff9184e3a6aed5b0d033c75b0b32291737c4b0d))
+* **vm:** bump Go to 1.26.4 in inventory ([9e8b262](https://github.com/advoq/civm/commit/9e8b262ea2c2500e6e33cf73962d9f7e6de99c64))
+
 ## [1.18.7](https://github.com/advoq/civm/compare/v1.18.6...v1.18.7) (2026-06-15)
 
 
