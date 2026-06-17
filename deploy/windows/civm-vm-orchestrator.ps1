@@ -33,11 +33,12 @@ param(
     [string]$TokenPath = 'C:\ProgramData\civm\gh-token.txt',
     [string]$GuestSshTarget = 'emdev@gha-ubuntu-2404',
     [string]$SshKeyPath = 'C:\ProgramData\civm\ssh\id_ed25519',
-    [string[]]$Repos = @(
-        'advoq/advoq', 'advoq/advoq-org', 'advoq/advoqwhatsappapi',
-        'advoq/chatwoot-realtime', 'advoq/n8n-engine',
-        'advoq/typebot-runtime', 'advoq/vitae'
-    ),
+    # So repos que o PAT alcanca (fine-grained PAT = 1 resource owner). O token
+    # atual e do org advoq -> cobre advoq/advoq. Os 5 repos pessoais
+    # (emersonbusson/*) precisam de um 2o token; ate la o stop-guard via SSH
+    # (Get-GuestHasActiveJob) garante que a VM nunca desligue com job de QUALQUER
+    # repo rodando, mesmo os que o token nao enxerga.
+    [string[]]$Repos = @('advoq/advoq'),
     [ValidateRange(1, 120)][int]$IdleStopMinutes = 10,
     [string]$StatePath = 'V:\civm-orchestrator-state.json',
     [string]$LogPath = 'V:\civm-orchestrator.log'
@@ -99,6 +100,21 @@ function Invoke-GuestFullClean {
     catch { Write-OrcLog 'guest_full_clean_warn' @{ error = $_.Exception.Message } 'WARN' }
 }
 
+# Stop-guard independente do token: pergunta ao proprio guest se ha algum
+# Runner.Worker ativo (qualquer repo, qualquer dono). E a salvaguarda real contra
+# desligar a VM com um job rodando que o PAT (escopado a 1 dono) nao ve via API.
+# Fail-safe: SSH falhou -> assume "ha job" -> nao desliga (Kahneman #16).
+function Get-GuestHasActiveJob {
+    $sshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new')
+    if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) { $sshArgs += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath) }
+    $sshArgs += $GuestSshTarget
+    try {
+        $n = (& ssh @sshArgs 'pgrep -c "[R]unner.Worker" 2>/dev/null || echo 0' 2>&1 | Select-Object -Last 1)
+        return ([int]$n -gt 0)
+    }
+    catch { Write-OrcLog 'guest_active_probe_failed' @{ error = $_.Exception.Message } 'WARN'; return $true }
+}
+
 # ---- decisao principal ----
 try {
     $token = Get-GhToken
@@ -131,6 +147,16 @@ try {
     $idleMin = ((Get-Date).ToUniversalTime() - $last).TotalMinutes
     if ($idleMin -lt $IdleStopMinutes) {
         Write-OrcLog 'idle_debounce' @{ idle_min = [math]::Round($idleMin, 1); need = $IdleStopMinutes }
+        return
+    }
+
+    # Salvaguarda final ANTES de desligar: o token so ve advoq, entao confirma no
+    # proprio guest que nenhum job (de nenhum repo/dono) esta rodando. Se houver,
+    # remarca busy e nao desliga.
+    if (Get-GuestHasActiveJob) {
+        Write-OrcLog 'stop_aborted_active_job' @{ note = 'Runner.Worker ativo no guest (repo fora do escopo do token?)' }
+        $state.lastBusyUtc = (Get-Date).ToUniversalTime().ToString('o')
+        Save-State $state
         return
     }
 
