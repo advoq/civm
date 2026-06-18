@@ -34,7 +34,7 @@ mesmas versões de Go/Node/Python/Docker/gh) com mais hardware (4+ cores,
    fallback se não houver `CLAUDE.md`).
 3. Ler `CODEX.md` (automação, DEFERRED, pause rules).
 4. Ler `MEMORY.md` de baixo para cima (contexto temporal append-only).
-5. Ler `validation.md` para o estado empírico ("isso está funcionando agora?" — box, VHDX, orchestrator, compact; append-only, regra em `rules/observability.md` § Log de validação empírica).
+5. Ler `validation.md` para o estado empírico ("isso está funcionando agora?") — log append-only de TODA validação de infra, não só box/compact. Escopo e regra em `rules/observability.md` § Log de validação empírica.
 
 ### Sync rule (invariante #14)
 
@@ -195,7 +195,7 @@ commit, push, rollback ou alteração automática em peer repo.
 - `README.md` — visão e audiências
 - `CODEX.md` — automação e DEFERRED
 - `MEMORY.md` — log de sessão append-only
-- `validation.md` — log de validações empíricas append-only (Kahneman #13)
+- `validation.md` — log append-only de TODA validação empírica de infra (Kahneman #13; taxonomia no header do arquivo)
 - `runbooks/MULTI-PROJECT-RUNNER.md` — provisionamento da VM
 - `runbooks/VM-CREDENTIALS.md` — segurança de credenciais
 - `runbooks/PEER-ADOPTION-CHECKLIST.md` — adoção manual em peer repo

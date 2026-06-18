@@ -78,23 +78,21 @@ VHDX, consumido pelo guard de headroom do reclaim.
 
 ## Log de validação empírica (`validation.md`)
 
-`validation.md` na raiz é o log vivo de validações **empíricas** — a fonte de
-verdade para "isso está de fato funcionando?" (box, VHDX, orchestrator, compact,
-runners). Princípio Kahneman #13: **medir, não asseverar** — "código existe" ≠
-"função ativa". Complementa o `vm.md` (que inventaria o estado da máquina): aqui
-ficam as **medições que provam ou refutam** um comportamento (decision-table
-PASS/FAIL contra o módulo deployado, V: livre antes/depois do compact,
-`workers`/`idle_min` no instante).
+`validation.md` na raiz é o log append-only de **toda validação empírica de
+infra** — a fonte de verdade para "isso está de fato funcionando agora?". A
+definição, a taxonomia de categorias e o framing Kahneman #13 vivem no **header
+do `validation.md`**; complementa o `vm.md` (inventário da máquina). Validação de
+app vive no `validation.md` do **advoq** (independente); não logue app aqui.
 
-Regras:
+Regras de uso:
 
-- Append-only como o `MEMORY.md`: entrada mais recente no fim; nunca delete,
-  reescreva nem reordene entradas antigas. Leia de baixo para cima.
-- Toda entrada registra DADOS medidos (números reais, sem adjetivo antes do
-  número) e um veredito explícito.
-- Schema por entrada: `## YYYY-MM-DD HH:MM -03 — <titulo>`, depois `**O que:**`,
-  `**Dados medidos:**`, `**Veredito:**` (✅ funciona / 🔴 não / 🟡 parcial) e
-  `**Proxima acao:**`.
+- Append-only: entrada mais recente no fim; nunca delete, reescreva nem reordene.
+  Leia de baixo para cima.
+- Toda entrada carrega DADOS medidos (número real, sem adjetivo antes do número)
+  e um veredito explícito.
+- Schema: `## YYYY-MM-DD HH:MM -03 — <titulo>`, depois `**O que:**`,
+  `**Dados medidos:**`, `**Veredito:**` (✅/🔴/🟡) e `**Proxima acao:**`.
+  Opcionais: `**Categoria:**` (tag da taxonomia) e `**Como medir:**` (comando de repro).
 - Nunca persista secret/token/PAT/chave, valor de env ou PII.
 
 ## Não logar segredo
