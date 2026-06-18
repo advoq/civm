@@ -7,6 +7,12 @@ issues: [106, 113]
 
 # SPEC — Runner auto-limpante
 
+> **SUPERSEDED-BY (2026-06-17): orchestrator scale-to-zero.** O stop+compact da VM
+> e o reclaim do VHDX agora pertencem ao `civm-vm-orchestrator.ps1` (único dono do
+> power-state; tasks `autoreclaim`/`optimize`/`optimize-watchdog` `Disabled`).
+> Fonte de verdade viva: `docs/specs/orchestrator-scale-to-zero/`. O conteúdo
+> abaixo é preservado como histórico — não o reimplemente.
+
 > **⚠ Reconciliação SPEC↔código (auditoria 2026-06-06) — LEIA ANTES DO IMPL.**
 > O working tree do `civm` (alterações **não commitadas**: `git status` →
 > `M deploy/windows/civm-vhdx-autoreclaim.ps1`, `M internal/civm/civm.go`,

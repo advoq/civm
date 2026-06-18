@@ -7,6 +7,13 @@ issues: []
 
 # SPEC — Reclamação de volume do host (VHDX): guest-free vira host-free com segurança
 
+> **SUPERSEDED-BY (2026-06-17): orchestrator scale-to-zero.** O reclaim do VHDX
+> agora pertence ao `civm-vm-orchestrator.ps1` (único dono do stop/compact/
+> power-state; tasks `autoreclaim`/`optimize`/`optimize-watchdog` `Disabled`).
+> Fonte de verdade viva: `docs/specs/orchestrator-scale-to-zero/`. Esta cadeia
+> (`SPEC.md` → `SPECv2.md` → `SPECv3.md`) é preservada como histórico — não a
+> reimplemente.
+
 > Gerado a partir de `docs/specs/host-volume-reclamation/PRD.md` (PASSO 2 SSDV3).
 > Disciplinas: `disciplines/KAHNEMAN-DISCIPLINES.md`. Validação: `go test`, `golangci-lint run`, `npm run docs:check`.
 

@@ -1,5 +1,11 @@
 # IMPL — Host Volume Reclaim Liveness
 
+> **SUPERSEDED-BY (2026-06-17): orchestrator scale-to-zero.** O reclaim do VHDX
+> agora pertence ao `civm-vm-orchestrator.ps1` (único dono do stop/compact/
+> power-state; tasks `autoreclaim`/`optimize`/`optimize-watchdog` `Disabled`).
+> Fonte de verdade viva: `docs/specs/orchestrator-scale-to-zero/`. O conteúdo
+> abaixo é preservado como histórico do mecanismo anterior — não o reimplemente.
+
 > SSDV3 PASSO 3. Implementa estritamente o `SPECv2.md` (ativo pós-auditoria 2.5).
 > Escopo: RF-1 + RF-3 + backstop ExecutionTimeLimit. RF-2/RF-4 fora de escopo.
 

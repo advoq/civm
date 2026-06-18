@@ -7,6 +7,14 @@ issues: []
 
 # SPECv3 — Resiliência do reclaim: quebrar o deadlock de headroom com admissão por folga provada
 
+> **SUPERSEDED-BY (2026-06-17): orchestrator scale-to-zero.** O reclaim do VHDX
+> agora pertence ao `civm-vm-orchestrator.ps1` (único dono do stop/compact/
+> power-state; tasks `autoreclaim`/`optimize`/`optimize-watchdog` `Disabled`). O
+> gate de 2 fases provado aqui foi portado para `civm-reclaim-gate.ps1`, reusado
+> pelo orchestrator. Fonte de verdade viva:
+> `docs/specs/orchestrator-scale-to-zero/`. Preservado como histórico — não o
+> reimplemente.
+
 > Versão melhorada após DUAS rodadas do Passo 2.5 sobre `SPECv2.md`.
 > Baseline preservado: `SPEC.md`; camada anterior: `SPECv2.md`.
 > A 1ª versão deste v3 (admitir Optimize abaixo de 8 GB e abortar via `Stop-Job`

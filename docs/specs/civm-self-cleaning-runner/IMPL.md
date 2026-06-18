@@ -1,5 +1,11 @@
 # IMPL — Runner auto-limpante (civm-self-cleaning-runner)
 
+> **SUPERSEDED-BY (2026-06-17): orchestrator scale-to-zero.** O stop+compact da VM
+> e o reclaim do VHDX agora pertencem ao `civm-vm-orchestrator.ps1` (único dono do
+> power-state; tasks `autoreclaim`/`optimize`/`optimize-watchdog` `Disabled`).
+> Fonte de verdade viva: `docs/specs/orchestrator-scale-to-zero/`. O conteúdo
+> abaixo é preservado como histórico — não o reimplemente.
+
 > **Natureza desta IMPL.** Intervenção de emergência em 2026-06-06: o `V:` do host
 > chegou a **6.59 GB livres** (espiral de morte ativa) **e** a CI do advoq (#1092
 > `tenant-isolation-smoke`) falhava com `No such image` de largada. Esta IMPL
