@@ -150,10 +150,11 @@ function Invoke-GuestFullClean {
     $sshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new')
     if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) { $sshArgs += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath) }
     $sshArgs += $GuestSshTarget
-    # df --output=avail evita o awk: o escape do $4 via PowerShell -> SSH -> bash
-    # corrompia o campo, deixando o ssh sair non-zero e gerando um
-    # guest_full_clean_warn cosmetico (a limpeza ja rodava; so o log falhava).
-    $remote = 'rm -rf ~/.cache/* 2>/dev/null; sudo docker system prune -af --volumes >/dev/null 2>&1; df -BG --output=avail / | tail -1 | tr -d " "'
+    # df --output=avail evita o awk e tr -dc 0-9 evita o arg de espaco: ambos os
+    # escapes ($4 do awk e o " " do tr) via PowerShell -> SSH -> bash corrompiam o
+    # campo, deixando o ssh sair non-zero e gerando um guest_full_clean_warn
+    # cosmetico (a limpeza ja rodava; so o log do free_after falhava).
+    $remote = 'rm -rf ~/.cache/* 2>/dev/null; sudo docker system prune -af --volumes >/dev/null 2>&1; df -BG --output=avail / | tail -1 | tr -dc 0-9'
     try { $free = (& ssh @sshArgs $remote 2>&1 | Select-Object -Last 1); Write-OrcLog 'guest_full_clean' @{ free_after = "$free" } }
     catch { Write-OrcLog 'guest_full_clean_warn' @{ error = $_.Exception.Message } 'WARN' }
 }
