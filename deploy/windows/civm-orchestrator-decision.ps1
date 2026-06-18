@@ -18,12 +18,31 @@ function Get-OrchestratorDecision {
         # CanPanic=false (cooldown ativo) rebaixa o panic para warn_clean: nao
         # re-mata jobs dentro da janela de cooldown; so poda online. Calculado
         # pelo caller via Test-ReclaimCooldown (civm-reclaim-gate.ps1).
-        [bool]$CanPanic = $true
+        [bool]$CanPanic = $true,
+        # BARREIRA DE ADMISSAO: o disco DEVE estar limpo em AdmitFloorGB (51GB)
+        # livres nos DOIS lados (host V: + guest) antes de admitir o proximo batch.
+        # GuestFreeGB vem do snapshot de host-metrics; 999 = desconhecido (nao
+        # bloqueia). AdmitReclaimAttempts conta compacts que nao chegaram em 51
+        # (rastreado pelo caller); >=2 admite mesmo assim (anti-deadlock da fila).
+        [int]$AdmitFloorGB = 51,
+        [int]$GuestFreeGB = 999,
+        [int]$AdmitReclaimAttempts = 0
     )
-    # VM Off: liga se ha QUALQUER trabalho (queued ou running). running>0 com VM
-    # off e estado transiente/stale da API, mas o lado seguro e subir a VM.
+    # VM Off com fila: BARREIRA DE ADMISSAO. So admite o proximo batch com o disco
+    # LIMPO em AdmitFloorGB (51) nos DOIS lados — host V: e guest. Disco sujo ->
+    # reclaim_before_admit (compacta offline primeiro), NAO starta. Incidente
+    # 2026-06-18: o orchestrator startava no "tem fila" sem a pre-condicao, e o
+    # #1182 rodou os checks a V:18, furando. VFreeGB<=0 / GuestFreeGB<=0 = "nao
+    # medi" -> nao bloqueia (fail-safe, nao trava a fila por telemetria ausente).
+    # AdmitReclaimAttempts >= 2 = o compact ja maxou sem chegar em 51 -> admite
+    # mesmo assim (evita deadlock da fila quando 51 nao e atingivel).
     if ($VmState -eq 'Off') {
-        if (($Queued + $Running) -gt 0) { return 'start' }
+        if ((($Queued + $Running) -gt 0)) {
+            $hostBelow = ($VFreeGB -gt 0 -and $VFreeGB -lt $AdmitFloorGB)
+            $guestBelow = ($GuestFreeGB -gt 0 -and $GuestFreeGB -lt $AdmitFloorGB)
+            if (($hostBelow -or $guestBelow) -and $AdmitReclaimAttempts -lt 2) { return 'reclaim_before_admit' }
+            return 'start'
+        }
         return 'noop_off'
     }
     $hasWork = (($Queued + $Running) -gt 0)

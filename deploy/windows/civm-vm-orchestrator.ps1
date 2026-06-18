@@ -134,6 +134,11 @@ function Get-State {
     if (-not ($s.PSObject.Properties.Name -contains 'lastPanicUtc')) {
         $s | Add-Member -NotePropertyName lastPanicUtc -NotePropertyValue '' -Force
     }
+    # Garante admitReclaimAttempts — a barreira de admissao (51GB) conta compacts
+    # que nao chegaram em 51 pra evitar deadlock da fila (>=2 admite mesmo assim).
+    if (-not ($s.PSObject.Properties.Name -contains 'admitReclaimAttempts')) {
+        $s | Add-Member -NotePropertyName admitReclaimAttempts -NotePropertyValue 0 -Force
+    }
     return $s
 }
 
@@ -216,15 +221,21 @@ function Invoke-StopAndCompact {
     }
     try {
         Write-OrcLog 'reclaim_start' @{ reason = $Reason }
-        Invoke-GuestFullClean
-        Stop-VM -Name $VMName -Force -ErrorAction Stop
-        $deadline = (Get-Date).AddSeconds(180)
-        while ((Get-VM -Name $VMName).State -ne 'Off' -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
+        # VM Running -> limpa o guest (full clean via SSH) e desliga antes do
+        # Optimize. Ja Off (caso reclaim_before_admit, a barreira de 51GB) -> pula
+        # direto pro compact: o guest ja foi limpo pelo hook job-completed, e nao
+        # da pra SSH num guest desligado.
         if ((Get-VM -Name $VMName).State -ne 'Off') {
-            # VM nao parou no deadline -> NAO monta um VHDX ainda em uso (Mount-VHD
-            # falharia). Aborta seguro; jobs ja foram mortos pelo Stop-VM -Force.
-            Write-OrcLog 'reclaim_abort_vm_not_off' @{ reason = $Reason } 'ERROR'
-            return
+            Invoke-GuestFullClean
+            Stop-VM -Name $VMName -Force -ErrorAction Stop
+            $deadline = (Get-Date).AddSeconds(180)
+            while ((Get-VM -Name $VMName).State -ne 'Off' -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
+            if ((Get-VM -Name $VMName).State -ne 'Off') {
+                # VM nao parou no deadline -> NAO monta um VHDX ainda em uso
+                # (Mount-VHD falharia). Aborta seguro; jobs ja foram mortos.
+                Write-OrcLog 'reclaim_abort_vm_not_off' @{ reason = $Reason } 'ERROR'
+                return
+            }
         }
         # Gate AUTORITATIVO pos-Off (#106): re-mede a folga real (VMRS liberado).
         $vBeforeGB = Get-VFreeGB
@@ -270,6 +281,14 @@ try {
     $last = [datetime]::Parse($state.lastBusyUtc).ToUniversalTime()
     $idleMin = ((Get-Date).ToUniversalTime() - $last).TotalMinutes
     $vfree = Get-VFreeGB
+    # Barreira de admissao (51GB nos 2 lados): o guest free vem do snapshot de
+    # host-metrics; 999 = snapshot ausente/ilegivel -> desconhecido, nao bloqueia.
+    $AdmitFloorGB = 51
+    $guestFree = 999
+    try {
+        $snap = Get-Content -LiteralPath 'V:\civm-host-metrics.json' -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($null -ne $snap.guest_free_gb -and [int]$snap.guest_free_gb -gt 0) { $guestFree = [int]$snap.guest_free_gb }
+    } catch { $guestFree = 999 }
     $nowUtc = (Get-Date).ToUniversalTime().ToString('o')
     # Cooldown do panic: fora da janela -> pode panicar; dentro -> a decisao
     # rebaixa para warn_clean (nao re-mata jobs em loop). Medida de tempo VIVA.
@@ -279,7 +298,7 @@ try {
     # Decide no modulo puro testado (civm-orchestrator-decision.test.ps1); o
     # switch abaixo so EXECUTA a acao. A probe SSH e lazy: Get-OrchestratorDecision
     # so a chama no gate de stop. VFreeGB + CanPanic armam a seguranca de disco.
-    $decision = Get-OrchestratorDecision -VmState "$($vm.State)" -Queued $queued -Running $running -IdleMinutes $idleMin -IdleStopMinutes $IdleStopMinutes -HasActiveJobProbe { Get-GuestHasActiveJob } -VFreeGB $vfree -WarnFloorGB $WarnFloorGB -PanicFloorGB $PanicFloorGB -CanPanic $canPanic
+    $decision = Get-OrchestratorDecision -VmState "$($vm.State)" -Queued $queued -Running $running -IdleMinutes $idleMin -IdleStopMinutes $IdleStopMinutes -HasActiveJobProbe { Get-GuestHasActiveJob } -VFreeGB $vfree -WarnFloorGB $WarnFloorGB -PanicFloorGB $PanicFloorGB -CanPanic $canPanic -AdmitFloorGB $AdmitFloorGB -GuestFreeGB $guestFree -AdmitReclaimAttempts ([int]$state.admitReclaimAttempts)
 
     switch ($decision) {
         'noop_off' { }
@@ -288,6 +307,23 @@ try {
             else {
                 Start-VM -Name $VMName -ErrorAction Stop
                 Write-OrcLog 'vm_started' @{ queued = $queued; running = $running }
+                # Admitiu -> zera o contador da barreira (proximo batch comeca limpo).
+                $state.admitReclaimAttempts = 0; Save-State $state
+            }
+        }
+        'reclaim_before_admit' {
+            # BARREIRA DE ADMISSAO: VM Off + fila, mas disco < 51GB. Compacta ANTES
+            # de admitir (nao starta sujo, evita o caso #1182 a V:18). Conta a
+            # tentativa; se o compact maxar sem chegar em 51, a 2a tentativa admite
+            # mesmo assim (anti-deadlock da fila, decidido no modulo puro).
+            if ($Observe) { Write-OrcLog 'would_reclaim_before_admit' @{ v_free_gb = $vfree; guest_free_gb = $guestFree; floor = $AdmitFloorGB; attempts = [int]$state.admitReclaimAttempts } }
+            else {
+                Write-OrcLog 'reclaim_before_admit' @{ v_free_gb = $vfree; guest_free_gb = $guestFree; floor = $AdmitFloorGB; attempts = [int]$state.admitReclaimAttempts }
+                Invoke-StopAndCompact -Reason 'admit_barrier'
+                $vAfter = Get-VFreeGB
+                if ($vAfter -gt 0 -and $vAfter -lt $AdmitFloorGB) { $state.admitReclaimAttempts = [int]$state.admitReclaimAttempts + 1 }
+                else { $state.admitReclaimAttempts = 0 }
+                Save-State $state
             }
         }
         'mark_busy' { if (-not $Observe) { $state.lastBusyUtc = $nowUtc; Save-State $state } }

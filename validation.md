@@ -307,3 +307,67 @@ hasWork (que prenderia o V:) corrigido + medido end-to-end.
 
 **Proxima acao:** commit do fix hasWork+observe no #138; merge dos 2 PRs no go do
 user.
+
+## 2026-06-18 05:00 -03 — Gate host-aware cego: root cause real do panic-mata-job ✅
+
+**O que:** Os jobs ms-billing + tenant-isolation-smoke do #1181 foram CANCELADOS
+pelo panic_compact (V:16). A investigacao disciplinada (Kahneman #18) achou o root
+cause real: nao era barreira faltando — a barreira (gate host-aware no hook
+job-started: limpa@60%, rejeita@90%/host-crit) EXISTE; ela estava CEGA.
+
+**Dados medidos:**
+
+- A telemetria que alimenta o gate (scheduled task `civm-host-metrics`) estava
+  TRAVADA: snapshot 366min (6h) stale, task em Running com result de falha. O gate
+  leu `v_free=43` (stale) enquanto o V: real era 16 -> nao rejeitou (stale =
+  fail-open, DT-v2-5) -> disco furou -> panic matou os 2 jobs.
+- Root cause do hang: `Get-VHD` (le o tamanho do VHDX, sem timeout) pendura no
+  lock do VHDX enquanto o Optimize-VHD do orchestrator compacta — dois donos
+  host-side disputam o disco. Sem `ExecutionTimeLimit`, a instancia presa
+  bloqueou os runs de 10min por 6h.
+- Fix (defense in depth, TDD RED->GREEN): (1) `Get-VhdxSizesWithTimeout` (job +
+  `Wait-Job -Timeout 20s`) -> VHDX locked => snapshot com vhdx nulo + `v_free`
+  critico, sem pendurar; `gap_gb`/`block_size` null-safe. (2) `ExecutionTimeLimit=
+  PT5M` + `MultipleInstances=IgnoreNew` na task. 2 testes Go de scan estatico
+  (host_metrics_robustness_test.go), full hostdisk suite + build + vet limpos.
+- VALIDACAO na box (PowerShell 5.1): task re-registrada (ExecutionTimeLimit=PT5M
+  confirmado), roda com `result=0`, snapshot FRESCO (age 1min) reportando `v_free`
+  REAL=18 (nao mais o 43 stale). O gate voltou a enxergar a pressao real.
+
+**Veredito:** ✅ o root cause (gate cego por telemetria travada no Get-VHD)
+consertado + validado end-to-end na box. O gate host-aware agora rejeita jobs com
+base no V: real, ANTES do panic precisar matar. A telemetria nunca mais pendura
+(timeout no Get-VHD + ExecutionTimeLimit como backstop). O warn do orchestrator
+foi mantido de proposito (alivio mid-job via fstrim; so o builder-prune e
+questionavel — follow-up separado, nao e o root cause).
+
+**Proxima acao:** observar que o panic nao re-dispara em PR pesado (o gate agora
+bloqueia antes); avaliar o builder-prune do warn em separado; commit do fix.
+
+## 2026-06-18 06:00 -03 — Barreira de admissao 51GB (so roda PR com disco limpo) ✅/🟡
+
+**O que:** O #1182 entrou na fila e o orchestrator startou a VM pros checks com o
+V: em 18 (nao 51) — a regra do usuario "so roda o proximo PR com 51GB livres nos 2
+lados, apos full clean" nao era enforcada. O gate host-aware do hook (60%/90%) e a
+pre-condicao do JOB; faltava a pre-condicao do BATCH no orchestrator.
+
+**Dados medidos:**
+
+- Gap: a decisao do orchestrator era `VM Off + fila -> start`, sem olhar o disco.
+  Foi assim que o #1182 comecou a V:18 (log: `tick v_free_gb:21 queued:1 vm:Running`).
+- Fix (TDD RED->GREEN): nova acao `reclaim_before_admit` na decisao pura — VM Off +
+  fila + (host V<51 OU guest<51) AND tentativas<2 -> compacta ANTES de admitir,
+  NAO starta. So `start` com 51 confirmado nos 2 lados. Anti-deadlock: se o compact
+  maxar sem chegar em 51, a 2a tentativa admite (nao trava a fila). O handler reusa
+  `Invoke-StopAndCompact` (gateado pra VM-ja-off: pula clean+stop, so compacta). O
+  state rastreia `admitReclaimAttempts`; `start` zera; `guest_free` vem do snapshot.
+- VALIDACAO: decision-table **30/30** (inclui o caso EXATO do #1182: VM Off + fila +
+  V:18 -> reclaim_before_admit, nao start) + gate **10/10** + syntax OK, no pwsh e
+  na PS 5.1 da box. Deployado == repo, orchestrator re-ativado.
+
+**Veredito:** ✅ a barreira esta implementada, testada (30/30) e deployada — de
+agora em diante NENHUM batch comeca abaixo de 51. 🟡 residual: o `reclaim_before_admit`
+ainda nao disparou num evento real (VM Off + fila + V<51); vira ✅ pleno no 1o
+disparo medido no log (watch em curso). O #1182 atual comecou pre-barreira.
+
+**Proxima acao:** capturar o 1o reclaim_before_admit ao vivo; commit.

@@ -30,14 +30,22 @@ $cases = @(
     @{ vm = 'Running'; q = 0; r = 0; idle = 30; stop = 10; job = $F; vfree = 15; exp = 'stop_and_compact'; d = 'IDLE + V<18 + idle>10 -> compacta FULL (o fix: nao panic)' },
     @{ vm = 'Running'; q = 0; r = 0; idle = 5; stop = 10; job = $F; vfree = 15; exp = 'idle_debounce'; d = 'IDLE + V<18 + idle<10 -> debounce (ocioso nao consome disco)' },
     @{ vm = 'Running'; q = 0; r = 0; idle = 30; stop = 10; job = $T; vfree = 15; exp = 'stop_aborted_active_job'; d = 'IDLE + V<18 + worker no guest -> ABORTA stop (safety)' },
-    # --- VM off ignora disco ---
-    @{ vm = 'Off'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 5; exp = 'start'; d = 'VM off + V baixo -> start (seguranca de disco so vale Running)' }
+    # --- BARREIRA DE ADMISSAO: VM Off + fila so starta com 51GB nos 2 lados ---
+    @{ vm = 'Off'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 5; exp = 'reclaim_before_admit'; d = 'VM off + fila + host V<51 -> reclaim ANTES de admitir (nao starta sujo)' },
+    @{ vm = 'Off'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 18; exp = 'reclaim_before_admit'; d = 'VM off + fila + host V=18 (o caso #1182) -> reclaim, NAO start' },
+    @{ vm = 'Off'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 51; exp = 'start'; d = 'VM off + fila + host V=51 (==floor) -> admite (boundary)' },
+    @{ vm = 'Off'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 60; exp = 'start'; d = 'VM off + fila + host V>51 -> admite' },
+    @{ vm = 'Off'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 60; gf = 40; exp = 'reclaim_before_admit'; d = 'VM off + fila + host OK mas GUEST<51 -> reclaim (os 2 lados)' },
+    @{ vm = 'Off'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 18; ra = 2; exp = 'start'; d = 'VM off + fila + V<51 + 2 tentativas -> admite (anti-deadlock da fila)' },
+    @{ vm = 'Off'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 0; exp = 'start'; d = 'VM off + fila + V=0 (nao medi) -> admite (fail-safe, nao trava fila)' }
 )
 $pass = 0; $fail = 0
 foreach ($c in $cases) {
     $probe = if ($c.job) { { $true } } else { { $false } }
     $cp = if ($c.ContainsKey('cp')) { $c.cp } else { $true }
-    $got = Get-OrchestratorDecision -VmState $c.vm -Queued $c.q -Running $c.r -IdleMinutes $c.idle -IdleStopMinutes $c.stop -HasActiveJobProbe $probe -VFreeGB $c.vfree -CanPanic $cp
+    $gf = if ($c.ContainsKey('gf')) { $c.gf } else { 999 }
+    $ra = if ($c.ContainsKey('ra')) { $c.ra } else { 0 }
+    $got = Get-OrchestratorDecision -VmState $c.vm -Queued $c.q -Running $c.r -IdleMinutes $c.idle -IdleStopMinutes $c.stop -HasActiveJobProbe $probe -VFreeGB $c.vfree -CanPanic $cp -GuestFreeGB $gf -AdmitReclaimAttempts $ra
     if ($got -eq $c.exp) { $pass++; "PASS  [$($c.exp)]  $($c.d)" } else { $fail++; "FAIL  esperado=$($c.exp) got=$got  ::  $($c.d)" }
 }
 ''; "RESULTADO: $pass PASS / $fail FAIL"
