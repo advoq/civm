@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.20.0](https://github.com/advoq/civm/compare/v1.19.0...v1.20.0) (2026-06-18)
+
+
+### Features
+
+* **orchestrator:** gate VM start on 51GB free both sides ([8b809ce](https://github.com/advoq/civm/commit/8b809cee863f32e7f24c6aa8b65919a2f11fb367))
+* **orchestrator:** scale-to-zero disk-safety with 2-phase gate ([bba7b05](https://github.com/advoq/civm/commit/bba7b05b3116b419cf0081ce97e1d896cabc6e53))
+* **orchestrator:** scale-to-zero disk-safety with 2-phase reclaim gate ([5f22796](https://github.com/advoq/civm/commit/5f227967a385617f4668e51cf7fb8d755dd2a3ed))
+
+
+### Bug Fixes
+
+* **infra:** guard host-metrics Get-VHD with timeout and task limit ([9569ac6](https://github.com/advoq/civm/commit/9569ac66f20b8fb8f831b0fe51505020048ced29))
+* **orchestrator:** gate disk-safety on hasWork; -Observe non-mutating ([3d90115](https://github.com/advoq/civm/commit/3d90115750c06b397c60323f8df6a5c1e3deb0b1))
+* **orchestrator:** monitor advoq/civm so the box runs its own CI ([21f235c](https://github.com/advoq/civm/commit/21f235c2cf06639f13941b2bf4e45cd1cc37994f))
+* **orchestrator:** tr -dc 0-9 in guest-clean free probe ([26c81aa](https://github.com/advoq/civm/commit/26c81aa88282c308dd0405479889be47eb8ba1ae))
+
+
+### Documentation
+
+* dedup validation.md rule and pointers ([de3c3e0](https://github.com/advoq/civm/commit/de3c3e0026733e609b5e17d5d97fdfaabec0324e))
+* **orchestrator:** scale-to-zero SPEC + supersede legacy reclaim ([a731f16](https://github.com/advoq/civm/commit/a731f166f35fdc042c2eb71c25d2403d8943f5eb))
+
 ## [1.19.0](https://github.com/advoq/civm/compare/v1.18.7...v1.19.0) (2026-06-17)
 
 
