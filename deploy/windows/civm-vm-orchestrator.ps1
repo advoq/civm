@@ -17,7 +17,7 @@
     custo e um cold-start de ~1-2min na primeira rajada (boot + runners
     conectando) — aceitavel para CI.
 
-    Fail-safe (Kahneman #16): qualquer erro de API/SSH e tratado como "nao
+    Fail-safe (Kahneman #15): qualquer erro de API/SSH e tratado como "nao
     posso provar que esta ocioso" -> NUNCA desliga a VM por duvida; so liga
     (lado seguro: na duvida, mantem a capacidade de pegar job). O lock de
     estado expira por tempo, nunca trava pra sempre.
@@ -27,8 +27,9 @@
     C:\ProgramData\civm\gh-token-{advoq,emersonbusson}.txt (o host nao tem gh).
     DEVE rodar com o mesmo principal do civm-vhdx-autoreclaim (SYSTEM, que ja faz
     SSH ao guest com sucesso); como elevated-user a ssh key fica ilegivel.
-    Ao ATIVAR (sem -WhatIf), DESABILITE o autoreclaim: o orchestrator subsume o
-    stop+compact dele (um dono so da VM — Kahneman #18).
+    Ao ATIVAR (sem -WhatIf), DESABILITE o autoreclaim + o optimize-watchdog: o
+    orchestrator subsume o stop+compact deles (um dono so da VM, sem curadores em
+    conflito disputando o lock/power-state — fail-safe #15).
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
@@ -52,8 +53,16 @@ param(
         'emersonbusson/vitae'
     ),
     [ValidateRange(1, 120)][int]$IdleStopMinutes = 10,
+    # Pisos de seguranca de disco (V: livre em GB). warn = limpa cache online
+    # (seguro, sem matar job); panic = compacta offline mesmo ocupado (mata job,
+    # mas o disco NUNCA enche). Ver Get-OrchestratorDecision.
+    [int]$WarnFloorGB = 28,
+    [int]$PanicFloorGB = 18,
     [string]$StatePath = 'V:\civm-orchestrator-state.json',
     [string]$LogPath = 'V:\civm-orchestrator.log',
+    # Lock canonico de reclaim (SPECv3 DT-v3-3): exclusao mutua com qualquer outro
+    # reclaimer do mesmo VHDX. Mesmo path do civm-vhdx-autoreclaim/optimize.
+    [string]$ReclaimLockPath = 'V:\civm-reclaim.lock',
     # Modo observe: loga "would_start"/"would_stop" em vez de agir. Valida a
     # logica contra a box real sem mexer na VM — mais limpo que -WhatIf (que
     # suprime ate o Add-Content do log e os New-Alias do modulo Hyper-V).
@@ -116,10 +125,16 @@ function Get-RunCount {
 }
 
 function Get-State {
+    $s = $null
     if (Test-Path -LiteralPath $StatePath) {
-        try { return (Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json) } catch { }
+        try { $s = (Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json) } catch { }
     }
-    return [pscustomobject]@{ lastBusyUtc = (Get-Date).ToUniversalTime().ToString('o') }
+    if ($null -eq $s) { $s = [pscustomobject]@{ lastBusyUtc = (Get-Date).ToUniversalTime().ToString('o') } }
+    # Garante lastPanicUtc (states antigos nao tem) — o cooldown do panic le daqui.
+    if (-not ($s.PSObject.Properties.Name -contains 'lastPanicUtc')) {
+        $s | Add-Member -NotePropertyName lastPanicUtc -NotePropertyValue '' -Force
+    }
+    return $s
 }
 
 function Save-State {
@@ -146,7 +161,7 @@ function Invoke-GuestFullClean {
 # Stop-guard independente do token: pergunta ao proprio guest se ha algum
 # Runner.Worker ativo (qualquer repo, qualquer dono). E a salvaguarda real contra
 # desligar a VM com um job rodando que o PAT (escopado a 1 dono) nao ve via API.
-# Fail-safe: SSH falhou -> assume "ha job" -> nao desliga (Kahneman #16).
+# Fail-safe: SSH falhou -> assume "ha job" -> nao desliga (Kahneman #15).
 function Get-GuestHasActiveJob {
     $sshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new')
     if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) { $sshArgs += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath) }
@@ -158,9 +173,91 @@ function Get-GuestHasActiveJob {
     catch { Write-OrcLog 'guest_active_probe_failed' @{ error = $_.Exception.Message } 'WARN'; return $true }
 }
 
-# Carrega a funcao de decisao pura — o MESMO modulo que o teste exercita
-# (Kahneman #13: codigo deployado == codigo testado).
+# Mede o V: livre em GB. 0 = medida falhou -> a decisao trata como fail-safe (nao
+# entra em panic/warn por uma medida ruim — Kahneman #15).
+function Get-VFreeGB {
+    try { return [int]((Get-PSDrive V -ErrorAction Stop).Free / 1GB) }
+    catch { Write-OrcLog 'vfree_probe_failed' @{ error = $_.Exception.Message } 'WARN'; return 0 }
+}
+
+# warn_clean: limpeza SEGURA durante CI ativo. Poda APENAS o cache de build do
+# docker (regeneravel; nao toca imagens de runs em andamento -> sem o bug de
+# eviction que o age-guard consertou) + fstrim (marca os blocos liberados pra a
+# VHDX dinamica reusa-los em vez de crescer). Best-effort.
+function Invoke-GuestWarnClean {
+    $sshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new')
+    if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) { $sshArgs += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath) }
+    $sshArgs += $GuestSshTarget
+    $remote = 'sudo docker builder prune -af >/dev/null 2>&1; sudo fstrim / >/dev/null 2>&1; df -BG --output=avail / | tail -1 | tr -dc 0-9'
+    try { $free = (& ssh @sshArgs $remote 2>&1 | Select-Object -Last 1); Write-OrcLog 'disk_warn_clean' @{ free_after = "$free" } }
+    catch { Write-OrcLog 'disk_warn_clean_warn' @{ error = $_.Exception.Message } 'WARN' }
+}
+
+# Desliga a VM e compacta o VHDX offline com o gate de 2 fases provado do #106
+# (reusa civm-reclaim-gate.ps1). VM fica Off ate o proximo job. Usado pelo fluxo
+# ocioso E pelo panic (disco critico, mesmo ocupado). Tres salvaguardas pra o
+# curador nao matar o recurso que cura (a frase-ancora do fail-safe):
+#   1. Lock canonico V:\civm-reclaim.lock -> nunca dois Optimize no mesmo VHDX.
+#   2. Gate pos-Off: o Optimize-VHD e ININTERRUPTIVEL e consome scratch (~10GB);
+#      o VMRS (~8GB) so libera com a VM Off. So compacta se a folga MEDIDA pos-Off
+#      cobre o ScratchBudget — senao pula (nao empurra o V: abaixo do piso).
+#   3. Recover-detection: se recuperou < MinRecoverGB, loga ERRO (nao finge ok).
+function Invoke-StopAndCompact {
+    param([string]$Reason)
+    $reclaimLock = $null
+    try {
+        $reclaimLock = [System.IO.FileStream]::new($ReclaimLockPath,
+            [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    }
+    catch {
+        Write-OrcLog 'reclaim_skip_locked' @{ reason = $Reason; lock = $ReclaimLockPath } 'WARN'
+        return
+    }
+    try {
+        Write-OrcLog 'reclaim_start' @{ reason = $Reason }
+        Invoke-GuestFullClean
+        Stop-VM -Name $VMName -Force -ErrorAction Stop
+        $deadline = (Get-Date).AddSeconds(180)
+        while ((Get-VM -Name $VMName).State -ne 'Off' -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
+        if ((Get-VM -Name $VMName).State -ne 'Off') {
+            # VM nao parou no deadline -> NAO monta um VHDX ainda em uso (Mount-VHD
+            # falharia). Aborta seguro; jobs ja foram mortos pelo Stop-VM -Force.
+            Write-OrcLog 'reclaim_abort_vm_not_off' @{ reason = $Reason } 'ERROR'
+            return
+        }
+        # Gate AUTORITATIVO pos-Off (#106): re-mede a folga real (VMRS liberado).
+        $vBeforeGB = Get-VFreeGB
+        Write-OrcLog 'reclaim_post_off_remeasure' @{ reason = $Reason; v_free_after_off_gb = $vBeforeGB; scratch_budget_gb = $ReclaimScratchBudgetGB }
+        if (-not (Test-OptimizeSlack -VFreeAfterOffGB $vBeforeGB)) {
+            # Folga insuficiente: o Optimize poderia estourar o V:. Pula (a VM fica
+            # Off; o disco segue apertado mas NAO piora). Alerta humano.
+            Write-OrcLog 'reclaim_skip_insufficient_slack' @{ reason = $Reason; v_free_after_off_gb = $vBeforeGB; hard_floor_gb = $ReclaimHardFloorGB; scratch_budget_gb = $ReclaimScratchBudgetGB } 'ERROR'
+            return
+        }
+        Mount-VHD -Path $VhdxPath -ReadOnly -ErrorAction Stop
+        try { Optimize-VHD -Path $VhdxPath -Mode Full -ErrorAction Stop }
+        finally { Dismount-VHD -Path $VhdxPath -ErrorAction SilentlyContinue }
+        $vhd = Get-VHD -Path $VhdxPath
+        $vAfterGB = [int]((Get-PSDrive V).Free / 1GB)
+        $recoveredGB = $vAfterGB - $vBeforeGB
+        Write-OrcLog 'reclaim_done' @{ reason = $Reason; vhdx_gb = [int]($vhd.FileSize / 1GB); v_free_gb = $vAfterGB; recovered_gb = $recoveredGB }
+        if ($recoveredGB -lt $MinRecoverGB) {
+            # O Optimize "passou" mas nao recuperou nada util -> disco apertado que
+            # o compact nao resolve (precisa de humano), nao um falso-verde.
+            Write-OrcLog 'reclaim_no_progress' @{ reason = $Reason; recovered_gb = $recoveredGB; min_recover_gb = $MinRecoverGB } 'ERROR'
+        }
+    }
+    finally {
+        $reclaimLock.Close(); $reclaimLock.Dispose()
+        Remove-Item -LiteralPath $ReclaimLockPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Carrega a decisao pura + as primitivas de reclaim (gate de 2 fases, cooldown)
+# — os MESMOS modulos que os testes exercitam (Kahneman #13: codigo deployado ==
+# codigo testado).
 . "$PSScriptRoot\civm-orchestrator-decision.ps1"
+. "$PSScriptRoot\civm-reclaim-gate.ps1"
 
 # ---- decisao principal ----
 try {
@@ -171,13 +268,17 @@ try {
 
     $last = [datetime]::Parse($state.lastBusyUtc).ToUniversalTime()
     $idleMin = ((Get-Date).ToUniversalTime() - $last).TotalMinutes
-    Write-OrcLog 'tick' @{ vm = "$($vm.State)"; queued = $queued; running = $running; idle_min = [math]::Round($idleMin, 1) }
+    $vfree = Get-VFreeGB
+    $nowUtc = (Get-Date).ToUniversalTime().ToString('o')
+    # Cooldown do panic: fora da janela -> pode panicar; dentro -> a decisao
+    # rebaixa para warn_clean (nao re-mata jobs em loop). Medida de tempo VIVA.
+    $canPanic = Test-ReclaimCooldown -LastReclaimUtc $state.lastPanicUtc -NowUtc $nowUtc
+    Write-OrcLog 'tick' @{ vm = "$($vm.State)"; queued = $queued; running = $running; idle_min = [math]::Round($idleMin, 1); v_free_gb = $vfree; can_panic = $canPanic }
 
     # Decide no modulo puro testado (civm-orchestrator-decision.test.ps1); o
     # switch abaixo so EXECUTA a acao. A probe SSH e lazy: Get-OrchestratorDecision
-    # so a chama no gate de stop.
-    $decision = Get-OrchestratorDecision -VmState "$($vm.State)" -Queued $queued -Running $running -IdleMinutes $idleMin -IdleStopMinutes $IdleStopMinutes -HasActiveJobProbe { Get-GuestHasActiveJob }
-    $nowUtc = (Get-Date).ToUniversalTime().ToString('o')
+    # so a chama no gate de stop. VFreeGB + CanPanic armam a seguranca de disco.
+    $decision = Get-OrchestratorDecision -VmState "$($vm.State)" -Queued $queued -Running $running -IdleMinutes $idleMin -IdleStopMinutes $IdleStopMinutes -HasActiveJobProbe { Get-GuestHasActiveJob } -VFreeGB $vfree -WarnFloorGB $WarnFloorGB -PanicFloorGB $PanicFloorGB -CanPanic $canPanic
 
     switch ($decision) {
         'noop_off' { }
@@ -194,31 +295,31 @@ try {
             Write-OrcLog 'stop_aborted_active_job' @{ note = 'Runner.Worker ativo no guest (repo fora do escopo do token?)' }
             $state.lastBusyUtc = $nowUtc; Save-State $state
         }
-        'stop_and_compact' {
-            if ($Observe) {
-                Write-OrcLog 'would_stop_and_compact' @{ idle_min = [math]::Round($idleMin, 1) }
-            }
+        'warn_clean' {
+            # Disco apertado (V < WarnFloor) mas ainda nao critico: limpeza SEGURA
+            # online (cache de build + fstrim), SEM desligar, SEM matar job.
+            if ($Observe) { Write-OrcLog 'would_warn_clean' @{ v_free_gb = $vfree; floor = $WarnFloorGB } }
+            else { Write-OrcLog 'disk_warn' @{ v_free_gb = $vfree; floor = $WarnFloorGB }; Invoke-GuestWarnClean }
+        }
+        'panic_compact' {
+            # Disco CRITICO (V < PanicFloor): compacta MESMO ocupado. Mata os jobs
+            # ativos (re-rodam), mas o disco encher e infinitamente pior (satura o
+            # host, derruba ate o interop). A VM volta sozinha pela fila no proximo
+            # tick (cold start).
+            if ($Observe) { Write-OrcLog 'would_panic_compact' @{ v_free_gb = $vfree; floor = $PanicFloorGB } }
             else {
-                # Fronteira de PR: limpa o guest, desliga, compacta. VM fica Off
-                # ate o proximo job na fila (cold start).
-                Write-OrcLog 'pr_boundary_reclaim_start' @{ idle_min = [math]::Round($idleMin, 1) }
-                Invoke-GuestFullClean
-                Stop-VM -Name $VMName -Force -ErrorAction Stop
-                $deadline = (Get-Date).AddSeconds(180)
-                while ((Get-VM -Name $VMName).State -ne 'Off' -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
-                # Optimize-VHD exige o VHDX MONTADO read-only — so detached nao
-                # basta (sem o Mount o Optimize vira no-op e o VHDX NAO encolhe;
-                # confirmado 2026-06-17). O autoreclaim ja faz assim. Dismount no
-                # finally, sempre.
-                Mount-VHD -Path $VhdxPath -ReadOnly -ErrorAction Stop
-                try { Optimize-VHD -Path $VhdxPath -Mode Full -ErrorAction Stop }
-                finally { Dismount-VHD -Path $VhdxPath -ErrorAction SilentlyContinue }
-                $vhd = Get-VHD -Path $VhdxPath
-                Write-OrcLog 'pr_boundary_reclaim_done' @{
-                    vhdx_gb   = [int]($vhd.FileSize / 1GB)
-                    v_free_gb = [int]((Get-PSDrive V).Free / 1GB)
-                }
+                Write-OrcLog 'disk_panic' @{ v_free_gb = $vfree; floor = $PanicFloorGB; note = 'disco critico -> compacta mesmo com job ativo' }
+                # Marca o panic ANTES do compact: o cooldown conta do disparo, e se
+                # o compact pendurar, o proximo tick nao re-mata jobs.
+                $state.lastPanicUtc = $nowUtc; Save-State $state
+                Invoke-StopAndCompact -Reason 'panic_disk'
             }
+        }
+        'stop_and_compact' {
+            # Fronteira de PR (ocioso): desliga e compacta. VM fica Off ate o
+            # proximo job (cold start).
+            if ($Observe) { Write-OrcLog 'would_stop_and_compact' @{ idle_min = [math]::Round($idleMin, 1) } }
+            else { Invoke-StopAndCompact -Reason 'idle_pr_boundary' }
         }
     }
 }

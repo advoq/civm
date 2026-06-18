@@ -135,3 +135,109 @@ pendente.
 
 **Proxima acao:** corpo do #1168 postado (29 commits); monitorar os checks até
 verde.
+
+## 2026-06-17 18:38 -03 — Death-spiral sob CI sustentado + camada de disco 🟡
+
+**O que:** O agente civm-watch (12 ciclos, 60min) mediu o V: despencando sob CI
+sustentado (merge do #1168 + 2 PRs back-to-back). O scale-to-zero só compacta no
+idle; CI sustentado nunca idla → a VHDX cresce monotonicamente → death-spiral.
+Implementada camada de segurança de disco no orchestrator (panic/warn).
+
+**Dados medidos (civm-watch.log, ciclos de 5min):**
+
+- V: 17:13 **39GB** → 17:39 30 → 17:55 27 → 18:00 **22** (ALERTA) → 18:05 **16**
+  (ALERTA) → 18:10 **17** (ALERTA). Queda de ~22GB/h sob CI sustentado.
+- Efeito colateral medido: ~18:1x o interop WSL↔Windows caiu (`powershell.exe:
+  Input/output error`, `/mnt/c` I/O error) — host saturado. WSL em si saudável
+  (load 0.81, 6.3Gi RAM livre) → foi a ponte, não o WSL.
+- civm#135 MERGED (orchestrator base); ms-auth #1178 OPEN/UNSTABLE
+  (govulncheck/Trivy/ms-core QUEUED, não falha).
+
+**Fix (validado por unit, NÃO live ainda):**
+
+- `Get-OrchestratorDecision` ganhou `VFreeGB`/`WarnFloorGB(28)`/`PanicFloorGB(18)`:
+  `warn_clean` (V<28: build-cache prune + fstrim, SEM matar job) e `panic_compact`
+  (V<18: Optimize offline MESMO ocupado — mata job, re-roda, mas o disco nunca
+  enche). Fail-safe: `VFreeGB<=0` (medida falhou) não age (#16).
+- Decision-table **20/20** no pwsh 7.4.6 nativo do WSL (a ponte caída bloqueia o
+  `powershell.exe`, mas o pwsh Linux roda o código real). 3 arquivos parseiam OK.
+- `panic_compact` usa Optimize OFFLINE → sem o bug de eviction (VM desligada);
+  `warn_clean` poda só cache de build (regenerável), nunca imagens de run → não
+  reintroduz o "No such image" que o age-guard consertou.
+
+**Veredito:** 🟡 PARCIAL — death-spiral REAL e medido (V:39→16 🔴 confirma o gap
+do scale-to-zero sob CI sustentado); fix coded + unit-validado (20/20) mas **ainda
+não deployado nem provado na box** (ponte caída). Só vira ✅ quando o
+`panic_compact` disparar de fato e recuperar o V: num ciclo medido.
+
+**Proxima acao:** PR do fix (`fix/orchestrator-disk-panic`); deploy + medir um
+ciclo panic real quando a ponte voltar (`wsl --shutdown` ou restart do Windows).
+Analisar o guest disk pra reduzir a FONTE (age-guard do prune deixa imagens de
+run recentes acumularem na rajada).
+
+## 2026-06-17 19:45 -03 — Fix de disco DEPLOYADO + validado na box ✅/🟡
+
+**O que:** Ponte voltou (restart do Windows). Deploy do orchestrator com a camada
+panic/warn em `C:\civm-deploy` + validacao no runtime real (PowerShell 5.1).
+
+**Dados medidos:**
+
+- Box AUTO-recuperou antes do deploy: VHDX `100->68GB`, V: `19->52GB`,
+  `vhdx_attached=False` (destravou sozinho), `orch lastresult=0`. O old
+  orchestrator compactou assim que a rajada drenou e a box idlou — confirma que o
+  gap era SO o caso busy (o idle sempre funcionou).
+- Deploy seguro: `disable -> cp orchestrator+decision -> re-enable` (nenhum tick
+  pega arquivo meio-escrito). Counts no deployado: `panic/warn=10`, `VFreeGB=5`,
+  `tr-fix=3`.
+- `-Observe` tick na box logou `"v_free_gb":52` (campo NOVO) + `noop_off`, SEM
+  erro → o wiring novo (mede V: e passa pra decisao) roda no runtime real.
+- Decision-table DEPLOYADO rodou **20/20 no PowerShell 5.1 da box** (nao so no
+  meu pwsh Linux) — a logica panic/warn passa no ambiente de producao.
+
+**Veredito:** ✅ para DEPLOY + VALIDACAO (decisao 20/20 na box, wiring vivo,
+sem erro); 🟡 para a ACAO `panic_compact`, que ainda nao disparou num evento real
+de `V:<18 + VM Running` (so ocorre em rajada de CI sustentada). Vira ✅ pleno
+quando o log registrar um `disk_panic` + `reclaim` recuperando o V: num ciclo
+real — o watchdog e o log capturam o primeiro.
+
+**Proxima acao:** push do PR civm (durabilidade no repo, await go do user). Fix do
+tenant-isolation-smoke (`web.yml` `!cancelled()`) aplicado, pendente push.
+Reduzir a FONTE (age-guard do prune) rastreado em advoq/civm#137.
+
+## 2026-06-17 20:45 -03 — Auditoria adversarial + endurecimento do panic ✅/🟡
+
+**O que:** Auditoria adversarial multi-lente (3 ceticos, disciplina #18) + audit
+de docs (Opus) ANTES do push. Acharam furos REAIS; remediacao completa aplicada.
+
+**Achados medidos:**
+
+- 🔴 CRITICO (#15 fail-safe): o `panic_compact` fazia `Stop-VM + Optimize` NU, sem
+  o gate de 2 fases. O `Optimize-VHD` consome scratch (~10GB p100) e pode estourar
+  o V: num pico — o curador mataria o recurso que cura. O autoreclaim (desabilitado)
+  ja tinha o gate provado (#106) e meu fix o ignorava (#18 ao contrario).
+- 🔴 C4 ATIVO: o `civm-vhdx-optimize-watchdog` (=Ready) RELIGAVA a VM que o
+  orchestrator desligava — medido no log (`22:27 vm:Running queued:0 running:0`).
+  Dois donos do power-state em conflito.
+- 🟡 #14 (tr-fix colado no commit), #10 (TODO-later sem issue), citacoes #16->#15
+  (a doc civm tem 16 disciplinas, fail-safe=#15, sem #18).
+
+**Remediacao (toda validada):**
+
+- Gate de 2 fases reusado em `civm-reclaim-gate.ps1` (Test-OptimizeSlack: so
+  compacta se folga pos-Off >= ScratchBudget 11) + cooldown 15min (Test-Reclaim-
+  Cooldown, mata o loop) + lock canonico + recover-detection. Decision-table
+  **23/23** + gate **10/10**, no pwsh E no PowerShell 5.1 da box. `-Observe` tick
+  logou `can_panic:true`.
+- C4: os 3 curadores legados (autoreclaim/optimize/optimize-watchdog) Disabled +
+  institucionalizado no `activate-orchestrator.ps1` (+ boot trigger). Box agora:
+  orch 2 triggers, 3 legacy Disabled.
+- Docs: SPEC criado (`docs/specs/orchestrator-scale-to-zero/`), drift do RUNBOOK +
+  observability + README + vm.md consertado, banners SUPERSEDED na cadeia de
+  reclaim. Issue #137 pra reduzir a FONTE.
+
+**Veredito:** ✅ o panic agora nao pode estourar o disco (gate pos-Off), nao loopa
+(cooldown), nao colide (lock) e alerta se nao recupera. Deployado == repo na box.
+🟡 residual: a ACAO panic_compact com gate ainda nao disparou num evento real de
+`V:<18 + Running` (vira ✅ pleno no 1o `disk_panic`+`reclaim_done` medido).
+
+**Proxima acao:** await go do user pro push (3 commits: feat codigo, fix tr, docs).
