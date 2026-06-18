@@ -89,6 +89,16 @@ if ($PSCmdlet.ShouldProcess($target, 'Register Scheduled Task')) {
         /rl HIGHEST `
         /f
     if ($LASTEXITCODE -ne 0) { throw "schtasks /create failed for '$TaskName' (exit $LASTEXITCODE)" }
+    # Defense in depth: schtasks /create nao expoe ExecutionTimeLimit. Sem um teto
+    # de tempo, uma instancia presa no Get-VHD (VHDX locked pelo Optimize-VHD)
+    # bloqueava os runs de 10min por horas e cegava o gate host-aware (incidente
+    # 2026-06-18). 5min e folgado pra um snapshot de ~2s; alem disso a instancia
+    # presa e morta e o proximo run produz snapshot fresco.
+    $task = Get-ScheduledTask -TaskName $TaskName
+    $task.Settings.ExecutionTimeLimit = 'PT5M'
+    $task.Settings.MultipleInstances = 'IgnoreNew'
+    Set-ScheduledTask -TaskName $TaskName -Settings $task.Settings | Out-Null
+    Write-Host "Set ExecutionTimeLimit=PT5M + MultipleInstances=IgnoreNew on '$TaskName' (kills a hung instance)."
     Write-Host "Registered Scheduled Task '$TaskName' running '$resolvedScript' every $IntervalMinutes min as SYSTEM."
     Write-Host "Verify: schtasks /query /tn $TaskName"
     Write-Host "Run now: schtasks /run /tn $TaskName"

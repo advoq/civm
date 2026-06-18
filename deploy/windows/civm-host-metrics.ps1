@@ -36,6 +36,11 @@ param(
     [string]$SshKeyPath = 'C:\ProgramData\civm\ssh\id_ed25519',
     [string]$KnownHostsPath = 'C:\ProgramData\civm\ssh\known_hosts',
     [int]$SshTimeoutSeconds = 30,
+    # Timeout do Get-VHD: ele pendura se o Optimize-VHD do orchestrator esta com o
+    # lock do disco (dois donos host-side disputam o VHDX). Desiste apos isto e
+    # escreve o snapshot com vhdx nulo + v_free critico, em vez de pendurar e cegar
+    # o gate host-aware (incidente 2026-06-18: hang de 6h, panic matou jobs).
+    [int]$VhdReadTimeoutSeconds = 20,
     [string]$LogPath = 'V:\civm-hyperv-maintenance.log'
 )
 
@@ -79,6 +84,36 @@ function Resolve-VhdxPath {
     $drive = Get-VMHardDiskDrive -VMName $Name | Select-Object -First 1
     if ($null -eq $drive) { throw "no VHDX attached to VM '$Name'" }
     return $drive.Path
+}
+
+# Le os tamanhos do VHDX sob timeout, num job descartavel. Get-VHD pendura quando
+# o Optimize-VHD do orchestrator esta com o lock do disco (dois donos host-side
+# disputam o VHDX). Desiste apos TimeoutSeconds e devolve $null — o caller escreve
+# o snapshot so com o v_free critico (de Get-Volume, que nao trava). Sem isto o
+# script pendura e o gate host-aware fica cego (incidente 2026-06-18: hang de 6h).
+function Get-VhdxSizesWithTimeout {
+    param([string]$Path, [int]$TimeoutSeconds)
+    $job = $null
+    try {
+        $job = Start-Job -ScriptBlock {
+            param($p)
+            $v = Get-VHD -Path $p -ErrorAction Stop
+            [pscustomobject]@{
+                FileSize    = [double]$v.FileSize
+                MinimumSize = [double]$v.MinimumSize
+                Size        = [double]$v.Size
+                BlockSize   = [int64]$v.BlockSize
+            }
+        } -ArgumentList $Path
+        if (Wait-Job -Job $job -Timeout $TimeoutSeconds) { return Receive-Job -Job $job }
+        return $null
+    } catch { return $null }
+    finally {
+        if ($job) {
+            Stop-Job -Job $job -ErrorAction SilentlyContinue
+            Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 # Query guest root free bytes over SSH. Returns $null on any failure (DT-v2-5).
@@ -126,12 +161,20 @@ try {
     $vFreeGB = ConvertTo-GiB -Bytes ([double]$vol.SizeRemaining)
     $vSizeGB = ConvertTo-GiB -Bytes ([double]$vol.Size)
 
-    # 2. VHDX dynamic file size + configured min/max (DT-v2-11).
+    # 2. VHDX dynamic file size + configured min/max (DT-v2-11). Lido sob timeout:
+    # se o Optimize-VHD esta com o lock do disco, Get-VHD penduraria e cegaria o
+    # gate (incidente 2026-06-18). $null => snapshot sai com vhdx nulo + v_free ok.
     $resolvedVhdx = Resolve-VhdxPath -Name $VMName -Explicit $VhdxPath
-    $vhd = Get-VHD -Path $resolvedVhdx -ErrorAction Stop
-    $vhdxFileGB = ConvertTo-GiB -Bytes ([double]$vhd.FileSize)
-    $vhdxMinGB = ConvertTo-GiB -Bytes ([double]$vhd.MinimumSize)
-    $vhdxMaxGB = ConvertTo-GiB -Bytes ([double]$vhd.Size)
+    $vhd = Get-VhdxSizesWithTimeout -Path $resolvedVhdx -TimeoutSeconds $VhdReadTimeoutSeconds
+    if ($null -ne $vhd) {
+        $vhdxFileGB = ConvertTo-GiB -Bytes $vhd.FileSize
+        $vhdxMinGB = ConvertTo-GiB -Bytes $vhd.MinimumSize
+        $vhdxMaxGB = ConvertTo-GiB -Bytes $vhd.Size
+        $vhdxBlockBytes = $vhd.BlockSize
+    } else {
+        Write-Log -Level 'WARN' -Message "Get-VHD timed out after ${VhdReadTimeoutSeconds}s (VHDX locked, Optimize-VHD likely running); snapshot with null vhdx sizes, v_free preserved"
+        $vhdxFileGB = $null; $vhdxMinGB = $null; $vhdxMaxGB = $null; $vhdxBlockBytes = $null
+    }
 
     # 3. VM power state (observability; not a gate here).
     $vm = Get-VM -Name $VMName -ErrorAction Stop
@@ -149,7 +192,7 @@ try {
             vhdx_file_size_gb = $vhdxFileGB
             vhdx_min_size_gb  = $vhdxMinGB
             vhdx_max_size_gb  = $vhdxMaxGB
-            vhdx_block_size_bytes = [int64]$vhd.BlockSize
+            vhdx_block_size_bytes = $vhdxBlockBytes
             guest_free_gb     = 0
             gap_gb            = $null
             vm_state          = $vmState
@@ -163,11 +206,17 @@ try {
     }
 
     # gap_gb = VHDX file size minus what the guest actually consumes (reclaimable).
+    # So calculavel com os tamanhos do VHDX; se o Get-VHD deu timeout (null), o gap
+    # fica null — o gate nao precisa dele, so do v_free.
     $guestFreeGB = ConvertTo-GiB -Bytes ([double]$guestFreeBytes)
-    $guestUsedGB = $vhdxMaxGB - $guestFreeGB
-    if ($guestUsedGB -lt 0) { $guestUsedGB = 0 }
-    $gapGB = $vhdxFileGB - $guestUsedGB
-    if ($gapGB -lt 0) { $gapGB = 0 }
+    if ($null -ne $vhdxFileGB -and $null -ne $vhdxMaxGB) {
+        $guestUsedGB = $vhdxMaxGB - $guestFreeGB
+        if ($guestUsedGB -lt 0) { $guestUsedGB = 0 }
+        $gapGB = $vhdxFileGB - $guestUsedGB
+        if ($gapGB -lt 0) { $gapGB = 0 }
+    } else {
+        $gapGB = $null
+    }
 
     $metrics = [ordered]@{
         v_free_gb         = $vFreeGB
@@ -175,7 +224,7 @@ try {
         vhdx_file_size_gb = $vhdxFileGB
         vhdx_min_size_gb  = $vhdxMinGB
         vhdx_max_size_gb  = $vhdxMaxGB
-        vhdx_block_size_bytes = [int64]$vhd.BlockSize
+        vhdx_block_size_bytes = $vhdxBlockBytes
         guest_free_gb     = $guestFreeGB
         gap_gb            = $gapGB
         vm_state          = $vmState
