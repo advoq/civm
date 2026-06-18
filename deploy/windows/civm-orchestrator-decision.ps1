@@ -26,19 +26,22 @@ function Get-OrchestratorDecision {
         if (($Queued + $Running) -gt 0) { return 'start' }
         return 'noop_off'
     }
-    # SEGURANCA DE DISCO (VM Running) — ANTES do fluxo normal, pois o disco encher
-    # supera manter jobs vivos (death-spiral chegou a 16GB em 2026-06-17, saturou
-    # o host, derrubou ate o interop WSL). So age com medida valida: VFreeGB <= 0
-    # significa "nao consegui medir" -> fail-safe, nao age (Kahneman #15).
-    # panic_compact compacta offline mesmo ocupado (mata job ativo, mas o disco
-    # NUNCA enche); warn_clean limpa cache de build (seguro, sem matar job). O
-    # panic so dispara fora do cooldown (CanPanic) — dentro da janela ele rebaixa
-    # para warn_clean, evitando re-matar jobs em loop (o Optimize ja recuperou
-    # ~25GB; nao precisa re-disparar a cada tick).
-    if ($VFreeGB -gt 0 -and $VFreeGB -lt $PanicFloorGB -and $CanPanic) { return 'panic_compact' }
-    if ($VFreeGB -gt 0 -and $VFreeGB -lt $WarnFloorGB) { return 'warn_clean' }
+    $hasWork = (($Queued + $Running) -gt 0)
+    # SEGURANCA DE DISCO — so quando ha TRABALHO. Ociosa, o fluxo normal abaixo faz
+    # stop_and_compact (Optimize OFFLINE -> V: ~51), que e MELHOR que o warn online
+    # (este so libera o guest e da fstrim, nao encolhe a VHDX). Sem o gate hasWork,
+    # a box ociosa com V<28 ficava presa em warn_clean a cada tick: a VM nunca
+    # desligava e o V: nunca voltava pra 51 (bug achado 2026-06-18: idle 27min,
+    # V: travado em 22, VM Running). O disco encher DURANTE CI supera manter jobs
+    # vivos (death-spiral chegou a 16GB, saturou o host, derrubou o interop). So
+    # age com medida valida: VFreeGB <= 0 = "nao medi" -> fail-safe (Kahneman #15).
+    # panic_compact compacta offline mesmo ocupado (mata job, disco NUNCA enche);
+    # warn_clean poda cache de build (seguro, sem matar job). Fora do cooldown
+    # (CanPanic); dentro, o panic rebaixa pra warn_clean (nao re-mata em loop).
+    if ($hasWork -and $VFreeGB -gt 0 -and $VFreeGB -lt $PanicFloorGB -and $CanPanic) { return 'panic_compact' }
+    if ($hasWork -and $VFreeGB -gt 0 -and $VFreeGB -lt $WarnFloorGB) { return 'warn_clean' }
     # VM Running com trabalho: marca busy, nunca desliga.
-    if (($Queued + $Running) -gt 0) { return 'mark_busy' }
+    if ($hasWork) { return 'mark_busy' }
     # Ocioso mas antes do debounce: espera o IdleStopMinutes.
     if ($IdleMinutes -lt $IdleStopMinutes) { return 'idle_debounce' }
     # Gate de stop: a probe SSH (lazy) ve job ativo de QUALQUER repo (mesmo os

@@ -290,11 +290,13 @@ try {
                 Write-OrcLog 'vm_started' @{ queued = $queued; running = $running }
             }
         }
-        'mark_busy' { $state.lastBusyUtc = $nowUtc; Save-State $state }
+        'mark_busy' { if (-not $Observe) { $state.lastBusyUtc = $nowUtc; Save-State $state } }
         'idle_debounce' { Write-OrcLog 'idle_debounce' @{ idle_min = [math]::Round($idleMin, 1); need = $IdleStopMinutes } }
         'stop_aborted_active_job' {
             Write-OrcLog 'stop_aborted_active_job' @{ note = 'Runner.Worker ativo no guest (repo fora do escopo do token?)' }
-            $state.lastBusyUtc = $nowUtc; Save-State $state
+            # -Observe e nao-mutante: nao reseta o idle timer (senao um dry-run
+            # adia o stop_and_compact real em ate IdleStopMinutes).
+            if (-not $Observe) { $state.lastBusyUtc = $nowUtc; Save-State $state }
         }
         'warn_clean' {
             # Disco apertado (V < WarnFloor) mas ainda nao critico: limpeza SEGURA

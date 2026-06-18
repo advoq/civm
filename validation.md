@@ -1,21 +1,54 @@
 # validation.md — civm
 
-> Log vivo de validações **empíricas** do civm (box, VHDX, orchestrator,
-> compact, runners). Kahneman #13: medir, não asseverar — "código existe" ≠
-> "função ativa". Cada entrada registra DADOS reais (números medidos no
-> instante), não impressões.
+> Log vivo de validações **empíricas** do civm — a fonte de verdade para "isso
+> está de fato funcionando agora?" no plano de **infra**. Cobre TODA validação
+> de infra; a taxonomia está na tabela **Categorias** abaixo. Ancorado em
+> **Kahneman #13**: medir, não asseverar — existe ≠ funciona, verde-no-último-run
+> ≠ verde-agora. Cada entrada registra DADOS reais medidos no instante, não
+> impressões.
 >
-> Esta é a fonte de verdade para "isso está de fato funcionando?". O `vm.md`
-> inventaria o estado da máquina; aqui registramos as **medições que provam (ou
-> refutam) um comportamento**.
+> Complementa o `vm.md` (inventário do estado da máquina): aqui ficam as
+> **medições que provam ou refutam** um comportamento. **Fronteira:** civm é
+> infra e **independente do advoq** — validação de app vive no `validation.md`
+> do advoq; não logue app aqui.
 
 ## Convenção
 
 - **Append-only** como o `MEMORY.md`: nunca delete, reescreva nem reordene
-  entradas antigas. Entrada mais recente no **fim** do arquivo.
-- Leia de baixo para cima; pare quando as entradas recentes bastarem.
-- Toda entrada carrega DADOS medidos (números reais) e um veredito explícito.
+  entradas antigas. Entrada mais recente no **fim**. Leia de baixo para cima;
+  pare quando as entradas recentes bastarem.
+- Toda entrada carrega DADOS medidos (número real, sem adjetivo antes do número)
+  e um veredito explícito.
 - Nunca persista secrets, tokens, valores de env ou PII.
+
+## Categorias (tag opcional, escaneável)
+
+Marque `**Categoria:**` com uma das tags abaixo. Lista viva — estenda quando
+surgir um tipo novo de "existe ≠ funciona" no domínio de infra:
+
+| Tag | O que valida | Veredito típico |
+| --- | --- | --- |
+| `orchestrator-decision` | decision-table N/N PASS contra o módulo DEPLOYADO (`Get-OrchestratorDecision`) | 20/20 PASS |
+| `deploy-runtime` | orchestrator rodando no PowerShell 5.1 real da box (não cópia), tick sem erro | tick vivo, 0 erro |
+| `disk-reclaim` | Optimize-VHD slack/cooldown + VHDX e V: livre antes/depois do compact | VHDX↓, V:↑ GB |
+| `watchdog-live` | timer systemd (disk/runner/reverse/cleanup/metrics) ENABLED+ACTIVE+disparou | last run < janela |
+| `runner-health` | runner registrado/online, workers, hooks `ACTIONS_RUNNER_HOOK_*` wired | N/N online |
+| `parity` | Go/Node/Python/Docker/gh instalados batem os pins (`civmctl parity`) | N/N Compatible |
+| `capacity-admit` | `accepting_jobs`, slots heavy (`admit`), docker-lock serializando | accepting / slot ok |
+| `civm-ci-gate` | CI do próprio civm (go test -race/coverage, ciguard, validate-templates) | exit 0 / verde |
+
+## Quando registrar
+
+Faça append de uma entrada quando **medir** (não quando assumir):
+
+- rodou a decision-table contra o módulo deployado, ou viu o orchestrator ticando
+  vivo no runtime real;
+- mediu V:/VHDX antes/depois de um compact, ou um reclaim recuperando disco;
+- confirmou um timer systemd ENABLED+ACTIVE que de fato disparou na janela;
+- verificou saúde de runner, paridade de tooling ou um gate de CI do civm.
+
+Mnemônico: a pergunta "isso está funcionando agora?" se responde **daqui** — ou
+vira uma entrada nova.
 
 ## Schema de entrada
 
@@ -23,8 +56,10 @@
 ## YYYY-MM-DD HH:MM -03 — <titulo>
 
 **O que:** o que foi validado (1-2 frases).
-**Dados medidos:** números reais (V: livre, workers, idle_min, decision-table
-PASS/FAIL, etc.). Sem adjetivo antes do número.
+**Categoria:** <tag da tabela acima>          (opcional, recomendado)
+**Como medir:** comando/check para re-medir.  (opcional — quando re-executável)
+**Dados medidos:** números reais (V: livre, VHDX GB, workers, idle_min,
+decision-table PASS/FAIL, timer last-run). Sem adjetivo antes do número.
 **Veredito:** ✅ funciona / 🔴 não funciona / 🟡 parcial.
 **Proxima acao:** próximo passo concreto, ou "nenhuma".
 ```
@@ -241,3 +276,34 @@ de docs (Opus) ANTES do push. Acharam furos REAIS; remediacao completa aplicada.
 `V:<18 + Running` (vira ✅ pleno no 1o `disk_panic`+`reclaim_done` medido).
 
 **Proxima acao:** await go do user pro push (3 commits: feat codigo, fix tr, docs).
+
+## 2026-06-18 00:10 -03 — Gate provado VIVO sob carga + bug hasWork corrigido ✅
+
+**O que:** Os PRs #138/#1179 rodaram a CI na box. O monitor capturou o gate de
+disco agindo ao vivo sob a MESMA carga que causou o death-spiral original; e o
+usuario pegou um bug real (V: nao voltava pra 51 com a box ociosa).
+
+**Dados medidos:**
+
+- WARN provado VIVO: sob a CI pesada (tenant-isolation-smoke + parallel), o V:
+  caiu de 33GB e o `warn_clean` disparou ~8x (`V:26->35, 24->30, 22->30, 19->27,
+  18->31, 18->35`) — recuperou o V: TODA vez, ONLINE, sem matar um job. A CI
+  rodou inteira e os 2 PRs ficaram verdes. O `panic_compact` NUNCA precisou
+  disparar. Mesma carga que antes derrubou tudo (V:39->16, host saturado).
+- BUG achado (hasWork): a box ociosa+apertada (idle 27min, V:22) ficou PRESA em
+  `warn_clean` a cada tick — o disk-safety disparava ANTES do gate idle-stop, a
+  VM nunca desligava e o V: nunca voltava pra 51 (o warn libera o guest mas nao
+  encolhe a VHDX; so o Optimize offline encolhe). Fix: gatear warn/panic em
+  `hasWork` -> ociosa cai no `stop_and_compact`. Tambem: o `-Observe` mutava o
+  estado (`stop_aborted` resetava `lastBusyUtc`) -> guardado (nao-mutante).
+- VALIDACAO end-to-end do fix: idle + V<28 -> `reclaim_start` ->
+  `reclaim_post_off_remeasure` -> `reclaim_done` -> **V: 22 -> 52GB, VM Off**.
+  Decision-table **24/24** + gate **10/10**, no pwsh e no PowerShell 5.1 da box.
+
+**Veredito:** ✅ o caminho WARN esta provado VIVO sob carga real (recupera sem
+matar job); o ciclo fecha (warn segura durante CI -> idle compacta pra ~52). O
+`panic_compact` segue como salvaguarda nao-disparada (o melhor cenario). O bug
+hasWork (que prenderia o V:) corrigido + medido end-to-end.
+
+**Proxima acao:** commit do fix hasWork+observe no #138; merge dos 2 PRs no go do
+user.
