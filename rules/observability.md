@@ -43,9 +43,28 @@ slog.InfoContext(ctx, "hook job-started",
 ```
 
 **Camada host (PowerShell):** as tasks `deploy/windows/*.ps1` emitem **uma linha
-JSON por evento** em `V:\civm-hyperv-maintenance.log` (campos `timestamp`,
-`level`, `event`, `vm`, + dados). Eventos: `autoreclaim_*`, `optimize_*`,
-`emergency_reclaim_*`, `watchdog_*`. ERROR/CRITICAL também vão pra stderr.
+JSON por evento** (campos `ts`/`timestamp`, `level`, `event`, `vm`, + dados).
+ERROR/CRITICAL também vão pra stderr.
+
+- **Orchestrator scale-to-zero (dono vivo do power-state, desde 2026-06-17):**
+  `civm-vm-orchestrator.ps1` escreve em **`V:\civm-orchestrator.log`** (campos
+  `ts`, `level`, `event`, + dados). Catálogo de eventos: `tick` (cada decisão:
+  `vm`, `queued`, `running`, `idle_min`, `v_free_gb`, `can_panic`),
+  `vm_started`, `idle_debounce`, `stop_aborted_active_job`,
+  `disk_warn`/`disk_warn_clean` (piso warn 28 GB: limpeza online segura),
+  `disk_panic` (piso panic 18 GB: compacta mesmo com job ativo), `reclaim_start`,
+  `reclaim_post_off_remeasure`, `reclaim_skip_insufficient_slack`,
+  `reclaim_skip_locked`, `reclaim_abort_vm_not_off`, `reclaim_done`,
+  `reclaim_no_progress`, `guest_full_clean`, mais os `*_warn`/`*_probe_failed`
+  best-effort (`vfree_probe_failed`, `guest_active_probe_failed`,
+  `guest_full_clean_warn`, `disk_warn_clean_warn`) e `orchestrator_error`. Fonte
+  de verdade: `docs/specs/orchestrator-scale-to-zero/SPEC.md`.
+- **Mecanismo de reclaim antigo (SUPERSEDED 2026-06-17, tasks `Disabled`):** o
+  `civm-vhdx-autoreclaim`/`optimize`/`optimize-watchdog` escreviam em
+  `V:\civm-hyperv-maintenance.log` com eventos `autoreclaim_*`, `optimize_*`,
+  `emergency_reclaim_*`, `watchdog_*`. Catálogo preservado para leitura
+  histórica; esses eventos não saem mais em operação normal — o orchestrator é
+  o emissor vivo.
 
 **Hooks de job:** registram em `hooks.jsonl` (uma linha por job-started/finished,
 com `WorkRoot`, disco, cleanup aplicado).
@@ -59,23 +78,21 @@ VHDX, consumido pelo guard de headroom do reclaim.
 
 ## Log de validação empírica (`validation.md`)
 
-`validation.md` na raiz é o log vivo de validações **empíricas** — a fonte de
-verdade para "isso está de fato funcionando?" (box, VHDX, orchestrator, compact,
-runners). Princípio Kahneman #13: **medir, não asseverar** — "código existe" ≠
-"função ativa". Complementa o `vm.md` (que inventaria o estado da máquina): aqui
-ficam as **medições que provam ou refutam** um comportamento (decision-table
-PASS/FAIL contra o módulo deployado, V: livre antes/depois do compact,
-`workers`/`idle_min` no instante).
+`validation.md` na raiz é o log append-only de **toda validação empírica de
+infra** — a fonte de verdade para "isso está de fato funcionando agora?". A
+definição, a taxonomia de categorias e o framing Kahneman #13 vivem no **header
+do `validation.md`**; complementa o `vm.md` (inventário da máquina). Validação de
+app vive no `validation.md` do **advoq** (independente); não logue app aqui.
 
-Regras:
+Regras de uso:
 
-- Append-only como o `MEMORY.md`: entrada mais recente no fim; nunca delete,
-  reescreva nem reordene entradas antigas. Leia de baixo para cima.
-- Toda entrada registra DADOS medidos (números reais, sem adjetivo antes do
-  número) e um veredito explícito.
-- Schema por entrada: `## YYYY-MM-DD HH:MM -03 — <titulo>`, depois `**O que:**`,
-  `**Dados medidos:**`, `**Veredito:**` (✅ funciona / 🔴 não / 🟡 parcial) e
-  `**Proxima acao:**`.
+- Append-only: entrada mais recente no fim; nunca delete, reescreva nem reordene.
+  Leia de baixo para cima.
+- Toda entrada carrega DADOS medidos (número real, sem adjetivo antes do número)
+  e um veredito explícito.
+- Schema: `## YYYY-MM-DD HH:MM -03 — <titulo>`, depois `**O que:**`,
+  `**Dados medidos:**`, `**Veredito:**` (✅/🔴/🟡) e `**Proxima acao:**`.
+  Opcionais: `**Categoria:**` (tag da taxonomia) e `**Como medir:**` (comando de repro).
 - Nunca persista secret/token/PAT/chave, valor de env ou PII.
 
 ## Não logar segredo
@@ -89,4 +106,6 @@ ou omitir. civm é infra: não há PII de usuário final no caminho.
 - ❌ Engolir erro sem log de contexto (`%w` + `slog`).
 - ❌ Logar token/chave/secret raw.
 - ❌ Métrica/evento órfão sem consumidor (`civmctl health`, runbook, scrape).
-- ❌ Task host que muta sem emitir evento em `civm-hyperv-maintenance.log`.
+- ❌ Task host que muta sem emitir evento no log estruturado da sua camada
+  (`V:\civm-orchestrator.log` para o orchestrator vivo;
+  `V:\civm-hyperv-maintenance.log` para o mecanismo de reclaim antigo).

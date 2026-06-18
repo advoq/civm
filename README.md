@@ -113,6 +113,7 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 | Arquivo | Função |
 |---|---|
 | `runbooks/MULTI-PROJECT-RUNNER.md` | provisionar VM + N runners + tools (parity ubuntu-latest) + timers systemd de cleanup/watchdog (128GB SSD) |
+| `runbooks/RUNBOOK-HOST-VHDX-MAINTENANCE.md` | manutenção do VHDX do host (reclamação de volume) — alavancas break-glass quando o orchestrator está pausado |
 | `runbooks/LOCAL-CI-DISCIPLINE.md` | filosofia "local CI é gate de verdade, remoto é mirror" |
 
 ### Para **peer repos** — **copiar**
@@ -146,19 +147,30 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
    - Configurar timers systemd de cleanup, disk-watchdog, runner-watchdog,
      reverse-watchdog e metrics
 
-2. **Cada peer repo** referencia `runs-on: [self-hosted, civm]` em
+2. **Scale-to-zero no host (orchestrator):** a VM pesada não fica ligada
+   ociosa. Uma Scheduled Task minúscula no host Windows
+   (`deploy/windows/civm-vm-orchestrator.ps1`, ~1 min) é o **único dono**
+   do power-state: liga a VM sob demanda quando há job na fila, e na
+   fronteira de cada PR (ocioso ≥ N min) faz full clean + Stop-VM +
+   `Optimize-VHD`, devolvendo RAM e disco ao Windows entre rajadas. Pisos
+   de segurança de disco: warn 28 GB (limpeza online) / panic 18 GB
+   (compacta mesmo ocupado). Detalhes em
+   `docs/specs/orchestrator-scale-to-zero/` (SPEC) e
+   `runbooks/RUNBOOK-HOST-VHDX-MAINTENANCE.md` (manutenção/break-glass).
+
+3. **Cada peer repo** referencia `runs-on: [self-hosted, civm]` em
    seu próprio `.github/workflows/ci.yml`.
 
    Regra de seguranca: jobs self-hosted devem rodar apenas PR confiavel
    ou same-repo. Evitar `pull_request_target` e nao expor secrets a codigo
    de fork em runner self-hosted.
 
-3. **Quando billing GitHub OK:** workflow roda em `ubuntu-latest`
+4. **Quando billing GitHub OK:** workflow roda em `ubuntu-latest`
    (GitHub-hosted, paga minutos). Quando billing bloqueado: roteia
    para `civm` (sem custo). Detector heurístico documentado em
    `runbooks/CI-BILLING-FALLBACK.md`; templates implementam o roteamento.
 
-4. **PR continua sendo criado** de onde o dev quiser (laptop, gh CLI,
+5. **PR continua sendo criado** de onde o dev quiser (laptop, gh CLI,
    GitHub UI). civm só executa CI; não cria PRs.
 
 ## Adoção em 1 comando (para peer repos)

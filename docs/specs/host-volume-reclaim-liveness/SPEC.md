@@ -1,5 +1,11 @@
 # SPEC — Host Volume Reclaim Liveness
 
+> **SUPERSEDED-BY (2026-06-17): orchestrator scale-to-zero.** O reclaim do VHDX
+> agora pertence ao `civm-vm-orchestrator.ps1` (único dono do stop/compact/
+> power-state; tasks `autoreclaim`/`optimize`/`optimize-watchdog` `Disabled`).
+> Fonte de verdade viva: `docs/specs/orchestrator-scale-to-zero/`. O conteúdo
+> abaixo é preservado como histórico do mecanismo anterior — não o reimplemente.
+
 > SSDV3 PASSO 2. Traduz `PRD.md` em arquivos, predicados Go testáveis, diffs PS1
 > e thresholds. Links Kahneman nos passos críticos. Implementa estritamente os
 > RF-1..RF-4 / RNF-1..RNF-4 do PRD.

@@ -7,6 +7,13 @@ issues: []
 
 # SPECv2 — Reclamação de volume do host (VHDX): guest-free vira host-free com segurança
 
+> **SUPERSEDED-BY (2026-06-17): orchestrator scale-to-zero.** O reclaim do VHDX
+> agora pertence ao `civm-vm-orchestrator.ps1` (único dono do stop/compact/
+> power-state; tasks `autoreclaim`/`optimize`/`optimize-watchdog` `Disabled`).
+> Fonte de verdade viva: `docs/specs/orchestrator-scale-to-zero/`. Esta versão
+> (e o runbook que a cita como source-of-truth) é preservada como histórico —
+> não a reimplemente.
+
 > Versão melhorada após auditoria do Passo 2.5.
 > Baseline preservado: `SPEC.md`.
 > Motivo: a auditoria (4 perspectivas, verificada contra o código) deu `no-go` por blockers de **robustez operacional do host**: o `.ps1` de compactação sem `try/catch/finally` real, sem timeouts concretos, sem lock anti-concorrência e com promessa "VM nunca fica Off" não garantida em falha de `Start-VM`; guard de headroom só point-in-time (corrida com job que consome espaço); entrega SSH de métricas best-effort sem semântica de falha; `maintenance enter/exit` com idempotência e retorno ambíguos; acoplamento `capacity→hostdisk` com risco de import cycle; procedimento SCSI/discard (RF-2) sem cmdlets exatos nem validação de `fstab`/boot; registro das Scheduled Tasks (privilégio SYSTEM) não especificado; cita de linha do `idle.Check` errada. Este v2 **fecha cada blocker com decisão explícita**. Onde houver conflito, **o v2 prevalece** sobre `SPEC.md`.

@@ -159,6 +159,18 @@ schtasks /query /tn civm-host-metrics /v /fo LIST
 
 ## civm-vhdx-autoreclaim.ps1 (prevenção automática)
 
+> **SUPERSEDED (2026-06-17) pelo orchestrator scale-to-zero.** O
+> `civm-vm-orchestrator.ps1` passou a ser o **único dono** do
+> stop+compact da VM (um curador só, sem disputa de lock/power-state).
+> A task `civm-vhdx-autoreclaim` está **Disabled por design** — não a
+> registre nem a reabilite enquanto o orchestrator estiver ativo, sob
+> pena de dois reclaimers brigarem pelo mesmo `V:\civm-reclaim.lock`.
+> A prevenção automática agora é o tick do orchestrator (idle ≥ N min →
+> stop+compact; pisos de disco panic 18 GB / warn 28 GB). Fonte de
+> verdade: `docs/specs/orchestrator-scale-to-zero/SPEC.md`. A seção
+> abaixo é preservada como histórico do mecanismo anterior — **não a
+> execute**.
+
 Script de host registrado como task SYSTEM a cada **30 min**. Ele é o
 caminho preventivo para o caso recorrente: `V:` vai enchendo durante o
 dia, mas o guest ainda tem espaço livre. Diferente do
@@ -181,14 +193,38 @@ Start-VM`, com 3 tentativas de `Start-VM` no `finally`. Rollback trigger:
 se a task interromper CI ativo, delete `civm-vhdx-autoreclaim` e mantenha
 apenas a compactação supervisionada até corrigir o predicado de idle.
 
-Registro:
+Registro (**SUPERSEDED — não registrar**; o orchestrator é o dono do
+stop+compact desde 2026-06-17). Mantido só para leitura histórica e para
+o caso break-glass de desativar o orchestrator e religar o mecanismo
+antigo:
 
 ```powershell
+# NÃO rode com o orchestrator ativo — dois reclaimers colidem no lock.
 powershell -ExecutionPolicy Bypass -File C:\civm-deploy\register-civm-vhdx-autoreclaim.ps1
 schtasks /query /tn civm-vhdx-autoreclaim /v /fo LIST
 ```
 
 ## civm-vhdx-optimize.ps1 (compactação offline)
+
+> **BREAK-GLASS ONLY (desde 2026-06-17).** A compactação offline de
+> rotina migrou para o orchestrator scale-to-zero, que faz Stop-VM +
+> `Optimize-VHD` na fronteira de cada PR (ocioso) e no panic de disco.
+> Este `civm-vhdx-optimize` deixou de ser a alavanca de rotina — só rode
+> manualmente como recurso de emergência **depois de pausar/desabilitar
+> o orchestrator**, senão os dois disputam o `V:\civm-reclaim.lock` e o
+> power-state da VM (fail-safe Kahneman #15: um dono só):
+>
+> ```powershell
+> # 1. Pausar o orchestrator (desabilita a Scheduled Task ~1min)
+> schtasks /change /tn civm-vm-orchestrator /disable
+> # 2. ... rodar a compactação break-glass abaixo ...
+> # 3. Religar o orchestrator quando terminar
+> schtasks /change /tn civm-vm-orchestrator /enable
+> ```
+>
+> Em operação normal, **não** dispare esta task — deixe o orchestrator
+> compactar. Fonte de verdade do fluxo vivo:
+> `docs/specs/orchestrator-scale-to-zero/SPEC.md`.
 
 Script de host (`deploy/windows/civm-vhdx-optimize.ps1`, SPECv2 ITEM-11
 override / DT-v2-1/2/3/7/15/16/17). Acionada **sob demanda** via
@@ -229,6 +265,14 @@ SYSTEM — DT-v2-7): se a VM está `Off` **e** nenhuma instância de
 `civm-vhdx-optimize` está rodando → `Start-VM` incondicional + log. É a
 rede de segurança caso a task principal seja morta (`SIGKILL`) com a VM
 desligada.
+
+> **SUPERSEDED (2026-06-17).** Este watchdog está **Disabled por design**:
+> ele relançaria a VM que o orchestrator deliberadamente mantém `Off`
+> entre rajadas, brigando com o dono do power-state. O próprio
+> orchestrator já religa a VM sob demanda (job na fila no próximo tick),
+> então a rede de segurança "VM Off órfã → Start-VM" agora é dele. Só
+> reabilite junto com o `civm-vhdx-optimize` no fluxo break-glass acima
+> (com o orchestrator pausado).
 
 Disparo manual numa janela:
 
@@ -375,11 +419,19 @@ ALAVANCA B (SCSI→IDE) e investigar.
 
 ### Gatilhos de rollback (SPECv2 §Rollback trigger v2)
 
+> **Nota (2026-06-17):** estes gatilhos descrevem o mecanismo antigo
+> (`civm-vhdx-optimize`/autoreclaim). Os pisos vivos hoje são os do
+> orchestrator — **panic 18 GB** (compacta mesmo com job ativo) e
+> **warn 28 GB** (limpeza online segura), não os `10/30 GB` de
+> observabilidade abaixo. Para os gatilhos de rollback em vigor, ver
+> `docs/specs/orchestrator-scale-to-zero/SPEC.md`. Os itens abaixo só
+> valem no fluxo break-glass com o orchestrator pausado.
+
 - A task `civm-vhdx-optimize` deixar a VM `Off` ≥1 vez (`CRITICAL
   vm_left_off`).
 - `v_free_gb` cruzar **10 GB** sem alarme prévio de **30 GB** (a
   observabilidade deveria ter avisado em `warn` a 30 GB e `crit` a
-  10 GB).
+  10 GB). _(Mecanismo antigo; o orchestrator usa warn 28 / panic 18.)_
 - `Start-VM` falhar nas 3 tentativas (intervenção manual imediata).
 
 ## Sequência copy-paste (caso comum: V: cheio, guest com livre)
@@ -426,20 +478,36 @@ ssh gha-ubuntu-2404 'civmctl capacity --json'              # accepting_jobs=true
 
 ## Auditoria de privilégio das Scheduled Tasks
 
-As tasks (`civm-host-metrics`, `civm-vhdx-autoreclaim`,
-`civm-vhdx-optimize`, `civm-vhdx-optimize-watchdog`) rodam como
-**SYSTEM** com direito Hyper-V e SSH outbound para o guest usando chave
-local em `C:\ProgramData\civm\ssh`. Nenhum segredo fica no repo
-(SPECv2 DT-v2-6). Registradas por `deploy/windows/register-*.ps1` com
-`schtasks /create ... /ru SYSTEM /rl HIGHEST /f`. Reversível por
-`schtasks /delete`.
+Todas as tasks rodam como **SYSTEM** com direito Hyper-V e SSH outbound
+para o guest usando chave local em `C:\ProgramData\civm\ssh`. Nenhum
+segredo fica no repo (SPECv2 DT-v2-6). Registradas por
+`deploy/windows/register-*.ps1` com `schtasks /create ... /ru SYSTEM
+/rl HIGHEST /f`. Reversível por `schtasks /delete`.
+
+**Estado esperado das tasks (2026-06-17):**
+
+| Task | Estado esperado | Papel |
+| --- | --- | --- |
+| `civm-vm-orchestrator` | **Ready/Running** (~1 min) | **Dono ativo** do power-state: liga sob demanda + stop+compact ocioso/panic |
+| `civm-host-metrics` | Ready (10 min) | Entrega de métricas do host (`V:` + `Get-VHD`) ao guest |
+| `civm-vhdx-autoreclaim` | **Disabled** (superseded) | Reclaim antigo — subsumido pelo orchestrator |
+| `civm-vhdx-optimize` | **Disabled** (break-glass) | Compactação offline manual — só com o orchestrator pausado |
+| `civm-vhdx-optimize-watchdog` | **Disabled** (superseded) | Religaria a VM que o orchestrator mantém Off de propósito |
+
+A task ativa de reclaim é o `civm-vm-orchestrator` — `autoreclaim`,
+`optimize` e `optimize-watchdog` estão **Disabled por design** (um dono
+só do stop/compact/power-state, fail-safe Kahneman #15). Uma auditoria
+saudável vê o orchestrator `Ready`/rodando e as três tasks antigas
+`Disabled`; ver `civm-host-metrics` `Ready` é esperado (ele alimenta o
+guard de headroom).
 
 ```powershell
 # Verificar registro/saúde das tasks
+schtasks /query /tn civm-vm-orchestrator         /v /fo LIST   # dono ativo
 schtasks /query /tn civm-host-metrics            /v /fo LIST
-schtasks /query /tn civm-vhdx-autoreclaim        /v /fo LIST
-schtasks /query /tn civm-vhdx-optimize           /v /fo LIST
-schtasks /query /tn civm-vhdx-optimize-watchdog  /v /fo LIST
+schtasks /query /tn civm-vhdx-autoreclaim        /v /fo LIST   # esperado: Disabled
+schtasks /query /tn civm-vhdx-optimize           /v /fo LIST   # esperado: Disabled
+schtasks /query /tn civm-vhdx-optimize-watchdog  /v /fo LIST   # esperado: Disabled
 
 # Remover (rollback de registro)
 schtasks /delete /tn civm-vhdx-optimize /f
@@ -447,6 +515,17 @@ schtasks /delete /tn civm-vhdx-optimize /f
 
 ## Histórico
 
+- **2026-06-17** — Orchestrator scale-to-zero subsume o stop+compact.
+  O `civm-vm-orchestrator.ps1` virou o **único dono** do
+  power-state da VM (liga sob demanda na fila; full clean + Stop-VM +
+  `Optimize-VHD` na fronteira de PR ocioso e no panic de disco). As tasks
+  `civm-vhdx-autoreclaim` e `civm-vhdx-optimize-watchdog` foram
+  **desabilitadas** (um dono só, sem curadores em conflito disputando o
+  `V:\civm-reclaim.lock`/power-state — fail-safe Kahneman #15); o
+  `civm-vhdx-optimize` virou **break-glass-only** (rodar só com o
+  orchestrator pausado). Pisos vivos: warn 28 GB / panic 18 GB. Fonte de
+  verdade: `docs/specs/orchestrator-scale-to-zero/SPEC.md` +
+  `deploy/windows/civm-vm-orchestrator.ps1`.
 - **2026-05-31** — Autoreclaim promovido a prevenção automática: task a
   cada 30 min, chave SSH dedicada com private key exclusiva de SYSTEM em
   `C:\ProgramData\civm\ssh`,

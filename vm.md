@@ -75,7 +75,10 @@ Cada um com seu `~/actions-runner-{repo}/` e cache yarn escopado
     + imagens de service de runs finalizadas (`advoq-org-{runid}-*`),
     BuildKit/container-safe, sem deferir ao heavy-lock.
   - `civmctl-disk-watchdog` + `civmctl-cleanup` → hygiene geral.
-  - `civm-vhdx-autoreclaim` (host) → compacta o VHDX quando V: baixo + guest idle.
+  - `civm-vhdx-autoreclaim` (host) → **DESABILITADA desde 2026-06-17**
+    (superseded pelo orchestrator scale-to-zero, que virou o único dono do
+    stop+compact). Compactava o VHDX quando V: baixo + guest idle; hoje quem
+    faz isso é o orchestrator (próximo item).
 - **Scale-to-zero (orchestrator):** `deploy/windows/civm-vm-orchestrator.ps1` —
   liga a VM sob demanda (job na fila) e, na fronteira de cada PR (idle ≥ N min),
   faz full clean + Stop-VM + Optimize-VHD, devolvendo **RAM e disco ao Windows**
