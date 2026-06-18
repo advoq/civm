@@ -408,3 +408,36 @@ fix/bump-undici-tls.
 **Categoria:** infra / disco
 **Como medir:** experimento controlled-deepclean.ps1 (piso idle); `Get-Content
 V:\civm-orchestrator.log | Select-String reclaim_done` (V: pos-reclaim ao vivo).
+
+## 2026-06-18 20:35 -03 — Serializacao: box tinha 2 runners (concurrent prune matava jobs)
+
+**O que:** O usuario apontou que 2 PRs rodavam checks ao mesmo tempo na box, violando
+a fila. Raiz: a box tinha DOIS runner instances aceitando advoq jobs — civm-advoq
+(repo-level, advoq/advoq) + civm-advoq-org (org-level, advoq/advoq + advoq/civm),
+ambos com label civm. Um advoq job caia em qualquer um -> 2 jobs concorrentes no
+mesmo disco. O 51GB/deep-clean nao bastava; faltava serializar o runner.
+
+**Dados medidos:**
+
+- Sintoma no #1184: ms-billing e ms-core falharam com "The operation was canceled" +
+  "docker pull postgres:16-alpine/redis:8-alpine — retry (concurrent prune on shared
+  civm runner)". Um runner podava enquanto o outro puxava imagem -> job morto. O
+  govulncheck dos dois passou (codigo compila) -> nao era bug de codigo.
+- Fix: systemctl disable do REPO runner civm-advoq, mantendo o ORG runner
+  civm-advoq-org (serve advoq/advoq + advoq/civm num so runner). A 1a tentativa
+  desativou o ERRADO (o org, que quebraria a CI da civm); o output do script pegou e
+  corrigi com swap. Repos pessoais (vitae etc.) intactos.
+- VALIDACAO: watch do runner busy durante o re-run do #1184 -> pico busy=1 (nunca 2).
+  Serializado provado na coisa.
+
+**Veredito:** ✅ serializado — 1 runner de advoq (o org), busy peak=1 medido. As falhas
+de concurrent-prune (ms-billing/ms-core) nao recorrem. 🟡 residual: 1 runner da
+job-serial FIFO, nao strict PR-grouping; se exigir "todos de um PR antes do outro"
+estrito, falta um gate de PR.
+
+**Proxima acao:** confirmar #1184 verde pos-serializacao + undici. Avaliar gate de PR
+se o FIFO nao bastar.
+
+**Categoria:** infra / runner
+**Como medir:** `gh api orgs/advoq/actions/runners --jq '[.runners[]|select(.busy)]|length'`
+(deve ser <=1); serialize-runner.ps1 lista/desativa os services.
