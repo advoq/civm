@@ -47,7 +47,7 @@ param(
     # token do seu owner (TokenPaths). O stop-guard via SSH (Get-GuestHasActiveJob)
     # continua a salvaguarda final, independente de token.
     [string[]]$Repos = @(
-        'advoq/advoq',
+        'advoq/advoq', 'advoq/civm',
         'emersonbusson/advoqwhatsappapi', 'emersonbusson/chatwoot-realtime',
         'emersonbusson/n8n-engine', 'emersonbusson/typebot-runtime',
         'emersonbusson/vitae'
