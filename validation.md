@@ -526,3 +526,54 @@ sobre o par); acumular p95 sobre vários jobs pesados.
 
 **Proxima acao:** capturar o 1o par de dreno real no próximo E2E; com o p95,
 derivar `AdmitFloorGB` por §4.2 e fechar o 🟡.
+## 2026-06-19 -03 — Reaper de container de CI órfão (job-started) ✅/🟡
+
+**O que:** Validar o novo reaper de órfão não escopado a `_work` root
+(`internal/hook/hook.go::reapOrphanCIContainers`) que, na fronteira job-started
+(antes de o job subir o stack), derruba qualquer container RODANDO que publique
+uma porta fixa de CI conhecida OU tenha `com.docker.compose.project` começando com
+`advoq` — fix do incidente 2026-06-19 (órfão de minio em `127.0.0.1:9020` matou
+tenant-isolation no #1184/#1186 com "port is already allocated"). Mais a decisão de
+manter colisão de porta DETERMINÍSTICA no classificador do advoq (sem retry-sem-reap).
+
+**Categoria:** civm-ci-gate
+
+**Como medir:**
+`go test -race ./internal/hook/ ./internal/civm/` (unit);
+`go test -tags=integration -run TestIntegrationReapOrphan ./internal/hook/` (efeito real);
+`golangci-lint run -c .golangci.yml ./...`.
+
+**Dados medidos:**
+
+- Unit (`-race`): pacote `hook` **90,6%→91,3%** de cobertura; `reapOrphanCIContainers`,
+  `isCIOrphan`, `orphanIDsFromInspect` em **100%**. Pacote `civm` **95,8%**. `go test -race
+  ./...` da box **ALL GREEN**. golangci-lint `./...` (com e sem `-tags=integration`):
+  **0 issues**. gofmt limpo.
+- Integration (docker REAL) — EFEITO, não mock:
+  - `TestIntegrationReapOrphanRemovesRealLabeledContainer`: **PASS (6,29s)**. Subiu
+    um container REAL com label `com.docker.compose.project=advoq-integration-label`
+    (`--network none`), rodou o reaper contra o daemon REAL, afirmou que o container
+    **sumiu** (`docker ps -aq` vazio). Prova o sinal primário (label).
+  - `TestIntegrationReapOrphanFreesRealPort`: **SKIP** nesta box. O bridge/iptables do
+    WSL2 atual não consegue publicar porta (`iptables ... raw: Table does not exist`),
+    então o setup que prende a porta não roda. O teste self-skip (nunca falha) — vira
+    gate REAL no runner self-hosted, onde o bridge funciona, afirmando a porta LIBERADA
+    ponta a ponta.
+- Classificador advoq (`tools/devctl/internal/ci/failure.go`, repo advoq, commit/PR
+  separado): comentário de DECISÃO adicionado — colisão de porta NÃO ganha assinatura
+  transitória (#14). Com o reaper, a colisão não chega mais ao classificador; se chegar,
+  é bug real → fica determinística (`SigUnknown`), falha rápido. `go test ./internal/ci/`
+  do advoq: **verde** (mudança é só comentário).
+
+**Veredito:** ✅ o mecanismo central do reaper (detectar + remover um container REAL
+de CI órfão) está implementado, testado por EFEITO contra docker real, e verde com
+`-race`/lint. 🟡 residual: a liberação de porta ponta a ponta (`...FreesRealPort`) só
+foi exercida como SKIP nesta box (iptables WSL2 quebrado) — vira ✅ pleno no 1º run no
+runner self-hosted onde o bridge publica porta. Não houve incidente real pós-deploy
+para confirmar in-vivo ainda (o reaper ainda não rodou num job-started que tivesse um
+órfão de verdade).
+
+**Proxima acao:** rodar `...FreesRealPort` no runner self-hosted (bridge OK) e capturar
+um `docker_reap_orphan_ci` com `Path="reaped N orphan CI container(s)"` no
+`/var/log/civm/hooks.jsonl` num job-started real; commit na branch fix/orphan-port-reaper
+(sem push — review do usuário).

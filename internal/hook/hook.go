@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -215,6 +216,13 @@ func Run(ctx context.Context, opts Options) Result {
 		// so a prior job's root-owned (Docker-as-root) leftover does not make
 		// checkout fail with EACCES. Unconditional + non-destructive.
 		res.Actions = append(res.Actions, reclaimWorkspaceOwnership(ctx, opts)...)
+		// Reapa containers de CI órfãos ANTES de o job subir o stack: um órfão de
+		// um run anterior (job cancelado) OU de um runner REMOVIDO segura uma porta
+		// fixa de host e o "Start local backend stack" do job morre com "port is
+		// already allocated". Diferente de killWorkRootContainers (escopado ao
+		// _work root deste runner), este reaper NÃO é escopado a um root — é o único
+		// que pega o órfão de OUTRO runner. Best-effort, nunca trava o job.
+		res.Actions = append(res.Actions, reapOrphanCIContainers(ctx, opts)...)
 		// Cleanup dispara por pressão do guest-% OU do host V: (warn/crit). A
 		// metade host-aware pega o caso que o guest-% perde: guest enxuto, V: cheio.
 		if usedPct >= opts.PreCleanupPct || host.WantsCleanup() {
@@ -541,6 +549,136 @@ func killWorkRootContainers(ctx context.Context, opts Options, root string) Acti
 	}
 	a.Path = fmt.Sprintf("%s (killed %d orphan container(s))", root, len(orphans))
 	return a
+}
+
+// orphanInspectFormat é o template do `docker inspect` que emite, por container,
+// uma linha "ID|projeto-compose|portas-host". O projeto vem do label
+// com.docker.compose.project ("<no value>" quando ausente). As host ports vêm de
+// .HostConfig.PortBindings (o MAPA DE BINDINGS PEDIDO) — é ele que segura a
+// alocação da porta e causa "port is already allocated", e fica populado mesmo
+// quando .NetworkSettings.Ports vem vazio (contexto rootless). Usar '|' como
+// separador evita ambiguidade com o espaço entre as portas.
+const orphanInspectFormat = `{{.Id}}|{{index .Config.Labels "com.docker.compose.project"}}|` +
+	`{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{.HostPort}} {{end}}{{end}}`
+
+// reapOrphanCIContainers roda na fronteira job-started, ANTES de o job subir o
+// stack, e força-derruba qualquer container de CI ÓRFÃO box-wide. Diferente de
+// killWorkRootContainers (escopado ao _work root do próprio runner via
+// bind-mount), este reaper NÃO é escopado a um root — e por isso é o único que
+// pega o órfão de OUTRO runner (ex.: o repo-runner que foi REMOVIDO; seu _work
+// root sumiu, então nenhum hook escopado o reapa) ou de um container que ficou
+// segurando a porta sem o bind-mount esperado.
+//
+// INVARIANTE DE SEGURANÇA (por que não mata o stack do JOB ATUAL): o GitHub
+// Actions dispara o hook job-started ANTES de qualquer step do job rodar — e o
+// stack do job só sobe num step posterior ("Start local backend stack"). Logo,
+// na fronteira job-started o stack do job atual AINDA NÃO EXISTE: todo container
+// rodando que case o critério de órfão é, por construção, resíduo de um run/runner
+// ANTERIOR. (Numa box de 1 runner que executa um job por vez, não há peer
+// concorrente cujo stack pudéssemos matar por engano.)
+//
+// Best-effort: toda falha é Warning, nunca Error — higiene de job-started não
+// pode falhar o job (docker fora do ar, inspect quebrado etc. só viram warning).
+func reapOrphanCIContainers(ctx context.Context, opts Options) []Action {
+	a := Action{Name: "docker_reap_orphan_ci", Executed: opts.Execute}
+	if !opts.Execute {
+		return []Action{a}
+	}
+	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(civm.DefaultRoutineCleanupCmdTimeoutSecs)*time.Second)
+	defer cancel()
+	out, err := opts.RunFn(cmdCtx, "docker", "ps", "-q")
+	if err != nil {
+		a.Warning = "docker ps: " + err.Error()
+		return []Action{a}
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		return []Action{a}
+	}
+	inspectArgs := append([]string{"inspect", "--format", orphanInspectFormat}, ids...)
+	out, err = opts.RunFn(cmdCtx, "docker", inspectArgs...)
+	if err != nil {
+		a.Warning = "docker inspect: " + err.Error()
+		return []Action{a}
+	}
+	orphans := orphanIDsFromInspect(string(out))
+	if len(orphans) == 0 {
+		return []Action{a}
+	}
+	// stop (não kill): dá ao container a chance de soltar a porta limpo antes do
+	// rm; --time 5 limita a espera. Um stop que falha ainda cai no rm -f.
+	if _, err := opts.RunFn(cmdCtx, "docker", append([]string{"stop", "--time", "5"}, orphans...)...); err != nil {
+		a.Warning = fmt.Sprintf("docker stop %d orphan(s): %s", len(orphans), err.Error())
+	}
+	if _, err := opts.RunFn(cmdCtx, "docker", append([]string{"rm", "-f"}, orphans...)...); err != nil {
+		// rm -f que falha é o único caminho que deixa a porta presa; reporta, mas
+		// sem falhar o job (o bring-up subsequente vai expor a colisão de novo se
+		// realmente não liberou).
+		a.Warning = strings.TrimSpace(a.Warning + fmt.Sprintf(" docker rm %d orphan(s): %s", len(orphans), err.Error()))
+		return []Action{a}
+	}
+	a.Path = fmt.Sprintf("reaped %d orphan CI container(s)", len(orphans))
+	return []Action{a}
+}
+
+// orphanIDsFromInspect faz o parse da saída do orphanInspectFormat e devolve os
+// IDs órfãos. Função pura (sem I/O) para ser testável de forma hermética: cada
+// linha vira (id, projeto, hostPorts) e isCIOrphan decide. A ordem da entrada é
+// preservada, sem dedupe (o docker inspect já emite uma linha por ID único).
+func orphanIDsFromInspect(inspectOut string) []string {
+	var orphans []string
+	for _, line := range strings.Split(inspectOut, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		id := strings.TrimSpace(parts[0])
+		project := strings.TrimSpace(parts[1])
+		ports := strings.Fields(parts[2])
+		if id == "" {
+			continue
+		}
+		if isCIOrphan(project, ports) {
+			orphans = append(orphans, id)
+		}
+	}
+	return orphans
+}
+
+// isCIOrphan é o predicado puro do reaper: um container é órfão de CI quando
+//
+//	(a) seu project compose começa com DefaultCIOrphanProjectPrefix ("advoq")
+//	    — sinal PRIMÁRIO; o `devctl ci up` nomeia o project "<slot>-<run_id>"
+//	    com fallback "advoq", e o compose committed usa name: advoq, então o stack
+//	    inteiro carrega esse prefixo independente das portas; OU
+//	(b) ele publica uma das host ports FIXAS de CI conhecidas
+//	    (DefaultCIFixedHostPorts) — defesa em profundidade p/ um container que
+//	    segure a porta SEM o label esperado.
+//
+// O label "<no value>" do template (sem label) é tratado como string vazia, que
+// não casa o prefixo. A comparação de project é por prefixo case-insensitive
+// (nomes de project compose são lowercased).
+func isCIOrphan(project string, hostPorts []string) bool {
+	if p := strings.ToLower(strings.TrimSpace(project)); p != "" && p != "<no value>" &&
+		strings.HasPrefix(p, civm.DefaultCIOrphanProjectPrefix) {
+		return true
+	}
+	for _, hp := range hostPorts {
+		port, err := strconv.Atoi(strings.TrimSpace(hp))
+		if err != nil {
+			continue
+		}
+		for _, fixed := range civm.DefaultCIFixedHostPorts {
+			if port == fixed {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // reclaimWorkspaceOwnership runs at job-started, BEFORE actions/checkout, and

@@ -1416,6 +1416,363 @@ func TestJobStartedReclaimsWorkspaceOwnership(t *testing.T) {
 	}
 }
 
+// TestIsCIOrphan cobre o predicado puro do reaper de órfão: project começando com
+// o prefixo ("advoq") OU publicando uma porta fixa de CI conhecida classifica como
+// órfão; qualquer outra coisa não. O sinal do label é o primário; a porta é a
+// defesa em profundidade. Crucial p/ a disciplina #13: o critério tem que casar a
+// doc — "começa com advoq" é por PREFIXO, e "<no value>" (sem label) nunca casa.
+func TestIsCIOrphan(t *testing.T) {
+	tests := []struct {
+		name      string
+		project   string
+		hostPorts []string
+		want      bool
+	}{
+		{"project advoq exato", "advoq", nil, true},
+		{"project advoq-org-1184 (slot-runid do devctl)", "advoq-org-1184", nil, true},
+		{"project advoq-local (dev fallback)", "advoq-local", nil, true},
+		{"project ADVOQ uppercase (case-insensitive)", "ADVOQ-Org-9", nil, true},
+		{"porta fixa minio 9020 sem label", "<no value>", []string{"9020"}, true},
+		{"porta fixa nginx 81 sem label", "", []string{"81"}, true},
+		{"porta fixa entre outras não-fixas", "<no value>", []string{"40000", "9100", "40001"}, true},
+		{"sem label e sem porta fixa => não órfão", "<no value>", []string{"40000"}, false},
+		{"label vazio e porta vazia => não órfão", "", nil, false},
+		{"project de OUTRO produto não casa o prefixo", "harmya-org-3", []string{"40000"}, false},
+		{"prefixo só no meio do nome não casa", "my-advoq-stack", []string{"40000"}, false},
+		{"porta não-numérica é ignorada (não panica)", "<no value>", []string{"abc", "9020"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isCIOrphan(tt.project, tt.hostPorts); got != tt.want {
+				t.Errorf("isCIOrphan(%q, %v) = %v, want %v", tt.project, tt.hostPorts, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestOrphanIDsFromInspect prova o parser puro da saída do `docker inspect`
+// (formato "ID|projeto|portas"): só os IDs órfãos saem, linhas malformadas/vazias
+// são puladas sem panicar, e a ordem de entrada é preservada.
+func TestOrphanIDsFromInspect(t *testing.T) {
+	out := strings.Join([]string{
+		"aaa111|advoq-org-1184|9020 9021 ", // órfão por project
+		"bbb222|<no value>|81 ",            // órfão por porta fixa (nginx)
+		"ccc333|<no value>|40000 ",         // NÃO órfão (porta não-fixa, sem label)
+		"ddd444|harmya-org-2|40001 ",       // NÃO órfão (outro produto)
+		"",                                 // linha vazia → pulada
+		"malformed-line-without-pipes",     // sem '|' → pulada
+		"eee555|advoq|",                    // órfão por project, sem portas
+		"|advoq-org-7|9100 ",               // id vazio → pulada apesar do match
+	}, "\n")
+	got := orphanIDsFromInspect(out)
+	want := []string{"aaa111", "bbb222", "eee555"}
+	if len(got) != len(want) {
+		t.Fatalf("orphanIDsFromInspect = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("orphan[%d] = %q, want %q (got=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// TestReapOrphanCIContainersStopsAndRemoves prova a orquestração docker do reaper
+// via RunFn injetado (hermético, sem docker real): ele lista (ps -q), inspeciona,
+// e dá stop+rm SÓ nos órfãos. O efeito real (porta liberada) é provado pelo
+// integration test; aqui validamos a sequência de comandos e os alvos.
+func TestReapOrphanCIContainersStopsAndRemoves(t *testing.T) {
+	var calls [][]string
+	opts := Options{
+		Execute: true,
+		RunFn: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			calls = append(calls, append([]string{name}, args...))
+			switch {
+			case name == "docker" && len(args) >= 1 && args[0] == "ps":
+				return []byte("aaa111\nbbb222\nccc333\n"), nil
+			case name == "docker" && len(args) >= 1 && args[0] == "inspect":
+				// aaa=órfão(project), bbb=não-órfão, ccc=órfão(porta fixa minio).
+				return []byte("aaa111|advoq-org-5|40000 \n" +
+					"bbb222|<no value>|40001 \n" +
+					"ccc333|<no value>|9020 \n"), nil
+			}
+			return nil, nil
+		},
+	}
+
+	actions := reapOrphanCIContainers(context.Background(), opts)
+
+	if len(actions) != 1 || actions[0].Name != "docker_reap_orphan_ci" {
+		t.Fatalf("expected single docker_reap_orphan_ci action, got %+v", actions)
+	}
+	if actions[0].Warning != "" || actions[0].Error != "" {
+		t.Errorf("happy path must have no warning/error, got %+v", actions[0])
+	}
+	// Procura o stop e o rm; ambos devem mirar EXATAMENTE aaa111 e ccc333 (não bbb222).
+	var stopArgs, rmArgs []string
+	for _, c := range calls {
+		if len(c) >= 2 && c[0] == "docker" && c[1] == "stop" {
+			stopArgs = c
+		}
+		if len(c) >= 3 && c[0] == "docker" && c[1] == "rm" && c[2] == "-f" {
+			rmArgs = c
+		}
+	}
+	if stopArgs == nil {
+		t.Fatalf("no docker stop call; calls=%v", calls)
+	}
+	if rmArgs == nil {
+		t.Fatalf("no docker rm -f call; calls=%v", calls)
+	}
+	joinedStop := strings.Join(stopArgs, " ")
+	joinedRm := strings.Join(rmArgs, " ")
+	for _, want := range []string{"aaa111", "ccc333"} {
+		if !strings.Contains(joinedStop, want) {
+			t.Errorf("docker stop missing orphan %s; got %q", want, joinedStop)
+		}
+		if !strings.Contains(joinedRm, want) {
+			t.Errorf("docker rm missing orphan %s; got %q", want, joinedRm)
+		}
+	}
+	if strings.Contains(joinedRm, "bbb222") {
+		t.Errorf("docker rm must NOT touch non-orphan bbb222; got %q", joinedRm)
+	}
+}
+
+// TestReapOrphanCIContainersBestEffort prova o invariante de segurança da
+// fronteira job-started: falha do docker (ps erra, ou rm erra) NUNCA vira Error —
+// só Warning. Higiene de job-started não pode falhar o job.
+func TestReapOrphanCIContainersBestEffort(t *testing.T) {
+	t.Run("docker ps falha => warning, sem error", func(t *testing.T) {
+		opts := Options{
+			Execute: true,
+			RunFn: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+				return nil, fmt.Errorf("Cannot connect to the Docker daemon")
+			},
+		}
+		actions := reapOrphanCIContainers(context.Background(), opts)
+		if len(actions) != 1 {
+			t.Fatalf("want 1 action, got %d", len(actions))
+		}
+		if actions[0].Error != "" {
+			t.Errorf("docker ps failure must be Warning, not Error: %+v", actions[0])
+		}
+		if actions[0].Warning == "" {
+			t.Errorf("docker ps failure should surface a Warning: %+v", actions[0])
+		}
+	})
+
+	t.Run("docker rm falha => warning, sem error", func(t *testing.T) {
+		opts := Options{
+			Execute: true,
+			RunFn: func(_ context.Context, name string, args ...string) ([]byte, error) {
+				switch args[0] {
+				case "ps":
+					return []byte("aaa111\n"), nil
+				case "inspect":
+					return []byte("aaa111|advoq-org-1|\n"), nil
+				case "rm":
+					return nil, fmt.Errorf("device or resource busy")
+				}
+				return nil, nil
+			},
+		}
+		actions := reapOrphanCIContainers(context.Background(), opts)
+		if actions[0].Error != "" {
+			t.Errorf("docker rm failure must be Warning, not Error: %+v", actions[0])
+		}
+		if actions[0].Warning == "" {
+			t.Errorf("docker rm failure should surface a Warning: %+v", actions[0])
+		}
+	})
+
+	t.Run("dry-run não chama docker", func(t *testing.T) {
+		called := false
+		opts := Options{
+			Execute: false,
+			RunFn: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+				called = true
+				return nil, nil
+			},
+		}
+		actions := reapOrphanCIContainers(context.Background(), opts)
+		if called {
+			t.Errorf("dry-run must not invoke docker")
+		}
+		if len(actions) != 1 || actions[0].Executed {
+			t.Errorf("dry-run action should be non-executed, got %+v", actions)
+		}
+	})
+
+	t.Run("nenhum container rodando => no-op limpo", func(t *testing.T) {
+		opts := Options{
+			Execute: true,
+			RunFn: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				if len(args) >= 1 && args[0] == "ps" {
+					return []byte("\n"), nil
+				}
+				t.Errorf("inspect/stop/rm must not run when no containers are up; args=%v", args)
+				return nil, nil
+			},
+		}
+		actions := reapOrphanCIContainers(context.Background(), opts)
+		if actions[0].Warning != "" || actions[0].Error != "" {
+			t.Errorf("empty ps must be clean no-op, got %+v", actions[0])
+		}
+	})
+
+	t.Run("docker inspect falha => warning, sem error", func(t *testing.T) {
+		opts := Options{
+			Execute: true,
+			RunFn: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				switch args[0] {
+				case "ps":
+					return []byte("aaa111\n"), nil
+				case "inspect":
+					return nil, fmt.Errorf("no such object")
+				}
+				t.Errorf("stop/rm must not run after inspect fails; args=%v", args)
+				return nil, nil
+			},
+		}
+		actions := reapOrphanCIContainers(context.Background(), opts)
+		if actions[0].Error != "" {
+			t.Errorf("docker inspect failure must be Warning, not Error: %+v", actions[0])
+		}
+		if actions[0].Warning == "" {
+			t.Errorf("docker inspect failure should surface a Warning: %+v", actions[0])
+		}
+	})
+
+	t.Run("containers rodando mas NENHUM órfão => no-op sem stop/rm", func(t *testing.T) {
+		opts := Options{
+			Execute: true,
+			RunFn: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				switch args[0] {
+				case "ps":
+					return []byte("zzz999\n"), nil
+				case "inspect":
+					// Outro produto, porta não-fixa => não órfão.
+					return []byte("zzz999|harmya-org-1|40000 \n"), nil
+				}
+				t.Errorf("stop/rm must not run when no orphan is found; args=%v", args)
+				return nil, nil
+			},
+		}
+		actions := reapOrphanCIContainers(context.Background(), opts)
+		if actions[0].Warning != "" || actions[0].Error != "" {
+			t.Errorf("no-orphan run must be clean no-op, got %+v", actions[0])
+		}
+	})
+
+	t.Run("stop falha mas rm sucede => warning de stop, sem error, container removido", func(t *testing.T) {
+		var rmCalled bool
+		opts := Options{
+			Execute: true,
+			RunFn: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				switch args[0] {
+				case "ps":
+					return []byte("aaa111\n"), nil
+				case "inspect":
+					return []byte("aaa111|advoq-org-1|\n"), nil
+				case "stop":
+					return nil, fmt.Errorf("stop timeout")
+				case "rm":
+					rmCalled = true
+					return nil, nil
+				}
+				return nil, nil
+			},
+		}
+		actions := reapOrphanCIContainers(context.Background(), opts)
+		if actions[0].Error != "" {
+			t.Errorf("stop failure must not be Error (rm is the real reclaim): %+v", actions[0])
+		}
+		if actions[0].Warning == "" {
+			t.Errorf("stop failure should surface a Warning: %+v", actions[0])
+		}
+		if !rmCalled {
+			t.Errorf("rm must still run after a failed stop (stop failure must not abort the reclaim)")
+		}
+	})
+}
+
+// TestJobStartedRunsOrphanReaper prova a integração no caminho Run/job-started: o
+// reaper roda na fronteira (ação docker_reap_orphan_ci presente) mesmo num disco
+// saudável (sem disk-pressure cleanup), como reclaimWorkspaceOwnership.
+func TestJobStartedRunsOrphanReaper(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RUNNER_TEMP", "")
+	t.Setenv("GITHUB_WORKSPACE", "")
+	t.Setenv("GITHUB_REPOSITORY", "")
+	t.Setenv("GITHUB_RUN_ID", "")
+
+	var reapedID string
+	opts := DefaultOptionsFromEnv(EventJobStarted)
+	opts.Execute = true
+	opts.PreCleanupPct = 99 // disco saudável -> sem cleanup gated
+	opts.HardFailPct = 100
+	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 70, nil }
+	opts.RemoveAllFn = func(string) error { return nil }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+	opts.LogPath = ""
+	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
+	opts.HostDiskFn = func() (hostdisk.Report, error) {
+		return hostdisk.Report{Metrics: hostdisk.Metrics{VFreeGB: 66}, Level: "ok"}, nil
+	}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "docker" && len(args) >= 1 {
+			switch args[0] {
+			case "ps":
+				return []byte("dead001\n"), nil
+			case "inspect":
+				return []byte("dead001|advoq-org-1186|9020 \n"), nil
+			case "rm":
+				reapedID = "dead001"
+			}
+		}
+		return nil, nil
+	}
+
+	res := Run(context.Background(), opts)
+
+	if res.ExitCode != 0 {
+		t.Fatalf("orphan reaper at job-started must not fail the hook; res=%+v", res)
+	}
+	var sawAction bool
+	for _, a := range res.Actions {
+		if a.Name == "docker_reap_orphan_ci" {
+			sawAction = true
+		}
+	}
+	if !sawAction {
+		t.Errorf("no docker_reap_orphan_ci action at job-started; actions=%+v", res.Actions)
+	}
+	if reapedID != "dead001" {
+		t.Errorf("orphan dead001 was not reaped via docker rm; reapedID=%q", reapedID)
+	}
+}
+
+// TestCIFixedHostPortsCoverIncidentPort é a regressão do incidente 2026-06-19: a
+// porta do minio (9020) que matou tenant-isolation no #1184/#1186 DEVE estar no
+// set de portas fixas do reaper, senão um órfão de minio sem o label escaparia da
+// defesa em profundidade.
+func TestCIFixedHostPortsCoverIncidentPort(t *testing.T) {
+	const minioAPIPort = 9020
+	found := false
+	for _, p := range civm.DefaultCIFixedHostPorts {
+		if p == minioAPIPort {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("DefaultCIFixedHostPorts must include the 2026-06-19 incident port %d (minio API)", minioAPIPort)
+	}
+	if !isCIOrphan("<no value>", []string{fmt.Sprint(minioAPIPort)}) {
+		t.Errorf("a container publishing only %d must be classified as a CI orphan", minioAPIPort)
+	}
+}
+
 // FuzzSafeWorkRoot enforces the safety invariant of safeWorkRoot for arbitrary
 // input. Anything safeWorkRoot accepts must, after filepath.Clean, contain
 // "/home/" and "/actions-runner", and end in "/_work" — i.e. no path the

@@ -138,6 +138,56 @@ const (
 	DefaultRunnerPortWindowEnd  = 32000 // < faixa ephemeral do kernel (32768+)
 	DefaultPortBlockStatePath   = "/var/lib/civm/port-blocks.json"
 
+	// Reaper de container órfão na fronteira job-started (docs/specs/orphan-port-reaper).
+	// O CI do advoq sobe um stack docker-compose com PORTAS FIXAS de host (minio em
+	// 127.0.0.1:9020, nginx em :81, etc.). Quando um run anterior não é derrubado
+	// — job cancelado, OU o runner que o subiu foi REMOVIDO — o container vira
+	// órfão e segura a porta fixa: o próximo job morre em "Bind for 127.0.0.1:9020
+	// failed: port is already allocated" (incidente real 2026-06-19, matou
+	// tenant-isolation no #1184/#1186). O reaper do hook
+	// (killWorkRootContainers) só pega órfãos sob o _work root do PRÓPRIO runner —
+	// um órfão de OUTRO runner (root diferente) escapa. Aqui o sinal NÃO é o _work
+	// root: numa box de 1 runner, na fronteira job-started (ANTES de o job subir o
+	// stack), todo container cujo project compose começa com este prefixo é órfão
+	// por definição.
+	DefaultCIOrphanProjectPrefix = "advoq"
+)
+
+// DefaultCIFixedHostPorts é o backstop por-porta do reaper de órfão: os hosts
+// ports FIXOS que o compose committed do advoq publica em 127.0.0.1 (defaults de
+// infra/docker-compose.yml + infra/docker-compose.override.yml). A detecção
+// PRIMÁRIA é o label com.docker.compose.project (DefaultCIOrphanProjectPrefix),
+// que pega o stack inteiro independente da porta; esta lista é defesa em
+// profundidade para um container que segure uma dessas portas SEM o label
+// (ex.: container avulso, ou label perdido). Mantida em sync com os defaults do
+// compose — se um default mudar lá, atualize aqui (a mesma disciplina do
+// schema-contract). A porta 9020 (minio) é a do incidente 2026-06-19.
+var DefaultCIFixedHostPorts = []int{
+	81,   // nginx (LOCAL_NGINX_PORT)
+	3010, // web (LOCAL_WEB_PORT)
+	3011, // grafana (LOCAL_GRAFANA_PORT)
+	5433, // postgres em make up (LOCAL_PG_PORT, default do compose base)
+	5443, // postgres em make up-local (LOCAL_PG_PORT, default do override)
+	6389, // redis (LOCAL_REDIS_PORT)
+	8088, // ms-finance (LOCAL_MS_FINANCE_PORT)
+	8101, // ms-auth (LOCAL_MS_AUTH_PORT)
+	8102, // ms-provisioner (LOCAL_MS_PROVISIONER_PORT)
+	8103, // ms-core (LOCAL_MS_CORE_PORT)
+	8104, // ms-billing (LOCAL_MS_BILLING_PORT)
+	8105, // ms-docs (LOCAL_MS_DOCS_PORT)
+	8106, // ms-chat (LOCAL_MS_CHAT_PORT)
+	8107, // ms-scheduler (LOCAL_MS_SCHEDULER_PORT)
+	8108, // ms-previdenciario (LOCAL_MS_PREVIDENCIARIO_PORT)
+	8109, // ms-jurisprudencia (LOCAL_MS_JURISPRUDENCIA_PORT)
+	8110, // evolution node 1 (LOCAL_EVOLUTION_NODE_1_PORT)
+	8111, // evolution node 2 (LOCAL_EVOLUTION_NODE_2_PORT)
+	9020, // minio API (LOCAL_MINIO_API_PORT) — porta do incidente 2026-06-19
+	9021, // minio console (LOCAL_MINIO_CONSOLE_PORT)
+	9100, // prometheus (LOCAL_PROMETHEUS_PORT)
+}
+
+const (
+
 	// Serialização de trabalho docker-heavy box-wide (docs/specs/multi-project-isolation,
 	// ITEM-4). Um único lock global protege qualquer operação que aloca recursos
 	// do daemon (docker compose up/down/run, docker build/buildx, docker pull).
