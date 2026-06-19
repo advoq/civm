@@ -928,6 +928,14 @@ func TestJobCompletedUsesGentleDockerSequence(t *testing.T) {
 	t.Setenv("GITHUB_WORKSPACE", "")
 	t.Setenv("GITHUB_REPOSITORY", "")
 	t.Setenv("GITHUB_RUN_ID", "")
+	// Hermetico: o reapRunImages (#137) deriva o escopo de CIVM_RUNNER_SLOT /
+	// COMPOSE_PROJECT_NAME (env do runner real na box da CI). Sem limpar os dois, na
+	// box o reap roda `image prune -a -f --filter label=<scope>` (scoped, seguro) e a
+	// checagem de "no -a" deste teste — que mira a sequencia gentle BASE — quebra.
+	// O reap scoped tem cobertura propria (TestJobCompletedReapsOwnRunImages,
+	// TestRunImageReapNeverUnscopedPruneAll); aqui isolamos so a base.
+	t.Setenv("CIVM_RUNNER_SLOT", "")
+	t.Setenv("COMPOSE_PROJECT_NAME", "")
 	var commands []string
 	opts := DefaultOptionsFromEnv(EventJobCompleted)
 	opts.Execute = true
