@@ -155,11 +155,15 @@ function Invoke-GuestFullClean {
     $sshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new')
     if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) { $sshArgs += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath) }
     $sshArgs += $GuestSshTarget
-    # df --output=avail evita o awk e tr -dc 0-9 evita o arg de espaco: ambos os
-    # escapes ($4 do awk e o " " do tr) via PowerShell -> SSH -> bash corrompiam o
-    # campo, deixando o ssh sair non-zero e gerando um guest_full_clean_warn
-    # cosmetico (a limpeza ja rodava; so o log do free_after falhava).
-    $remote = 'rm -rf ~/.cache/* 2>/dev/null; sudo docker system prune -af --volumes >/dev/null 2>&1; df -BG --output=avail / | tail -1 | tr -dc 0-9'
+    # Deep clean (#137): alem dos caches dos 7 repos, remove o que so crescia e
+    # nunca era limpo — _diag (logs do runner), o conteudo de _work exceto _tool
+    # (hosted node/go cache, caro de re-baixar), journal e /tmp. Sem isso o piso
+    # "limpo" caia de ~51 pra ~47 ao longo das runs, e a E2E (builda ~35GB de
+    # imagens num job) batia no panic floor. df --output=avail evita o awk e o
+    # tr -dc 0-9 evita o arg de espaco: os escapes via PowerShell -> SSH -> bash
+    # corrompiam o campo, deixando o ssh sair non-zero (guest_full_clean_warn
+    # cosmetico — a limpeza ja rodava, so o log do free_after falhava).
+    $remote = 'rm -rf ~/.cache/* 2>/dev/null; rm -rf ~/actions-runner*/_diag/* 2>/dev/null; for w in ~/actions-runner*/_work; do find "$w" -maxdepth 1 -mindepth 1 ! -name _tool -exec rm -rf {} + 2>/dev/null; done; sudo journalctl --vacuum-size=50M >/dev/null 2>&1; sudo rm -rf /tmp/* /var/tmp/* 2>/dev/null; sudo docker system prune -af --volumes >/dev/null 2>&1; sudo docker builder prune -af >/dev/null 2>&1; df -BG --output=avail / | tail -1 | tr -dc 0-9'
     try { $free = (& ssh @sshArgs $remote 2>&1 | Select-Object -Last 1); Write-OrcLog 'guest_full_clean' @{ free_after = "$free" } }
     catch { Write-OrcLog 'guest_full_clean_warn' @{ error = $_.Exception.Message } 'WARN' }
 }

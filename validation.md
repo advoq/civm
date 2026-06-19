@@ -371,3 +371,73 @@ ainda nao disparou num evento real (VM Off + fila + V<51); vira ✅ pleno no 1o
 disparo medido no log (watch em curso). O #1182 atual comecou pre-barreira.
 
 **Proxima acao:** capturar o 1o reclaim_before_admit ao vivo; commit.
+
+## 2026-06-18 19:17 -03 — Deep-clean do guest sobe o piso de disco 47->54 (E2E builda 35GB)
+
+**O que:** A main CI de 2026-06-18 matou E2E + Go CI por `panic_disk`. Raiz: o piso
+"limpo" do disco caiu de ~51 pra ~47-49 ao longo das runs — o `Invoke-GuestFullClean`
+so removia ~/.cache + docker prune, nunca limpava _diag, _work, journal nem /tmp. A
+E2E Tenant Isolation builda ~35GB de imagens num job (sobe o stack inteiro); com piso
+47, 47-35=12 < 18 (panic floor) e o panic mata o job. So 2 de 20 runs historicas da
+E2E passaram (8 cancelled, 10 failure).
+
+**Dados medidos:**
+
+- Piso ANTES (panic clean parcial): 47-49. Log: `disk_panic v_free_gb:15` na E2E;
+  `guest_full_clean free_after:48` num panic — parcial porque base-images e o _work
+  do job ativo resistem mid-job.
+- Breakdown do guest (SSH via task SYSTEM, mid-job): ~/.cache 7.6G (yarn 4.3 +
+  go-build 3.3), _work 5.5G (3 runners), _diag 1.0G, docker ~40G.
+- Fix (deployado == repo, branch fix/deep-clean-guest-floor c50072e): o
+  `Invoke-GuestFullClean` agora remove _diag, o conteudo de _work exceto _tool
+  (hosted node/go, caro de re-baixar), faz vacuum do journal e limpa /tmp, alem do
+  docker system + builder prune. Teste de scan (guest_clean_depth_test) trava os alvos.
+- Piso DEPOIS (experimento idle controlado controlled-deepclean.ps1, sem job):
+  `vbefore=49 -> guest_free_after=50 -> vafter=54`. +5-7GB. O guest "limpo" ainda usa
+  ~58GB (OS + _tool preservado + sistema).
+
+**Veredito:** 🟡 o deep-clean FUNCIONA (piso 47->54, medido), mas 54 e MARGINAL pro
+E2E: 54-35=19, so 1GB acima do panic floor (18). O `warn_clean` compra margem na
+drenagem, entao provavelmente passa — mas no talo. Decisao do usuario: deixar rodar +
+monitorar; se o E2E panicar a 54, ir agressivo (remover _tool tambem, ~58).
+
+**Proxima acao:** medir o E2E rerun real a 54 (watch bemw5w9bf); se panic, deep-clean
+agressivo. Com ok do usuario, criar/mergear fix/deep-clean-guest-floor +
+fix/bump-undici-tls.
+
+**Categoria:** infra / disco
+**Como medir:** experimento controlled-deepclean.ps1 (piso idle); `Get-Content
+V:\civm-orchestrator.log | Select-String reclaim_done` (V: pos-reclaim ao vivo).
+
+## 2026-06-18 20:35 -03 — Serializacao: box tinha 2 runners (concurrent prune matava jobs)
+
+**O que:** O usuario apontou que 2 PRs rodavam checks ao mesmo tempo na box, violando
+a fila. Raiz: a box tinha DOIS runner instances aceitando advoq jobs — civm-advoq
+(repo-level, advoq/advoq) + civm-advoq-org (org-level, advoq/advoq + advoq/civm),
+ambos com label civm. Um advoq job caia em qualquer um -> 2 jobs concorrentes no
+mesmo disco. O 51GB/deep-clean nao bastava; faltava serializar o runner.
+
+**Dados medidos:**
+
+- Sintoma no #1184: ms-billing e ms-core falharam com "The operation was canceled" +
+  "docker pull postgres:16-alpine/redis:8-alpine — retry (concurrent prune on shared
+  civm runner)". Um runner podava enquanto o outro puxava imagem -> job morto. O
+  govulncheck dos dois passou (codigo compila) -> nao era bug de codigo.
+- Fix: systemctl disable do REPO runner civm-advoq, mantendo o ORG runner
+  civm-advoq-org (serve advoq/advoq + advoq/civm num so runner). A 1a tentativa
+  desativou o ERRADO (o org, que quebraria a CI da civm); o output do script pegou e
+  corrigi com swap. Repos pessoais (vitae etc.) intactos.
+- VALIDACAO: watch do runner busy durante o re-run do #1184 -> pico busy=1 (nunca 2).
+  Serializado provado na coisa.
+
+**Veredito:** ✅ serializado — 1 runner de advoq (o org), busy peak=1 medido. As falhas
+de concurrent-prune (ms-billing/ms-core) nao recorrem. 🟡 residual: 1 runner da
+job-serial FIFO, nao strict PR-grouping; se exigir "todos de um PR antes do outro"
+estrito, falta um gate de PR.
+
+**Proxima acao:** confirmar #1184 verde pos-serializacao + undici. Avaliar gate de PR
+se o FIFO nao bastar.
+
+**Categoria:** infra / runner
+**Como medir:** `gh api orgs/advoq/actions/runners --jq '[.runners[]|select(.busy)]|length'`
+(deve ser <=1); serialize-runner.ps1 lista/desativa os services.
