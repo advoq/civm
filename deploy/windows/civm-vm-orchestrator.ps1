@@ -58,6 +58,11 @@ param(
     # mas o disco NUNCA enche). Ver Get-OrchestratorDecision.
     [int]$WarnFloorGB = 28,
     [int]$PanicFloorGB = 18,
+    # Piso do boundary_compact (V: livre em GB): no GAP entre sequencias de PR
+    # (Running==0 + Queued>0) compacta de graca quando o disco caiu abaixo disto.
+    # 40 fica folgado sobre o warn (28)/panic (18) e abaixo do admit (51). Ver
+    # Get-OrchestratorDecision (BoundaryCompactFloorGB) pro raciocinio do numero.
+    [int]$BoundaryCompactFloorGB = 40,
     [string]$StatePath = 'V:\civm-orchestrator-state.json',
     [string]$LogPath = 'V:\civm-orchestrator.log',
     # Lock canonico de reclaim (SPECv3 DT-v3-3): exclusao mutua com qualquer outro
@@ -302,7 +307,7 @@ try {
     # Decide no modulo puro testado (civm-orchestrator-decision.test.ps1); o
     # switch abaixo so EXECUTA a acao. A probe SSH e lazy: Get-OrchestratorDecision
     # so a chama no gate de stop. VFreeGB + CanPanic armam a seguranca de disco.
-    $decision = Get-OrchestratorDecision -VmState "$($vm.State)" -Queued $queued -Running $running -IdleMinutes $idleMin -IdleStopMinutes $IdleStopMinutes -HasActiveJobProbe { Get-GuestHasActiveJob } -VFreeGB $vfree -WarnFloorGB $WarnFloorGB -PanicFloorGB $PanicFloorGB -CanPanic $canPanic -AdmitFloorGB $AdmitFloorGB -GuestFreeGB $guestFree -AdmitReclaimAttempts ([int]$state.admitReclaimAttempts)
+    $decision = Get-OrchestratorDecision -VmState "$($vm.State)" -Queued $queued -Running $running -IdleMinutes $idleMin -IdleStopMinutes $IdleStopMinutes -HasActiveJobProbe { Get-GuestHasActiveJob } -VFreeGB $vfree -WarnFloorGB $WarnFloorGB -PanicFloorGB $PanicFloorGB -BoundaryCompactFloorGB $BoundaryCompactFloorGB -CanPanic $canPanic -AdmitFloorGB $AdmitFloorGB -GuestFreeGB $guestFree -AdmitReclaimAttempts ([int]$state.admitReclaimAttempts)
 
     switch ($decision) {
         'noop_off' { }
@@ -343,6 +348,22 @@ try {
             # online (cache de build + fstrim), SEM desligar, SEM matar job.
             if ($Observe) { Write-OrcLog 'would_warn_clean' @{ v_free_gb = $vfree; floor = $WarnFloorGB } }
             else { Write-OrcLog 'disk_warn' @{ v_free_gb = $vfree; floor = $WarnFloorGB }; Invoke-GuestWarnClean }
+        }
+        'boundary_compact' {
+            # FRONTEIRA entre sequencias de PR (Running==0 + Queued>0 + V baixo):
+            # compacta no GAP. Mesmo mecanismo do panic (Stop-VM + Optimize offline),
+            # mas aqui NAO mata job — nenhum esta in_progress. Por isso NAO precisa de
+            # cooldown (o cooldown do panic existe so pra nao re-matar jobs em loop). O
+            # lock canonico V:\civm-reclaim.lock + o gate pos-Off Test-OptimizeSlack
+            # do Invoke-StopAndCompact valem aqui tambem. Apos compactar (VM Off), o
+            # proximo tick religa pela logica 'start' porque Queued>0 (cold start). Se
+            # a folga pos-Off nao cobrir o scratch, o proprio Invoke-StopAndCompact
+            # pula (reclaim_skip_insufficient_slack) — nao empurra o V: abaixo do piso.
+            if ($Observe) { Write-OrcLog 'would_boundary_compact' @{ v_free_gb = $vfree; floor = $BoundaryCompactFloorGB; queued = $queued } }
+            else {
+                Write-OrcLog 'disk_boundary_compact' @{ v_free_gb = $vfree; floor = $BoundaryCompactFloorGB; queued = $queued; note = 'gap entre PRs -> compacta sem matar job (Running==0)' }
+                Invoke-StopAndCompact -Reason 'boundary_compact'
+            }
         }
         'panic_compact' {
             # Disco CRITICO (V < PanicFloor): compacta MESMO ocupado. Mata os jobs

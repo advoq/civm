@@ -25,6 +25,22 @@ $cases = @(
     @{ vm = 'Running'; q = 9; r = 2; idle = 0; stop = 10; job = $F; vfree = 0; exp = 'mark_busy'; d = 'BUSY + V=0 (medida falhou) -> fail-safe, busy (#15)' },
     @{ vm = 'Running'; q = 9; r = 2; idle = 0; stop = 10; job = $F; vfree = 15; cp = $F; exp = 'warn_clean'; d = 'BUSY + V<18 + cooldown -> rebaixa pra warn (nao re-mata)' },
     @{ vm = 'Running'; q = 9; r = 2; idle = 0; stop = 10; job = $F; vfree = 15; cp = $T; exp = 'panic_compact'; d = 'BUSY + V<18 fora do cooldown -> panic' },
+    # --- BOUNDARY-COMPACT: gap entre sequencias de PR (Running==0 + Queued>0 + V<40) ---
+    # Compacta no GAP sem matar job (nenhum in_progress). O panic (que mata job)
+    # continua o fallback pra fila tao colada que Running nunca chega a 0 antes de V<18.
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 35; exp = 'boundary_compact'; d = 'GAP: Running=0 + Queued>0 + V<40 -> compacta no gap (sem matar job)' },
+    @{ vm = 'Running'; q = 3; r = 0; idle = 0; stop = 10; job = $F; vfree = 45; exp = 'mark_busy'; d = 'GAP mas V=45 (>40, folgado) -> NAO compacta, segue busy (poupa cold-start)' },
+    @{ vm = 'Running'; q = 1; r = 2; idle = 0; stop = 10; job = $F; vfree = 35; exp = 'mark_busy'; d = 'V<40 mas Running=2 (job rodando) -> mark_busy inalterado (NAO mata job)' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 40; exp = 'mark_busy'; d = 'GAP + V=40 (==floor, nao <) -> mark_busy (boundary estrito)' },
+    @{ vm = 'Running'; q = 0; r = 0; idle = 0; stop = 10; job = $F; vfree = 35; exp = 'idle_debounce'; d = 'V<40 mas Queued=0 (nada na fila) -> nao ha gap a compactar, cai no idle' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 0; exp = 'mark_busy'; d = 'GAP + V=0 (medida falhou) -> fail-safe, mark_busy (nao compacta por medida ruim, #15)' },
+    # Precedencia: panic (V<18) fica ANTES do boundary na cadeia e usa hasWork=(Q+R)>0,
+    # nao Running>0. Com Q=1/R=0/V<18 o panic dispara primeiro — e tudo bem: Running==0,
+    # entao o panic NAO mata job (compacta igual ao boundary). A unica diferenca e o
+    # cooldown/label, inofensivo aqui. Deixar panic ganhar < 18 mantem o piso critico
+    # uniforme (nao re-deriva V<18 entre dois caminhos). Boundary cobre a faixa 18..40.
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 15; cp = $T; exp = 'panic_compact'; d = 'GAP mas V<18: panic dispara antes (hasWork), e OK pois Running==0 nao mata job' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 25; exp = 'warn_clean'; d = 'GAP mas V<28: warn dispara antes do boundary (V na faixa de warn) -> poda online' },
     # --- OCIOSA + V baixo -> stop_and_compact (Optimize offline -> V:~51), NAO warn/panic ---
     @{ vm = 'Running'; q = 0; r = 0; idle = 30; stop = 10; job = $F; vfree = 25; exp = 'stop_and_compact'; d = 'IDLE + V<28 + idle>10 -> compacta FULL (o fix: nao warn online)' },
     @{ vm = 'Running'; q = 0; r = 0; idle = 30; stop = 10; job = $F; vfree = 15; exp = 'stop_and_compact'; d = 'IDLE + V<18 + idle>10 -> compacta FULL (o fix: nao panic)' },
