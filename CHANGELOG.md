@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.21.0](https://github.com/advoq/civm/compare/v1.20.0...v1.21.0) (2026-06-19)
+
+
+### Features
+
+* **devctl:** add boundary_compact to reclaim VHDX in PR gaps ([#144](https://github.com/advoq/civm/issues/144)) ([b64c834](https://github.com/advoq/civm/commit/b64c834b7fd318f830fedc2e71964c19f3fb9c60))
+* **orchestrator:** boundary_compact + deep-clean to hold CI disk floor ([#140](https://github.com/advoq/civm/issues/140)) ([6682f07](https://github.com/advoq/civm/commit/6682f07f6c8ef16ab2743fb574cd8a6d7adeeec6))
+* **runner:** codify durable advoq runner serialization (remove, not disable) ([#141](https://github.com/advoq/civm/issues/141)) ([fbf1565](https://github.com/advoq/civm/commit/fbf156535df4f5bec907f85c4315889458fdd12d))
+
+
+### Bug Fixes
+
+* **hook:** cut CI disk source — V: drain metering + orphan/image reap ([#143](https://github.com/advoq/civm/issues/143)) ([9c34ff2](https://github.com/advoq/civm/commit/9c34ff26a15863a01f49e597a6b937bb2c55203f))
+
 ## [1.20.0](https://github.com/advoq/civm/compare/v1.19.0...v1.20.0) (2026-06-18)
 
 
