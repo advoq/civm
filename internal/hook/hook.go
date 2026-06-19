@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -90,10 +91,16 @@ type Options struct {
 	GitHubWorkspace string
 	Repository      string
 	RunID           string
-	LogPath         string
-	Now             time.Time
-	RunFn           func(ctx context.Context, name string, args ...string) ([]byte, error)
-	RemoveAllFn     func(path string) error
+	// ComposeProject é o COMPOSE_PROJECT_NAME/slot deste runner, injetado no .env
+	// pelo `hook install` (CIVM_RUNNER_SLOT). O job-completed o usa para escopar o
+	// reap das imagens de run ao compose project deste runner — box-único, então um
+	// sibling nunca é tocado. Vazio (env degradado) → o reap vira no-op (fail-safe:
+	// sem escopo seguro, não se reapa imagem taggeada).
+	ComposeProject string
+	LogPath        string
+	Now            time.Time
+	RunFn          func(ctx context.Context, name string, args ...string) ([]byte, error)
+	RemoveAllFn    func(path string) error
 	// SafeWorkDeleteFn removes one top-level _work entry, escalating to the
 	// privileged wrapper only when a root-owned file (a containerized CI step
 	// ran as root and wrote into the mounted _work) blocks the unprivileged
@@ -133,6 +140,7 @@ func DefaultOptionsFromEnv(event Event) Options {
 		GitHubWorkspace: os.Getenv("GITHUB_WORKSPACE"),
 		Repository:      os.Getenv("GITHUB_REPOSITORY"),
 		RunID:           os.Getenv("GITHUB_RUN_ID"),
+		ComposeProject:  composeProjectFromEnv(),
 		LogPath:         civm.DefaultHooksLogPath,
 		Now:             time.Now(),
 		RunFn:           defaultRun,
@@ -215,6 +223,13 @@ func Run(ctx context.Context, opts Options) Result {
 		// so a prior job's root-owned (Docker-as-root) leftover does not make
 		// checkout fail with EACCES. Unconditional + non-destructive.
 		res.Actions = append(res.Actions, reclaimWorkspaceOwnership(ctx, opts)...)
+		// Reapa containers de CI órfãos ANTES de o job subir o stack: um órfão de
+		// um run anterior (job cancelado) OU de um runner REMOVIDO segura uma porta
+		// fixa de host e o "Start local backend stack" do job morre com "port is
+		// already allocated". Diferente de killWorkRootContainers (escopado ao
+		// _work root deste runner), este reaper NÃO é escopado a um root — é o único
+		// que pega o órfão de OUTRO runner. Best-effort, nunca trava o job.
+		res.Actions = append(res.Actions, reapOrphanCIContainers(ctx, opts)...)
 		// Cleanup dispara por pressão do guest-% OU do host V: (warn/crit). A
 		// metade host-aware pega o caso que o guest-% perde: guest enxuto, V: cheio.
 		if usedPct >= opts.PreCleanupPct || host.WantsCleanup() {
@@ -250,6 +265,17 @@ func Run(ctx context.Context, opts Options) Result {
 		}
 	case EventJobCompleted:
 		res.Decision = DecisionCleanupApplied
+		// Lê o V: livre do host TAMBÉM no fim do job, não só no início. Pareado por
+		// run_id com o host_v_free_gb do job-started, o par (start, completed) dá o
+		// HIGH-WATER MEDIDO de dreno de V: por job: drain_gb = vfree@started −
+		// vfree@completed. Antes, o dreno era ESTIMADO ("~35GB", inferido da taxa
+		// ~22GB/h) — número-adjetivo sem medição (Kahneman #3/#5). Com os dois
+		// extremos no hooks.jsonl, o p95 real do dreno passa a ser observável e o
+		// floor do orchestrator deixa de depender de palpite. A leitura é best-effort
+		// (snapshot ausente/stale vira Report fail-safe) e NUNCA falha o job.
+		host, _ := opts.HostDiskFn()
+		res.HostLevel = host.Level
+		res.HostVFreeGB = host.VFreeGB
 		// Modo rotineiro: preserva caches hot ($HOME/.cache/go-build, etc.)
 		// para evitar invalidar build caches entre jobs concorrentes na VM.
 		// Go build cache especialmente é caro de reconstruir (~minutos por
@@ -313,7 +339,9 @@ func cacheTrimIsIdle(ctx context.Context, opts Options, ownDirs []string) bool {
 func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	roots := workRoots(opts)
 	caps := cacheCaps()
-	estCap := 2*len(roots) + len(caps) + 8
+	// Slack de 10: buildx + image_prune + 2 reap scopes + container/volume prune +
+	// apt + journal + fstrim + cache_trim_deferred.
+	estCap := 2*len(roots) + len(caps) + 10
 	actions := make([]Action, 0, estCap)
 	for _, root := range roots {
 		// Kill orphan containers BEFORE deleting the root: a cancelled job's
@@ -380,6 +408,16 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 		actions = append(actions, commandActionWarn(opts, ctx, "docker_buildx_prune", "docker", "buildx", "prune", "--force", "--filter", civm.DefaultDockerBuildxPruneFilter))
 	}
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_image_prune", "docker", "image", "prune", "-f"))
+	// Redução-na-FONTE (issue #137): em modo rotineiro (job-completed), além do
+	// dangling-only acima, reapa as imagens TAGGEADAS que o próprio run buildou e
+	// agora estão sem container. Filtra pelo compose project DESTE runner — o
+	// `image prune -f` sozinho nunca tocava essas imagens de service (~35GB/job de
+	// E2E) e elas acumulavam na rajada até o panic floor. Em modo pressão
+	// (purgeCaches=true, job-started) o run mal começou e suas imagens ainda serão
+	// usadas, então o reap por label NÃO roda ali.
+	if !purgeCaches {
+		actions = append(actions, reapRunImages(opts, ctx)...)
+	}
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_container_prune", "docker", "container", "prune", "-f"))
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_volume_prune", "docker", "volume", "prune", "-f"))
 	// apt_clean, journal_vacuum and fstrim are opportunistic disk reclaim and
@@ -389,6 +427,58 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	actions = append(actions, commandActionWarn(opts, ctx, "apt_clean", "sudo", "apt-get", "clean"))
 	actions = append(actions, commandActionWarn(opts, ctx, "journal_vacuum", "sudo", "journalctl", "--vacuum-time=1d"))
 	actions = append(actions, commandActionWarn(opts, ctx, "fstrim", "sudo", "fstrim", "-av"))
+	return actions
+}
+
+// composeProjectFromEnv lê a identidade de compose project deste runner do env do
+// hook. O `.env` do runner (gravado por `hook install`) traz CIVM_RUNNER_SLOT e
+// COMPOSE_PROJECT_NAME=<slot>; preferimos o slot estável e caímos no
+// COMPOSE_PROJECT_NAME. Vazio → o reap de imagens vira no-op (fail-safe).
+func composeProjectFromEnv() string {
+	if slot := strings.TrimSpace(os.Getenv("CIVM_RUNNER_SLOT")); slot != "" {
+		return slot
+	}
+	return strings.TrimSpace(os.Getenv("COMPOSE_PROJECT_NAME"))
+}
+
+// runImageReapScopes deriva os labels de compose project a reapar para este run.
+// O consumidor usa tanto o slot bare (COMPOSE_PROJECT_NAME default) quanto
+// `<slot>-<run_id>` (a forma per-run recomendada na multi-project-isolation), então
+// reapamos ambos. Os dois são deste runner — box-único — nunca de um sibling.
+// Sem project (env degradado) → nenhum escopo → sem reap.
+func runImageReapScopes(opts Options) []string {
+	project := strings.TrimSpace(opts.ComposeProject)
+	if project == "" {
+		return nil
+	}
+	scopes := []string{project}
+	if run := strings.TrimSpace(opts.RunID); run != "" {
+		scopes = append(scopes, project+"-"+run)
+	}
+	return scopes
+}
+
+// reapRunImages reapa as imagens taggeadas que o run que terminou buildou, uma
+// chamada de `docker image prune -a -f --filter label=<project-label>=<scope>` por
+// escopo. O `-a` aqui é SEGURO porque o filtro de label restringe ao compose
+// project deste runner e o docker recusa remover imagem com container vivo — então
+// nunca toca a imagem de um sibling (label diferente) nem uma base de vendor pull
+// (sem label de compose). É a redução-na-FONTE da issue #137. Best-effort:
+// commandActionWarn — falha vira Warning, jamais falha o job-completed que segue.
+func reapRunImages(opts Options, ctx context.Context) []Action {
+	scopes := runImageReapScopes(opts)
+	if len(scopes) == 0 {
+		// Env degradado: sem escopo seguro, não reapamos nada (vs. um prune sem
+		// filtro que reabriria o "No such image" race cross-runner). Marca a
+		// decisão para observabilidade no hooks.jsonl.
+		return []Action{{Name: "docker_run_image_reap_skipped", Path: "(no compose project in env)"}}
+	}
+	actions := make([]Action, 0, len(scopes))
+	for _, scope := range scopes {
+		actions = append(actions, commandActionWarn(opts, ctx, "docker_run_image_reap",
+			"docker", "image", "prune", "-a", "-f",
+			"--filter", "label="+civm.DefaultDockerComposeProjectLabel+"="+scope))
+	}
 	return actions
 }
 
@@ -530,6 +620,136 @@ func killWorkRootContainers(ctx context.Context, opts Options, root string) Acti
 	}
 	a.Path = fmt.Sprintf("%s (killed %d orphan container(s))", root, len(orphans))
 	return a
+}
+
+// orphanInspectFormat é o template do `docker inspect` que emite, por container,
+// uma linha "ID|projeto-compose|portas-host". O projeto vem do label
+// com.docker.compose.project ("<no value>" quando ausente). As host ports vêm de
+// .HostConfig.PortBindings (o MAPA DE BINDINGS PEDIDO) — é ele que segura a
+// alocação da porta e causa "port is already allocated", e fica populado mesmo
+// quando .NetworkSettings.Ports vem vazio (contexto rootless). Usar '|' como
+// separador evita ambiguidade com o espaço entre as portas.
+const orphanInspectFormat = `{{.Id}}|{{index .Config.Labels "com.docker.compose.project"}}|` +
+	`{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{.HostPort}} {{end}}{{end}}`
+
+// reapOrphanCIContainers roda na fronteira job-started, ANTES de o job subir o
+// stack, e força-derruba qualquer container de CI ÓRFÃO box-wide. Diferente de
+// killWorkRootContainers (escopado ao _work root do próprio runner via
+// bind-mount), este reaper NÃO é escopado a um root — e por isso é o único que
+// pega o órfão de OUTRO runner (ex.: o repo-runner que foi REMOVIDO; seu _work
+// root sumiu, então nenhum hook escopado o reapa) ou de um container que ficou
+// segurando a porta sem o bind-mount esperado.
+//
+// INVARIANTE DE SEGURANÇA (por que não mata o stack do JOB ATUAL): o GitHub
+// Actions dispara o hook job-started ANTES de qualquer step do job rodar — e o
+// stack do job só sobe num step posterior ("Start local backend stack"). Logo,
+// na fronteira job-started o stack do job atual AINDA NÃO EXISTE: todo container
+// rodando que case o critério de órfão é, por construção, resíduo de um run/runner
+// ANTERIOR. (Numa box de 1 runner que executa um job por vez, não há peer
+// concorrente cujo stack pudéssemos matar por engano.)
+//
+// Best-effort: toda falha é Warning, nunca Error — higiene de job-started não
+// pode falhar o job (docker fora do ar, inspect quebrado etc. só viram warning).
+func reapOrphanCIContainers(ctx context.Context, opts Options) []Action {
+	a := Action{Name: "docker_reap_orphan_ci", Executed: opts.Execute}
+	if !opts.Execute {
+		return []Action{a}
+	}
+	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(civm.DefaultRoutineCleanupCmdTimeoutSecs)*time.Second)
+	defer cancel()
+	out, err := opts.RunFn(cmdCtx, "docker", "ps", "-q")
+	if err != nil {
+		a.Warning = "docker ps: " + err.Error()
+		return []Action{a}
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		return []Action{a}
+	}
+	inspectArgs := append([]string{"inspect", "--format", orphanInspectFormat}, ids...)
+	out, err = opts.RunFn(cmdCtx, "docker", inspectArgs...)
+	if err != nil {
+		a.Warning = "docker inspect: " + err.Error()
+		return []Action{a}
+	}
+	orphans := orphanIDsFromInspect(string(out))
+	if len(orphans) == 0 {
+		return []Action{a}
+	}
+	// stop (não kill): dá ao container a chance de soltar a porta limpo antes do
+	// rm; --time 5 limita a espera. Um stop que falha ainda cai no rm -f.
+	if _, err := opts.RunFn(cmdCtx, "docker", append([]string{"stop", "--time", "5"}, orphans...)...); err != nil {
+		a.Warning = fmt.Sprintf("docker stop %d orphan(s): %s", len(orphans), err.Error())
+	}
+	if _, err := opts.RunFn(cmdCtx, "docker", append([]string{"rm", "-f"}, orphans...)...); err != nil {
+		// rm -f que falha é o único caminho que deixa a porta presa; reporta, mas
+		// sem falhar o job (o bring-up subsequente vai expor a colisão de novo se
+		// realmente não liberou).
+		a.Warning = strings.TrimSpace(a.Warning + fmt.Sprintf(" docker rm %d orphan(s): %s", len(orphans), err.Error()))
+		return []Action{a}
+	}
+	a.Path = fmt.Sprintf("reaped %d orphan CI container(s)", len(orphans))
+	return []Action{a}
+}
+
+// orphanIDsFromInspect faz o parse da saída do orphanInspectFormat e devolve os
+// IDs órfãos. Função pura (sem I/O) para ser testável de forma hermética: cada
+// linha vira (id, projeto, hostPorts) e isCIOrphan decide. A ordem da entrada é
+// preservada, sem dedupe (o docker inspect já emite uma linha por ID único).
+func orphanIDsFromInspect(inspectOut string) []string {
+	var orphans []string
+	for _, line := range strings.Split(inspectOut, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		id := strings.TrimSpace(parts[0])
+		project := strings.TrimSpace(parts[1])
+		ports := strings.Fields(parts[2])
+		if id == "" {
+			continue
+		}
+		if isCIOrphan(project, ports) {
+			orphans = append(orphans, id)
+		}
+	}
+	return orphans
+}
+
+// isCIOrphan é o predicado puro do reaper: um container é órfão de CI quando
+//
+//	(a) seu project compose começa com DefaultCIOrphanProjectPrefix ("advoq")
+//	    — sinal PRIMÁRIO; o `devctl ci up` nomeia o project "<slot>-<run_id>"
+//	    com fallback "advoq", e o compose committed usa name: advoq, então o stack
+//	    inteiro carrega esse prefixo independente das portas; OU
+//	(b) ele publica uma das host ports FIXAS de CI conhecidas
+//	    (DefaultCIFixedHostPorts) — defesa em profundidade p/ um container que
+//	    segure a porta SEM o label esperado.
+//
+// O label "<no value>" do template (sem label) é tratado como string vazia, que
+// não casa o prefixo. A comparação de project é por prefixo case-insensitive
+// (nomes de project compose são lowercased).
+func isCIOrphan(project string, hostPorts []string) bool {
+	if p := strings.ToLower(strings.TrimSpace(project)); p != "" && p != "<no value>" &&
+		strings.HasPrefix(p, civm.DefaultCIOrphanProjectPrefix) {
+		return true
+	}
+	for _, hp := range hostPorts {
+		port, err := strconv.Atoi(strings.TrimSpace(hp))
+		if err != nil {
+			continue
+		}
+		for _, fixed := range civm.DefaultCIFixedHostPorts {
+			if port == fixed {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // reclaimWorkspaceOwnership runs at job-started, BEFORE actions/checkout, and
@@ -722,6 +942,29 @@ func diskUsedPct(opts Options) (int, error) {
 	return int((total - free) * 100 / total), nil
 }
 
+// JobVDrainGB é a definição CANÔNICA do dreno de V: por job: quanto de V: livre
+// (GB no host) o job consumiu, medido como o high-water entre os dois extremos do
+// hooks.jsonl — vfree no job-started menos vfree no job-completed. É o número que
+// substitui a estimativa "~35GB" (Kahneman #3/#5: número MEDIDO, não adjetivo) e
+// que calibra o floor do orchestrator (`floor >= host_crit + p95(drain) + safety`).
+//
+// vStartedGB/vCompletedGB são os `host_v_free_gb` dos dois registros pareados pelo
+// mesmo run_id. Retorna (0, false) quando a medição NÃO é confiável — qualquer
+// extremo <= 0 significa "não medi" (snapshot ausente/stale dobrado em fail-safe),
+// e um par desses jamais deve virar um dreno fantasma de dezenas de GB. Um delta
+// negativo (o V: SUBIU durante o job — um warn_clean/compact rodou no meio) é
+// clampado a 0: aquele job não drenou líquido, e um dreno negativo poluiria o p95.
+func JobVDrainGB(vStartedGB, vCompletedGB int64) (int64, bool) {
+	if vStartedGB <= 0 || vCompletedGB <= 0 {
+		return 0, false
+	}
+	drain := vStartedGB - vCompletedGB
+	if drain < 0 {
+		return 0, true
+	}
+	return drain, true
+}
+
 func finish(opts Options, res Result) Result {
 	if res.ExitCode == 0 && (res.Decision == DecisionError || res.Decision == DecisionRejected) {
 		res.ExitCode = 1
@@ -798,6 +1041,12 @@ func appendLog(opts Options, res Result) error {
 	case DecisionRejected, DecisionCleanupDegraded:
 		level = slog.LevelWarn
 	}
+	// host_v_free_gb + host_level entram no hooks.jsonl: são o ÚNICO traço
+	// persistido do V: livre do host por job. Pareando os dois registros do mesmo
+	// run_id (job-started e job-completed), o dreno de V: por job é MEDIDO
+	// (high-water = vfree@started − vfree@completed) em vez de estimado. Sem estes
+	// campos no log, o número de dreno que calibra o floor do orchestrator seria
+	// reconstruível só por palpite (Kahneman #3: número antes de adjetivo).
 	logger.LogAttrs(context.Background(), level, "hook event",
 		slog.String("event", string(res.Event)),
 		slog.String("decision", string(res.Decision)),
@@ -806,6 +1055,8 @@ func appendLog(opts Options, res Result) error {
 		slog.String("repository", res.Repository),
 		slog.String("run_id", res.RunID),
 		slog.String("work_root", res.WorkRoot),
+		slog.String("host_level", res.HostLevel),
+		slog.Int64("host_v_free_gb", res.HostVFreeGB),
 		slog.String("error", res.Error),
 		slog.Any("actions", res.Actions),
 	)

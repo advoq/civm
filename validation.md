@@ -480,3 +480,134 @@ heranca, `serialize-runner.ps1 -Execute` e re-medir.
 **Categoria:** infra / runner
 **Como medir:** `go test -race ./internal/runner/... ./internal/doctor/...`;
 on-box: doctor check `RUNNER_SERIALIZATION` == ok.
+## 2026-06-19 — Dreno de V: por job instrumentado + desconfusão de escala dos floors 🟡
+
+**O que:** Uma validação adversarial Kahneman achou um HIGH: a margem de disco
+que deixa um job E2E sobreviver no floor estava ESTIMADA ("~35GB" de dreno, sem
+high-water capturado) e os "floors" estavam confundidos entre DUAS escalas (V:-
+livre-GB vs guest-uso-%) — a headline "54−35=19, 1 acima do panic floor 18"
+comparava planos diferentes. Dois eixos de fix, sem mexer threshold: (1) mapear
+os gates por escala no SPEC §4.1; (2) instrumentar a MEDIÇÃO do dreno real.
+
+**Dados medidos:**
+
+- MAPA (SPEC §4.1): plano Host V:-livre-GB = `AdmitFloorGB=51` (orchestrator.ps1:286,
+  decision.ps1:27), `WarnFloorGB=28` (ps1:59), `PanicFloorGB=18` (ps1:60),
+  `CritFreeGB=10` (civm.go:105, aplicado em hostdisk.go:193-201 + hook.go:246-249),
+  `HeadroomGB=8` (civm.go:110), `HardFloorGB=1` (civm.go:125). Plano Guest-uso-% =
+  `HardFailPct=90` (civm.go:38, hook.go:242-245 via diskUsedPct hook.go:725),
+  `PreCleanupPct=60` (civm.go:37, hook.go:220), `EmergencyBypassPct=75` (civm.go:47).
+  O "18" e o "90%" NÃO são o mesmo floor — escalas físicas distintas.
+- GAP de medição achado: o hook lia `host_v_free_gb` só no job-started, e o
+  `appendLog` (hook.go:801) DESCARTAVA o campo — nunca chegava ao hooks.jsonl. O
+  dreno por job era, portanto, irreconstruível do log; só estimável.
+- FIX instrumentado: job-completed também lê host V: (hook.go EventJobCompleted);
+  `appendLog` agora emite `host_v_free_gb` + `host_level`; `JobVDrainGB` é a
+  definição canônica do high-water (`vfree@started − vfree@completed` por run_id,
+  clamp 0 em delta negativo, `ok=false` em extremo <=0). 4 testes novos
+  (emissão no log, leitura no completed, tabela JobVDrainGB 6 casos, par
+  recusa/positivo Kahneman #13). `go test -race ./internal/hook ./internal/hostdisk`
+  = ok; gofmt limpo; golangci-lint = 0 issues.
+- FLOOR reformulado (SPEC §4.2): `floor >= CritFreeGB(10) + p95(drain_MEDIDO) +
+  safety` — tudo em V:-livre-GB (a escala onde autoreclaim/panic/crit concordam),
+  nunca "floor − dreno estimado".
+
+**Veredito:** 🟡 a desconfusão de escala e a instrumentação estão FEITAS e
+unit-green; o `AdmitFloorGB=51`/`PanicFloorGB=18` ficam INTOCADOS (não há dado de
+dreno que justifique mover). O número de dreno p95 real é PENDENTE: a box está
+rodando CI agora — será capturado no próximo job E2E Tenant Isolation (par
+job-started/job-completed no hooks.jsonl). Vira ✅ quando o p95 medido confirmar
+(ou refutar) o floor de 51.
+
+**Como medir:** com a box ligada, após um E2E Tenant Isolation, parear no
+`/var/log/civm/hooks.jsonl` os dois registros do mesmo `run_id` e computar
+`host_v_free_gb@job-started − host_v_free_gb@job-completed` (ou rodar `JobVDrainGB`
+sobre o par); acumular p95 sobre vários jobs pesados.
+
+**Proxima acao:** capturar o 1o par de dreno real no próximo E2E; com o p95,
+derivar `AdmitFloorGB` por §4.2 e fechar o 🟡.
+## 2026-06-19 -03 — Reaper de container de CI órfão (job-started) ✅/🟡
+
+**O que:** Validar o novo reaper de órfão não escopado a `_work` root
+(`internal/hook/hook.go::reapOrphanCIContainers`) que, na fronteira job-started
+(antes de o job subir o stack), derruba qualquer container RODANDO que publique
+uma porta fixa de CI conhecida OU tenha `com.docker.compose.project` começando com
+`advoq` — fix do incidente 2026-06-19 (órfão de minio em `127.0.0.1:9020` matou
+tenant-isolation no #1184/#1186 com "port is already allocated"). Mais a decisão de
+manter colisão de porta DETERMINÍSTICA no classificador do advoq (sem retry-sem-reap).
+
+**Categoria:** civm-ci-gate
+
+**Como medir:**
+`go test -race ./internal/hook/ ./internal/civm/` (unit);
+`go test -tags=integration -run TestIntegrationReapOrphan ./internal/hook/` (efeito real);
+`golangci-lint run -c .golangci.yml ./...`.
+
+**Dados medidos:**
+
+- Unit (`-race`): pacote `hook` **90,6%→91,3%** de cobertura; `reapOrphanCIContainers`,
+  `isCIOrphan`, `orphanIDsFromInspect` em **100%**. Pacote `civm` **95,8%**. `go test -race
+  ./...` da box **ALL GREEN**. golangci-lint `./...` (com e sem `-tags=integration`):
+  **0 issues**. gofmt limpo.
+- Integration (docker REAL) — EFEITO, não mock:
+  - `TestIntegrationReapOrphanRemovesRealLabeledContainer`: **PASS (6,29s)**. Subiu
+    um container REAL com label `com.docker.compose.project=advoq-integration-label`
+    (`--network none`), rodou o reaper contra o daemon REAL, afirmou que o container
+    **sumiu** (`docker ps -aq` vazio). Prova o sinal primário (label).
+  - `TestIntegrationReapOrphanFreesRealPort`: **SKIP** nesta box. O bridge/iptables do
+    WSL2 atual não consegue publicar porta (`iptables ... raw: Table does not exist`),
+    então o setup que prende a porta não roda. O teste self-skip (nunca falha) — vira
+    gate REAL no runner self-hosted, onde o bridge funciona, afirmando a porta LIBERADA
+    ponta a ponta.
+- Classificador advoq (`tools/devctl/internal/ci/failure.go`, repo advoq, commit/PR
+  separado): comentário de DECISÃO adicionado — colisão de porta NÃO ganha assinatura
+  transitória (#14). Com o reaper, a colisão não chega mais ao classificador; se chegar,
+  é bug real → fica determinística (`SigUnknown`), falha rápido. `go test ./internal/ci/`
+  do advoq: **verde** (mudança é só comentário).
+
+**Veredito:** ✅ o mecanismo central do reaper (detectar + remover um container REAL
+de CI órfão) está implementado, testado por EFEITO contra docker real, e verde com
+`-race`/lint. 🟡 residual: a liberação de porta ponta a ponta (`...FreesRealPort`) só
+foi exercida como SKIP nesta box (iptables WSL2 quebrado) — vira ✅ pleno no 1º run no
+runner self-hosted onde o bridge publica porta. Não houve incidente real pós-deploy
+para confirmar in-vivo ainda (o reaper ainda não rodou num job-started que tivesse um
+órfão de verdade).
+
+**Proxima acao:** rodar `...FreesRealPort` no runner self-hosted (bridge OK) e capturar
+um `docker_reap_orphan_ci` com `Path="reaped N orphan CI container(s)"` no
+`/var/log/civm/hooks.jsonl` num job-started real; commit na branch fix/orphan-port-reaper
+(sem push — review do usuário).
+
+## 2026-06-18 21:30 -03 — Reap de imagens de run no job-completed reduz a FONTE (#137, unit)
+
+**O que:** O `job-completed` so removia imagens DANGLING; as imagens taggeadas de
+service que o run buildou (a E2E builda ~35GB/job) nunca saiam e acumulavam na
+rajada ate o panic floor. Adicionado `reapRunImages` (`internal/hook/hook.go`):
+`docker image prune -a -f --filter label=com.docker.compose.project=<scope>` por
+escopo, com `<scope>` = compose project DESTE runner (`<slot>` + `<slot>-<run_id>`,
+lidos de `CIVM_RUNNER_SLOT`/`COMPOSE_PROJECT_NAME`). Escopo box-unico por runner
+(multi-project-isolation) → sibling nunca tocado; vendor pull (sem label compose)
+nunca matched → o "No such image" race do PR #135 NAO volta.
+
+**Dados medidos:**
+
+- TDD RED→GREEN: 9 testes novos (`run_image_reap_test.go`), todos PASS.
+- Suite `internal/hook + hostdisk + civm + cleanup` com `-race -count=1`: 4/4 ok.
+- Suite `./internal/...` completa: 0 falhas. `go build ./...`: ok.
+- `gofmt -l`: limpo. `golangci-lint -c .golangci.yml ./internal/hook ./internal/civm`: 0 issues.
+- Guards de seguranca travados por teste: `image prune -a` SO com filtro de label
+  (nunca unscoped); sem slot no env → no-op; job-started NAO reapa por label;
+  falha de reap → Warning (job-completed segue exit 0).
+
+**Veredito:** 🟡 PARCIAL — concurrency-safety e fail-safes provados por unit, mas o
+EFEITO real (V: cai mais devagar sob a mesma rajada; menos `disk_panic` no log) so
+vira ✅ apos deploy + medir um ciclo de CI sustentado na box. O panic floor
+permanece como salvaguarda permanente (#15), nao substituido.
+
+**Proxima acao:** deploy do civmctl atualizado nos runners (`hook install` ja injeta
+o slot); medir `docker system df` do guest antes/depois de uma rajada e contar
+`disk_panic` no orchestrator log num periodo comparavel.
+
+**Categoria:** disk-reclaim
+**Como medir:** mid-burst no guest: `docker system df`; e no host:
+`Select-String disk_panic` no orchestrator log sobre uma janela de CI sustentado.
