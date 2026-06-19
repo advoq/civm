@@ -233,6 +233,7 @@ em produção, reavaliar (talvez voltar para runbook puro + Ansible playbook).
 - `AGENTS.md` — resumo geral
 - `MEMORY.md` — log temporal append-only
 - `runbooks/MULTI-PROJECT-RUNNER.md` — fluxo de provisionamento
+- `runbooks/RUNNER-SERIALIZATION.md` — invariante "1 runner por org" (advoq no runner ORG; serialização anti concurrent-prune)
 - `templates/CIVM-USAGE.md` — fonte de `docs/CIVM.md` nos peer repos
 - `cmd/civmctl/` — código do CLI
 

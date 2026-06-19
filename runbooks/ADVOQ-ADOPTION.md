@@ -11,40 +11,71 @@
 - `civmctl` >= versão com `runner add` e checksum pinado do
   actions/runner (sessão 2026-05-10+)
 
-## Passo 1 — Registrar runner na VM (1 comando)
+## Passo 1 — Runner do advoq: usar o runner ORG (NAO registrar por-repo)
+
+> **CRITICO (serializacao):** o advoq e servido pelo runner ORG
+> `civm-advoq-org` (registrado contra `https://github.com/advoq`), que atende
+> `advoq/advoq` E `advoq/civm` num **unico processo**. **NAO** registre um runner
+> POR-REPO `civm-advoq` para `advoq/advoq` — dois runners civm-labeled servindo o
+> mesmo repo = dois jobs concorrentes no mesmo disco -> `concurrent prune on
+> shared civm runner` mata o `docker pull` de um deles (incidente #1184). Ver
+> [`RUNNER-SERIALIZATION.md`](./RUNNER-SERIALIZATION.md).
+
+### Registrar o runner ORG (manual, uma vez)
+
+O `civmctl runner add` so cobre runners **por-repo** (`--repo=owner/repo`). O
+runner org e registrado **manualmente** em GitHub Settings > Actions > Runners da
+**organizacao** `advoq`:
+
+1. Em `https://github.com/organizations/advoq/settings/actions/runners`, clicar
+   **New runner** (Linux x64) e copiar o token de registro.
+2. Na VM, instalar contra a URL da **org** (nao do repo), com label `civm` e nome
+   `civm-advoq-org`:
 
 ```bash
-TOKEN=$(gh api -X POST /repos/advoq/advoq/actions/runners/registration-token --jq .token)
-
-civmctl runner add \
-  --repo=advoq/advoq \
-  --token="$TOKEN" \
-  --short=advoq \
-  --execute
+# Na VM gha-ubuntu-2404:
+mkdir -p ~/actions-runner-advoq-org && cd ~/actions-runner-advoq-org
+# (baixar/extrair o tarball actions/runner — mesma versao dos demais runners)
+./config.sh --unattended --url https://github.com/advoq \
+  --token "<ORG_TOKEN>" --labels civm --name civm-advoq-org --work _work --replace
+sudo ./svc.sh install emdev
+sudo ./svc.sh start
 ```
 
-Faz tudo:
-- mkdir `~/actions-runner-advoq` na VM
-- baixa actions/runner v2.334.0 (paridade com civm-1, civm-cmpx, civm-vitae)
-- extrai
-- `./config.sh --unattended --labels civm --name civm-advoq --replace`
-- `sudo ./svc.sh install emdev`
-- `sudo ./svc.sh start`
-
-Token mascarado nos logs. Idempotente (re-rodar substitui).
+> Por que manual: a API publica de registration-token de **org** exige PAT com
+> escopo de admin da org; o `civmctl runner add` foi desenhado para o caminho
+> por-repo (token efemero por repo). Registrar o runner org e um passo
+> operacional one-time, nao zero-effort.
 
 ### Validar online
 
 ```bash
-gh api /repos/advoq/advoq/actions/runners --jq '.runners[]|"\(.name) \(.status) \(.labels[].name)"'
-# Esperado: civm-advoq online (com label civm)
+# O runner ORG aparece em /orgs/advoq, NAO em /repos/advoq/advoq:
+gh api orgs/advoq/actions/runners --jq '.runners[]|"\(.name) \(.status) \(.labels[].name)"'
+# Esperado: civm-advoq-org online civm
+
+# Garantir que NAO existe runner por-repo civm-advoq:
+gh api /repos/advoq/advoq/actions/runners --jq '.runners[]|"\(.name) \(.status)"'
+# Esperado: vazio
 ```
 
 E na VM:
 
 ```bash
-ssh gha-ubuntu-2404 "systemctl is-active actions.runner.advoq-advoq.civm-advoq.service"
+ssh gha-ubuntu-2404 "systemctl is-active actions.runner.advoq.civm-advoq-org.service"
 # Esperado: active
+```
+
+### Se um runner por-repo civm-advoq ja existir (heranca / re-provisao errada)
+
+Remova-o (NAO so `systemctl disable`, que o watchdog ressuscita):
+
+```bash
+# Do host Windows:
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\civm-deploy\serialize-runner.ps1 -Execute
+# ou no guest:
+TOKEN=$(gh api -X POST /repos/advoq/advoq/actions/runners/remove-token --jq .token)
+sudo civmctl runner remove --short=advoq --token="$TOKEN" --execute
 ```
 
 ## Passo 2 — Adotar workflow (quando você decidir push em advoq)
@@ -100,16 +131,21 @@ Node 24 (já está: v24.15.0 LTS Krypton via nvm).
 | Label `civm` reuso | Mesmo padrão dos peers já adotados; zero divergência |
 | Push trigger natural | Sem precisar `workflow_dispatch:` adicionado |
 
-## Rollback (1 comando)
+## Rollback
+
+Remover o runner do advoq da box (desfaz a adocao por completo). Isso para o
+runner ORG — advoq volta a depender 100% de `ubuntu-latest`:
 
 ```bash
-TOKEN=$(gh api -X POST /repos/advoq/advoq/actions/runners/remove-token --jq .token)
-civmctl runner remove --short=advoq --token="$TOKEN" --execute
+# Remove o runner ORG (Settings > Actions > Runners da org > Remove) e na VM:
+ssh gha-ubuntu-2404 "cd ~/actions-runner-advoq-org && sudo ./svc.sh stop && \
+  sudo ./svc.sh uninstall && ./config.sh remove --token '<ORG_REMOVE_TOKEN>' && \
+  rm -rf ~/actions-runner-advoq-org"
 ```
 
-Faz a sequência `svc.sh stop` + uninstall + `config.sh remove` + `rm -rf`
-dir. Se stop/uninstall falhar, aborta antes de desregistrar ou remover o
-diretório. Token mascarado nos logs.
+> **Nao** remova so o runner org e registre um por-repo no lugar achando que e
+> "mais simples" — e a topologia que causou o #1184. Se o runner org for
+> gargalo, ver `RUNNER-SERIALIZATION.md` §"Rollback trigger".
 
 Se template `ci-router.yml` quebrar workflow advoq:
 
@@ -125,14 +161,18 @@ como antes (com risco de billing-block continuar matando jobs em <10s).
 
 ## Critério de sucesso
 
-- `gh api /repos/advoq/advoq/actions/runners` retorna
-  `civm-advoq online`
-- Push em advoq dispara `ci-router` que ELE roda em civm-advoq
+- `gh api orgs/advoq/actions/runners` retorna `civm-advoq-org online` (com label
+  `civm`), e `gh api /repos/advoq/advoq/actions/runners` retorna **vazio** (sem
+  runner por-repo)
+- `civmctl doctor --repos=auto --json` retorna o check `RUNNER_SERIALIZATION` em
+  severidade `ok`
+- Push em advoq dispara `ci-router` que roda em `civm-advoq-org`
   (verificar via `gh run view <id> --json jobs --jq '.jobs[] | "\(.name) runner=\(.runnerName)"'`)
-- Em billing-block: jobs `gates-civm` rodam normalmente em
-  civm-advoq enquanto go.yml/web.yml morrem em ubuntu-latest;
-  pelo menos UM job verde permite branch protection passar (após
-  configurar required check)
+- Em billing-block: jobs `gates-civm` rodam no `civm-advoq-org` enquanto
+  go.yml/web.yml morrem em ubuntu-latest; pelo menos UM job verde permite branch
+  protection passar (após configurar required check)
+- `gh api orgs/advoq/actions/runners --jq '[.runners[]|select(.busy)]|length'`
+  retorna `<= 1` sob carga (serializado)
 
 ## Histórico
 
@@ -140,3 +180,7 @@ como antes (com risco de billing-block continuar matando jobs em <10s).
   padrão civm/civmctl. advoq decidiu adoção minimal (apenas runner +
   template, sem modificar workflows existentes do advoq) por filosofia
   "senior, sem atrito" do usuário.
+- **2026-06-18** — Passo 1 corrigido: advoq usa o runner ORG `civm-advoq-org`
+  (serializa advoq/advoq + advoq/civm num processo), NÃO um runner por-repo
+  `civm-advoq`. Origem: incidente #1184 (`concurrent prune` com 2 runners advoq).
+  Ver `RUNNER-SERIALIZATION.md`.

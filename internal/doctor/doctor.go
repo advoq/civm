@@ -283,6 +283,7 @@ func collectHookChecks(ctx context.Context, opts Options, systemd []runner.Statu
 		checkHookScript(opts, "HOOK_JOB_COMPLETED", hook.CompletedHookName, hook.EventJobCompleted),
 		checkRunnerEnvHooks(opts),
 		checkRunnerServices(systemd, systemdErr),
+		checkRunnerSerialization(systemd, systemdErr),
 		checkScopedSudoers(ctx, opts),
 	}
 	worst := SeverityOK
@@ -409,6 +410,40 @@ func checkRunnerServices(systemd []runner.Status, systemdErr error) HookCheck {
 		return HookCheck{Name: "RUNNER_SERVICES", Severity: SeverityCritical, Detail: detail + "; inactive: " + strings.Join(inactive, ", ")}
 	}
 	return HookCheck{Name: "RUNNER_SERVICES", Severity: SeverityOK, Detail: detail}
+}
+
+// checkRunnerSerialization impõe o invariante de serialização do box: para cada
+// organização com runner org presente, NENHUM runner por-repo da mesma org pode
+// coexistir. Dois runners elegíveis para o mesmo repo (org + por-repo, ambos
+// label civm) = dois jobs concorrentes no mesmo disco → "concurrent prune on
+// shared civm runner" mata o docker pull (incidente #1184, validation.md
+// 2026-06-18). Crítico quando há colisão; aponta o comando de remoção durável
+// (NÃO `systemctl disable`, que o runner-watchdog ressuscita).
+func checkRunnerSerialization(systemd []runner.Status, systemdErr error) HookCheck {
+	if systemdErr != nil {
+		return HookCheck{Name: "RUNNER_SERIALIZATION", Severity: SeverityWarning, Detail: fmt.Sprintf("systemd runner status unknown: %v", systemdErr)}
+	}
+	collisions := runner.DetectCollisions(systemd)
+	if len(collisions) == 0 {
+		return HookCheck{Name: "RUNNER_SERIALIZATION", Severity: SeverityOK, Detail: "1 runner por org (sem runner por-repo redundante)"}
+	}
+	parts := make([]string, 0, len(collisions))
+	for _, c := range collisions {
+		parts = append(parts, fmt.Sprintf("%s (%s) duplica %s para %s — remover: civmctl runner remove --short=%s --token=$(gh api -X POST /repos/%s/actions/runners/remove-token --jq .token) --execute",
+			c.RepoUnit, c.RepoName, c.OrgName, c.Repo, repoRunnerShort(c.RepoName), c.Repo))
+	}
+	return HookCheck{
+		Name:     "RUNNER_SERIALIZATION",
+		Severity: SeverityCritical,
+		Detail:   "runner por-repo redundante (quebra serialização): " + strings.Join(parts, "; "),
+	}
+}
+
+// repoRunnerShort deriva o sufixo --short do nome do runner ("civm-advoq" ->
+// "advoq") para montar o comando de remoção. Sem o prefixo civm-, devolve o
+// nome inteiro (o operador ajusta se necessário).
+func repoRunnerShort(name string) string {
+	return strings.TrimPrefix(name, "civm-")
 }
 
 func ClassifyRepo(repo string, runners []GitHubRunner, err error) RepoDiagnosis {

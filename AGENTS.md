@@ -197,6 +197,7 @@ commit, push, rollback ou alteração automática em peer repo.
 - `MEMORY.md` — log de sessão append-only
 - `validation.md` — log append-only de TODA validação empírica de infra (Kahneman #13; taxonomia no header do arquivo)
 - `runbooks/MULTI-PROJECT-RUNNER.md` — provisionamento da VM
+- `runbooks/RUNNER-SERIALIZATION.md` — invariante "1 runner por org" (advoq serializa no runner ORG)
 - `runbooks/VM-CREDENTIALS.md` — segurança de credenciais
 - `runbooks/PEER-ADOPTION-CHECKLIST.md` — adoção manual em peer repo
 - `templates/CIVM-USAGE.md` — fonte para `docs/CIVM.md` nos peer repos

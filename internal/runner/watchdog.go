@@ -292,6 +292,22 @@ func repairWatchdogHooks(ctx context.Context, opts WatchdogOptions, report *Watc
 
 func restartWatchdogRunners(ctx context.Context, opts WatchdogOptions, systemd []Status, ghByRepo map[string][]WatchdogGitHubRunner, report *WatchdogReport) error {
 	candidates := restartCandidates(systemd, ghByRepo)
+	// Serialização (#1184): NUNCA ressuscitar um runner por-repo que colide com
+	// um runner org da mesma org. Sem isto, um runner por-repo só disabled (mas
+	// loaded) aparece inactive/dead em restartCandidates e seria reativado aqui,
+	// reabrindo a janela de 2 jobs concorrentes no mesmo disco. O estado durável
+	// é a remoção do runner por-repo (serialize-runner.ps1 / civmctl runner
+	// remove); até lá, o watchdog declina o restart e registra o evento.
+	for _, c := range DetectCollisions(systemd) {
+		if _, isCandidate := candidates[c.RepoUnit]; isCandidate {
+			delete(candidates, c.RepoUnit)
+			report.add(WatchdogEvent{
+				Event: "runner-restart-skipped", Severity: "warning", Unit: c.RepoUnit,
+				Reason: "redundant-repo-runner",
+				Detail: fmt.Sprintf("colide com %s para %s; remover em vez de restartar", c.OrgName, c.Repo),
+			})
+		}
+	}
 	for _, unit := range sortedMapKeys(candidates) {
 		reason := candidates[unit]
 		event := WatchdogEvent{Event: "runner-restarted", Severity: "info", Unit: unit, Reason: reason, Executed: opts.Execute}

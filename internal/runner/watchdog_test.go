@@ -454,6 +454,44 @@ func TestWatchdogRestartsFailedSystemdRunner(t *testing.T) {
 	assertWatchdogCall(t, calls, "sudo systemctl restart actions.runner.advoq-civm.civm-self.service")
 }
 
+// TestWatchdogDoesNotResurrectRedundantRepoRunner prova a defesa de
+// serialização: um runner por-repo (civm-advoq) já parado (inactive/dead, o
+// estado pós-`systemctl disable`) NÃO pode ser reativado pelo watchdog enquanto
+// o runner org (civm-advoq-org) existe — senão a colisão do #1184 volta a cada
+// tick de 2min. O watchdog declina o restart e emite runner-restart-skipped.
+func TestWatchdogDoesNotResurrectRedundantRepoRunner(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.RestartDelay = 0
+	opts.Repos = []string{"advoq/advoq"}
+	const redundantUnit = "actions.runner.advoq-advoq.civm-advoq.service"
+	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
+		return []Status{
+			{UnitName: "actions.runner.advoq.civm-advoq-org.service", Repo: "advoq", Name: "civm-advoq-org", ActiveState: "active", SubState: "running"},
+			{UnitName: redundantUnit, Repo: "advoq/advoq", Name: "civm-advoq", ActiveState: "inactive", SubState: "dead"},
+		}, nil
+	}
+	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]WatchdogGitHubRunner, error) {
+		return []WatchdogGitHubRunner{{Repo: repo, Name: "civm-advoq-org", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
+	}
+	var calls []string
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return []byte("active\n"), nil
+	}
+
+	report := Watchdog(context.Background(), opts)
+
+	if !hasWatchdogEventWithReason(report, "runner-restart-skipped", "redundant-repo-runner") {
+		t.Fatalf("events = %+v, want runner-restart-skipped redundant-repo-runner", report.Events)
+	}
+	for _, call := range calls {
+		if strings.Contains(call, "systemctl restart "+redundantUnit) {
+			t.Fatalf("watchdog ressuscitou runner redundante: %q", call)
+		}
+	}
+}
+
 func TestClassifyFailureLogNetworkCheckout(t *testing.T) {
 	t.Parallel()
 	log := "Run actions/checkout@v5\nRPC failed; curl 56 GnuTLS recv error (-54)\nfatal: early EOF\ninvalid index-pack output"

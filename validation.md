@@ -441,3 +441,42 @@ se o FIFO nao bastar.
 **Categoria:** infra / runner
 **Como medir:** `gh api orgs/advoq/actions/runners --jq '[.runners[]|select(.busy)]|length'`
 (deve ser <=1); serialize-runner.ps1 lista/desativa os services.
+
+## 2026-06-18 23:30 -03 — Serializacao CODIFICADA (4 camadas), nao mais ajuste manual
+
+**O que:** O `systemctl disable` manual do runner por-repo civm-advoq nao
+sobrevive a re-provisao da box. Codifiquei o invariante "1 runner civm por org"
+em 4 camadas durables, na branch fix/serialize-runner-provisioning.
+
+**Dados medidos:**
+
+- Camada 1 (guard): `internal/runner/serialize.go` `DetectCollisions` (puro) +
+  `internal/doctor` check `RUNNER_SERIALIZATION` (critico na colisao). Camada 2
+  (watchdog): `restartWatchdogRunners` declina restartar runner por-repo
+  redundante (sem isto o watchdog ressuscitava a unit disabled-mas-loaded a cada
+  tick de 2min — modo de falha real que o `disable` manual nao cobria). Camada 3
+  (enforcement): `deploy/windows/serialize-runner.ps1` idempotente, dry-run
+  default, REMOVE (nao disable) via `civmctl runner remove`. Camada 4 (origem):
+  `runbooks/ADVOQ-ADOPTION.md` Passo 1 deixou de registrar o runner por-repo.
+- Testes Go: `go test -race -count=1 ./internal/runner/... ./internal/doctor/...`
+  -> ok (runner 3.0s, doctor 1.0s). Cobertura: runner 84.7%, doctor 85.2%
+  (ambos > 80%, invariante #6). `go vet` + build limpos. Invariante #17 (PS1
+  Int32 clamp): hostdisk test verde; rg do regex no serialize-runner.ps1 -> 0.
+- 12 unit tests novos cobrindo: org+repo ativo (estado #1184), repo
+  disabled-mas-loaded (ainda colide), org-only (no-op), sem-org (no-op),
+  org servindo multi-repo, owner diferente (sem falso positivo), e o watchdog
+  nao-ressuscita.
+
+**Veredito:** 🟡 codificado e provado em unit test, mas o EFEITO on-box nao foi
+re-medido nesta sessao — a box estava OFF (scale-to-zero; ssh timeout). A logica
+Go esta verde; a remocao ao vivo (`serialize-runner.ps1 -Execute`) e o doctor
+critico contra a box real ainda precisam de uma medicao quando a VM ligar.
+
+**Proxima acao:** quando a box ligar, rodar `ssh gha-ubuntu-2404 'civmctl doctor
+--repos=auto --json' | jq '.hook_checks[]|select(.name=="RUNNER_SERIALIZATION")'`
+e confirmar severity ok (so o runner org existe). Se aparecer civm-advoq por
+heranca, `serialize-runner.ps1 -Execute` e re-medir.
+
+**Categoria:** infra / runner
+**Como medir:** `go test -race ./internal/runner/... ./internal/doctor/...`;
+on-box: doctor check `RUNNER_SERIALIZATION` == ok.
