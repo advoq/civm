@@ -113,6 +113,7 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 | Arquivo | Função |
 |---|---|
 | `runbooks/MULTI-PROJECT-RUNNER.md` | provisionar VM + N runners + tools (parity ubuntu-latest) + timers systemd de cleanup/watchdog (128GB SSD) |
+| `runbooks/RUNNER-SERIALIZATION.md` | invariante "1 runner por org": advoq serializa no runner ORG (`civm-advoq-org`); por quê (concurrent prune, #1184), como verificar e impor (`serialize-runner.ps1`) |
 | `runbooks/RUNBOOK-HOST-VHDX-MAINTENANCE.md` | manutenção do VHDX do host (reclamação de volume) — alavancas break-glass quando o orchestrator está pausado |
 | `runbooks/LOCAL-CI-DISCIPLINE.md` | filosofia "local CI é gate de verdade, remoto é mirror" |
 
