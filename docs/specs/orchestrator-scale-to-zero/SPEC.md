@@ -137,6 +137,90 @@ Floors são parametrizáveis (`orchestrator.ps1:59-60`, defaults
 `warn` (não panic); `V==28` → `mark_busy` (não warn) — provados nos test casos
 17-18.
 
+## 4.1 — Mapa dos gates de disco (DUAS escalas — não confundir)
+
+> **Por que esta seção existe.** Uma validação adversarial Kahneman (#3 número
+> antes de adjetivo, #4 anchoring de escala, #5 worst-case) achou um HIGH: os
+> "floors" de disco do sistema estavam apresentados como se fossem o **mesmo**
+> número, mas vivem em **duas escalas físicas diferentes**. `18`, `28`, `51` são
+> **GB livres no volume V: do host**; `90`, `60` são **% de uso do filesystem do
+> guest**. Comparar "54 − 35 = 19, só 1 acima do 18" mistura `V:`-livre-GB (o 54,
+> o 18) com um dreno (o 35) que nunca foi medido na mesma escala — e nem o `90%`
+> é a mesma régua que o `18`. O mapa abaixo fixa cada gate na sua escala.
+
+Existem **dois planos de medição independentes**, cada um com seus gates:
+
+| Plano | Unidade | O que mede | Direção do perigo |
+| --- | --- | --- | --- |
+| **Host V:** | GB **livres** no volume `V:` (Hyper-V) | espaço que sobra no disco que hospeda o VHDX | perigo = número **baixo** (acabando) |
+| **Guest %** | **% usado** do filesystem `/` do guest | quão cheio está o disco DENTRO da VM | perigo = número **alto** (enchendo) |
+
+São acoplados (o guest enchendo faz o VHDX crescer e o V: cair) mas **não são
+conversíveis 1:1** — o VHDX é dinâmico e o VMRS/scratch ocupam V: fora do guest.
+Um floor de um plano **nunca** deve ser comparado a um floor do outro.
+
+### Gates do plano Host V: (GB livres) — perigo é baixar
+
+| Gate | Valor | Onde vive (constante) | Onde é aplicado | Ação ao cruzar |
+| --- | --- | --- | --- | --- |
+| `AdmitFloorGB` | **51** | `orchestrator.ps1:286`, `decision.ps1:27` | `Get-OrchestratorDecision` (VM Off + fila) | `reclaim_before_admit`: compacta ANTES de admitir o batch |
+| `WarnFloorGB` | **28** | `orchestrator.ps1:59`, `decision.ps1:16` | `Get-OrchestratorDecision` (Running + work) | `warn_clean`: poda online, **não** mata job |
+| `PanicFloorGB` | **18** | `orchestrator.ps1:60`, `decision.ps1:17` | `Get-OrchestratorDecision` (Running + work) | `panic_compact`: compacta offline **mata job** |
+| `CritFreeGB` | **10** | `civm.DefaultHostVolumeCritFreeGB` (`civm.go:105`) | `hostdisk.levelByFree` (`hostdisk.go:193-201`); gate host-aware do hook `job-started` (`hook.go:246-249`) | rejeita o job (`Blocks()`) se o snapshot for FRESCO |
+| `WarnFreeGB` | **30** | `civm.DefaultHostVolumeWarnFreeGB` (`civm.go:104`) | `hostdisk.levelByFree` | `WantsCleanup()` → cleanup no `job-started` |
+| `HeadroomGB` | **8** | `civm.DefaultHostVolumeHeadroomGB` (`civm.go:110`) | `hostdisk.Check` (`hostdisk.go:154`); gate pós-Off `Test-OptimizeSlack` | aborta o `Optimize-VHD` sem zero-fill |
+| `HardFloorGB` | **1** | `civm.DefaultHostVolumeHardFloorGB` (`civm.go:125`) | gate pós-Off (`reclaim-gate.ps1:12,34`) | piso duro absoluto; nunca operar abaixo |
+
+### Gates do plano Guest % (uso) — perigo é subir
+
+| Gate | Valor | Onde vive (constante) | Onde é aplicado | Ação ao cruzar |
+| --- | --- | --- | --- | --- |
+| `DefaultHardFailPct` | **90** | `civm.go:38` | hook `job-started` (`hook.go:242-245`, `diskUsedPct` `hook.go:725`) | rejeita o job (exit 75) |
+| `DefaultPreCleanupPct` | **60** | `civm.go:37` | hook `job-started` (`hook.go:220`); disk-watchdog (timer) | dispara cleanup de pressão (purga caches) |
+| `DefaultEmergencyBypassPct` | **75** | `civm.go:47` | disk-watchdog: para de adiar reclaim SAFE ao tick idle | trim de emergência mid-job |
+
+**Leitura única do anchoring desfeito:** o "floor 18" do orchestrator (`V:`-livre)
+e o "fail 90%" do hook (guest-uso) **não são o mesmo floor** — são planos
+diferentes. O autoreclaim/panic e o `CritFreeGB`/`HeadroomGB`/`HardFloorGB`
+concordam **todos** na escala `V:`-livre-GB; é nela, e só nela, que o floor de
+sobrevivência de job deve ser expresso (próxima seção).
+
+## 4.2 — Floor de sobrevivência de job (definição MEDIDA, não estimada)
+
+O floor de admissão (`AdmitFloorGB=51`) e o panic (`PanicFloorGB=18`) decidem se
+um job E2E pesado (ex.: **Tenant Isolation**) sobrevive sem ser morto por
+`panic_compact`. A pergunta real é: *quanto de `V:` um job consome até o pico?* —
+o **dreno de V: por job** (high-water). Hoje esse número é **ESTIMADO**: o SPEC e
+o `validation.md` falam "~35GB" inferido da taxa medida (~22 GB/h, §4) e da
+recuperação dos `warn_clean`. Estimativa não é medição (Kahneman #3/#5).
+
+**Definição correta do floor — tudo na escala `V:`-livre-GB:**
+
+```
+floor_de_admissão  >=  CritFreeGB(10)  +  p95(drain_por_job_MEDIDO)  +  safety
+```
+
+onde `drain_por_job` = `host_v_free_gb@job-started − host_v_free_gb@job-completed`
+de um par de registros do mesmo `run_id` no `hooks.jsonl` (helper canônico
+`hook.JobVDrainGB`, `internal/hook/hook.go`). Lê-se: para um job sobreviver, o V:
+ao admiti-lo precisa cobrir o piso crítico do host (10GB, onde o gate host-aware
+já rejeita) MAIS o pior dreno plausível de um job (p95) MAIS uma folga.
+
+**NÃO** se define o floor como "floor − dreno típico estimado" (a forma que gerou
+o "54 − 35 = 19, 1 acima do 18"): isso (a) ancora dois planos e (b) usa um dreno
+que nunca foi medido. O `AdmitFloorGB=51` atual é uma escolha conservadora
+empírica (o V: pós-compact limpo, §11 `validation.md`), **não** um floor derivado
+de p95 de dreno — e permanece assim até o número de dreno ser capturado.
+
+**Estado da medição (PENDENTE de captura):** o mecanismo já existe — o hook grava
+`host_v_free_gb` no `hooks.jsonl` em **ambos** `job-started` e `job-completed`
+(`hook.go` `EventJobStarted`/`EventJobCompleted`; emitido por `appendLog`). O
+high-water (`JobVDrainGB`) é então um pós-processamento dos pares por `run_id`. O
+**número de dreno p95 real será capturado no próximo E2E Tenant Isolation** com a
+box ligada; até lá, `AdmitFloorGB`/`PanicFloorGB` **não devem ser mexidos** — não
+há dado que justifique mover um threshold. Esta seção é a desconfusão de escala +
+a instrumentação da medição, **não** uma recalibração de floor.
+
 ## 5. Gate de segurança de 2 fases (reusado do #106)
 
 `Invoke-StopAndCompact` (`orchestrator.ps1:206-255`) tem **três** salvaguardas
@@ -284,10 +368,20 @@ Ver `validation.md` na raiz do repo (log append-only). Marcos:
 - **2026-06-17 19:45** — ✅ camada panic/warn DEPLOYADA: decision-table **20/20 no
   PowerShell 5.1 da box**, wiring `v_free_gb` vivo no tick real, sem erro. 🟡
   pendente: um `disk_panic` real (`V:<18` + VM Running) registrado num ciclo.
+- **2026-06-19** — 🟡 dreno de V: por job INSTRUMENTADO (não mais estimado): o
+  hook grava `host_v_free_gb` no `hooks.jsonl` em `job-started` E `job-completed`;
+  `hook.JobVDrainGB` calcula o high-water (`vfree@started − vfree@completed`) por
+  `run_id`. Unit-validado (`internal/hook` -race verde). 🟡 **PENDENTE**: o p95 de
+  dreno real (e portanto a derivação do `AdmitFloorGB` por §4.2) será capturado no
+  próximo E2E Tenant Isolation com a box ligada. Até lá, floors **não** mexidos.
 
 Testes (rodar localmente, sem Hyper-V):
 
 ```powershell
 pwsh deploy/windows/civm-orchestrator-decision.test.ps1   # 23 casos
 pwsh deploy/windows/civm-reclaim-gate.test.ps1            # 10 casos
+```
+
+```bash
+go test -race ./internal/hook/...   # inclui JobVDrainGB + emissão de host_v_free_gb
 ```

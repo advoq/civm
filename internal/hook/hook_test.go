@@ -42,6 +42,104 @@ func TestAppendLogIncludesWorkRootIdentifier(t *testing.T) {
 	}
 }
 
+// TestAppendLogEmitsHostVFreeForDrainMeasurement prova que o hooks.jsonl carrega
+// host_v_free_gb + host_level. São o ÚNICO traço persistido do V: livre do host
+// por job; sem esses campos, o dreno por job (high-water = vfree@started −
+// vfree@completed) não seria reconstruível a partir do log — só estimável
+// (Kahneman #3). Antes deste fix os campos existiam no Result mas appendLog os
+// DESCARTAVA.
+func TestAppendLogEmitsHostVFreeForDrainMeasurement(t *testing.T) {
+	t.Parallel()
+	logPath := filepath.Join(t.TempDir(), "hooks.jsonl")
+	opts := Options{Execute: true, LogPath: logPath, MkdirAllFn: os.MkdirAll}
+	res := Result{
+		Event:       EventJobStarted,
+		Decision:    DecisionOK,
+		HostLevel:   "ok",
+		HostVFreeGB: 54,
+	}
+	if err := appendLog(opts, res); err != nil {
+		t.Fatalf("appendLog: %v", err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(data), &rec); err != nil {
+		t.Fatalf("parse log record: %v\n%s", err, data)
+	}
+	if v, ok := rec["host_v_free_gb"]; !ok || int64(v.(float64)) != 54 {
+		t.Fatalf("hook record missing measured host_v_free_gb=54: %v\n%s", rec["host_v_free_gb"], data)
+	}
+	if rec["host_level"] != "ok" {
+		t.Fatalf("hook record missing host_level=ok: %v\n%s", rec["host_level"], data)
+	}
+}
+
+// TestJobCompletedReadsHostVFreeForDrainCloseout prova que o job-completed lê o V:
+// livre do host (não só o job-started). É o extremo de FECHAMENTO do dreno: sem
+// ele, só o início do consumo de V: estaria medido e o high-water ficaria aberto.
+func TestJobCompletedReadsHostVFreeForDrainCloseout(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RUNNER_TEMP", "")
+	t.Setenv("GITHUB_WORKSPACE", "")
+	t.Setenv("GITHUB_REPOSITORY", "")
+	t.Setenv("GITHUB_RUN_ID", "")
+	opts := DefaultOptionsFromEnv(EventJobCompleted)
+	opts.Execute = true
+	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 60, nil }
+	opts.RemoveAllFn = func(string) error { return nil }
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.LogPath = ""
+	opts.WorkRoot = "/home/civm-test/actions-runner-civm/_work"
+	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+	// Snapshot do host com 36GB livres no fim do job; pareado a um job-started de
+	// 54GB, o dreno medido seria 18GB. Aqui só afirmamos o extremo de fechamento.
+	opts.HostDiskFn = func() (hostdisk.Report, error) {
+		return hostdisk.Report{Metrics: hostdisk.Metrics{VFreeGB: 36}, Level: "ok"}, nil
+	}
+	res := Run(context.Background(), opts)
+	if res.HostVFreeGB != 36 {
+		t.Fatalf("job-completed não capturou o V: livre de fechamento: got %d, want 36", res.HostVFreeGB)
+	}
+	if res.HostLevel != "ok" {
+		t.Fatalf("job-completed não propagou host_level: got %q", res.HostLevel)
+	}
+}
+
+// TestJobVDrainGB cobre a definição canônica do dreno medido. Cada caso de recusa
+// (medição não-confiável -> ok=false) é pareado com um positivo (Kahneman #13:
+// existência != função — um par com extremo <=0 jamais vira dreno fantasma).
+func TestJobVDrainGB(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name           string
+		started, compl int64
+		wantDrain      int64
+		wantOK         bool
+	}{
+		{"dreno normal medido", 54, 36, 18, true},
+		{"dreno zero (sem consumo líquido)", 51, 51, 0, true},
+		{"V: subiu no meio (warn/compact) -> clamp 0", 30, 45, 0, true},
+		{"started não medido (<=0) -> não confiável", 0, 36, 0, false},
+		{"completed não medido (<=0) -> não confiável", 54, 0, 0, false},
+		{"ambos não medidos -> não confiável", 0, 0, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			drain, ok := JobVDrainGB(tc.started, tc.compl)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if drain != tc.wantDrain {
+				t.Fatalf("drain = %d, want %d", drain, tc.wantDrain)
+			}
+		})
+	}
+}
+
 func TestJobCompletedCleansWorkspaceButPreservesHotCaches(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	// DefaultOptionsFromEnv lê RUNNER_TEMP/GITHUB_WORKSPACE/etc. do ambiente;

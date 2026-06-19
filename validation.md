@@ -480,3 +480,49 @@ heranca, `serialize-runner.ps1 -Execute` e re-medir.
 **Categoria:** infra / runner
 **Como medir:** `go test -race ./internal/runner/... ./internal/doctor/...`;
 on-box: doctor check `RUNNER_SERIALIZATION` == ok.
+## 2026-06-19 — Dreno de V: por job instrumentado + desconfusão de escala dos floors 🟡
+
+**O que:** Uma validação adversarial Kahneman achou um HIGH: a margem de disco
+que deixa um job E2E sobreviver no floor estava ESTIMADA ("~35GB" de dreno, sem
+high-water capturado) e os "floors" estavam confundidos entre DUAS escalas (V:-
+livre-GB vs guest-uso-%) — a headline "54−35=19, 1 acima do panic floor 18"
+comparava planos diferentes. Dois eixos de fix, sem mexer threshold: (1) mapear
+os gates por escala no SPEC §4.1; (2) instrumentar a MEDIÇÃO do dreno real.
+
+**Dados medidos:**
+
+- MAPA (SPEC §4.1): plano Host V:-livre-GB = `AdmitFloorGB=51` (orchestrator.ps1:286,
+  decision.ps1:27), `WarnFloorGB=28` (ps1:59), `PanicFloorGB=18` (ps1:60),
+  `CritFreeGB=10` (civm.go:105, aplicado em hostdisk.go:193-201 + hook.go:246-249),
+  `HeadroomGB=8` (civm.go:110), `HardFloorGB=1` (civm.go:125). Plano Guest-uso-% =
+  `HardFailPct=90` (civm.go:38, hook.go:242-245 via diskUsedPct hook.go:725),
+  `PreCleanupPct=60` (civm.go:37, hook.go:220), `EmergencyBypassPct=75` (civm.go:47).
+  O "18" e o "90%" NÃO são o mesmo floor — escalas físicas distintas.
+- GAP de medição achado: o hook lia `host_v_free_gb` só no job-started, e o
+  `appendLog` (hook.go:801) DESCARTAVA o campo — nunca chegava ao hooks.jsonl. O
+  dreno por job era, portanto, irreconstruível do log; só estimável.
+- FIX instrumentado: job-completed também lê host V: (hook.go EventJobCompleted);
+  `appendLog` agora emite `host_v_free_gb` + `host_level`; `JobVDrainGB` é a
+  definição canônica do high-water (`vfree@started − vfree@completed` por run_id,
+  clamp 0 em delta negativo, `ok=false` em extremo <=0). 4 testes novos
+  (emissão no log, leitura no completed, tabela JobVDrainGB 6 casos, par
+  recusa/positivo Kahneman #13). `go test -race ./internal/hook ./internal/hostdisk`
+  = ok; gofmt limpo; golangci-lint = 0 issues.
+- FLOOR reformulado (SPEC §4.2): `floor >= CritFreeGB(10) + p95(drain_MEDIDO) +
+  safety` — tudo em V:-livre-GB (a escala onde autoreclaim/panic/crit concordam),
+  nunca "floor − dreno estimado".
+
+**Veredito:** 🟡 a desconfusão de escala e a instrumentação estão FEITAS e
+unit-green; o `AdmitFloorGB=51`/`PanicFloorGB=18` ficam INTOCADOS (não há dado de
+dreno que justifique mover). O número de dreno p95 real é PENDENTE: a box está
+rodando CI agora — será capturado no próximo job E2E Tenant Isolation (par
+job-started/job-completed no hooks.jsonl). Vira ✅ quando o p95 medido confirmar
+(ou refutar) o floor de 51.
+
+**Como medir:** com a box ligada, após um E2E Tenant Isolation, parear no
+`/var/log/civm/hooks.jsonl` os dois registros do mesmo `run_id` e computar
+`host_v_free_gb@job-started − host_v_free_gb@job-completed` (ou rodar `JobVDrainGB`
+sobre o par); acumular p95 sobre vários jobs pesados.
+
+**Proxima acao:** capturar o 1o par de dreno real no próximo E2E; com o p95,
+derivar `AdmitFloorGB` por §4.2 e fechar o 🟡.

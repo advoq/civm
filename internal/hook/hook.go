@@ -250,6 +250,17 @@ func Run(ctx context.Context, opts Options) Result {
 		}
 	case EventJobCompleted:
 		res.Decision = DecisionCleanupApplied
+		// Lê o V: livre do host TAMBÉM no fim do job, não só no início. Pareado por
+		// run_id com o host_v_free_gb do job-started, o par (start, completed) dá o
+		// HIGH-WATER MEDIDO de dreno de V: por job: drain_gb = vfree@started −
+		// vfree@completed. Antes, o dreno era ESTIMADO ("~35GB", inferido da taxa
+		// ~22GB/h) — número-adjetivo sem medição (Kahneman #3/#5). Com os dois
+		// extremos no hooks.jsonl, o p95 real do dreno passa a ser observável e o
+		// floor do orchestrator deixa de depender de palpite. A leitura é best-effort
+		// (snapshot ausente/stale vira Report fail-safe) e NUNCA falha o job.
+		host, _ := opts.HostDiskFn()
+		res.HostLevel = host.Level
+		res.HostVFreeGB = host.VFreeGB
 		// Modo rotineiro: preserva caches hot ($HOME/.cache/go-build, etc.)
 		// para evitar invalidar build caches entre jobs concorrentes na VM.
 		// Go build cache especialmente é caro de reconstruir (~minutos por
@@ -722,6 +733,29 @@ func diskUsedPct(opts Options) (int, error) {
 	return int((total - free) * 100 / total), nil
 }
 
+// JobVDrainGB é a definição CANÔNICA do dreno de V: por job: quanto de V: livre
+// (GB no host) o job consumiu, medido como o high-water entre os dois extremos do
+// hooks.jsonl — vfree no job-started menos vfree no job-completed. É o número que
+// substitui a estimativa "~35GB" (Kahneman #3/#5: número MEDIDO, não adjetivo) e
+// que calibra o floor do orchestrator (`floor >= host_crit + p95(drain) + safety`).
+//
+// vStartedGB/vCompletedGB são os `host_v_free_gb` dos dois registros pareados pelo
+// mesmo run_id. Retorna (0, false) quando a medição NÃO é confiável — qualquer
+// extremo <= 0 significa "não medi" (snapshot ausente/stale dobrado em fail-safe),
+// e um par desses jamais deve virar um dreno fantasma de dezenas de GB. Um delta
+// negativo (o V: SUBIU durante o job — um warn_clean/compact rodou no meio) é
+// clampado a 0: aquele job não drenou líquido, e um dreno negativo poluiria o p95.
+func JobVDrainGB(vStartedGB, vCompletedGB int64) (int64, bool) {
+	if vStartedGB <= 0 || vCompletedGB <= 0 {
+		return 0, false
+	}
+	drain := vStartedGB - vCompletedGB
+	if drain < 0 {
+		return 0, true
+	}
+	return drain, true
+}
+
 func finish(opts Options, res Result) Result {
 	if res.ExitCode == 0 && (res.Decision == DecisionError || res.Decision == DecisionRejected) {
 		res.ExitCode = 1
@@ -798,6 +832,12 @@ func appendLog(opts Options, res Result) error {
 	case DecisionRejected, DecisionCleanupDegraded:
 		level = slog.LevelWarn
 	}
+	// host_v_free_gb + host_level entram no hooks.jsonl: são o ÚNICO traço
+	// persistido do V: livre do host por job. Pareando os dois registros do mesmo
+	// run_id (job-started e job-completed), o dreno de V: por job é MEDIDO
+	// (high-water = vfree@started − vfree@completed) em vez de estimado. Sem estes
+	// campos no log, o número de dreno que calibra o floor do orchestrator seria
+	// reconstruível só por palpite (Kahneman #3: número antes de adjetivo).
 	logger.LogAttrs(context.Background(), level, "hook event",
 		slog.String("event", string(res.Event)),
 		slog.String("decision", string(res.Decision)),
@@ -806,6 +846,8 @@ func appendLog(opts Options, res Result) error {
 		slog.String("repository", res.Repository),
 		slog.String("run_id", res.RunID),
 		slog.String("work_root", res.WorkRoot),
+		slog.String("host_level", res.HostLevel),
+		slog.Int64("host_v_free_gb", res.HostVFreeGB),
 		slog.String("error", res.Error),
 		slog.Any("actions", res.Actions),
 	)
