@@ -182,7 +182,7 @@ func TestCollectAndRenderJSON(t *testing.T) {
 	if len(parsed.GitHubRepos) != 2 || parsed.GitHubRepos[1].Runners[0].Classification != "legacy_stale" {
 		t.Fatalf("parsed = %+v", parsed)
 	}
-	if len(parsed.HookChecks) != 5 {
+	if len(parsed.HookChecks) != 6 {
 		t.Fatalf("hook checks not rendered in JSON: %+v", parsed.HookChecks)
 	}
 }
@@ -240,6 +240,64 @@ func TestCollectReportsHookContractFailures(t *testing.T) {
 	assertHookCheck(t, report, "HOOK_JOB_COMPLETED", SeverityCritical, "content mismatch")
 	assertHookCheck(t, report, "HOOK_RUNNER_ENVS", SeverityCritical, "job-started")
 	assertHookCheck(t, report, "RUNNER_SERVICES", SeverityCritical, "1/2")
+}
+
+// TestCollectFlagsRunnerSerializationCollision prova que o doctor detecta o
+// runner org + por-repo coexistindo (o estado que quebrou o #1184) como crítico,
+// com o resto do contrato verde para isolar a falha de serialização.
+func TestCollectFlagsRunnerSerializationCollision(t *testing.T) {
+	t.Parallel()
+	opts := DefaultOptions()
+	opts.Repos = []string{"advoq/advoq"}
+	opts.HealthFn = func(context.Context) health.Report {
+		return health.Report{Checks: []health.Check{
+			{Name: "DISK", Detail: "50 GB free", Status: health.StatusOK},
+		}}
+	}
+	opts.SystemRunnersFn = func(context.Context) ([]runner.Status, error) {
+		return []runner.Status{
+			{UnitName: "actions.runner.advoq.civm-advoq-org.service", Repo: "advoq", Name: "civm-advoq-org", ActiveState: "active", SubState: "running"},
+			{UnitName: "actions.runner.advoq-advoq.civm-advoq.service", Repo: "advoq/advoq", Name: "civm-advoq", ActiveState: "active", SubState: "running"},
+		}, nil
+	}
+	stubHookContractOK(&opts)
+	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]GitHubRunner, error) {
+		return []GitHubRunner{{Repo: repo, Name: "civm-advoq-org", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
+	}
+	report, err := Collect(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Collect err = %v", err)
+	}
+	assertHookCheck(t, report, "RUNNER_SERIALIZATION", SeverityCritical, "civm-advoq")
+	assertHookCheck(t, report, "RUNNER_SERIALIZATION", SeverityCritical, "civmctl runner remove")
+	if report.Exit != 2 {
+		t.Fatalf("Exit = %d, want critical 2 (serialização); hook_checks=%+v", report.Exit, report.HookChecks)
+	}
+}
+
+// TestCollectRunnerSerializationOKWhenOrgOnly garante zero falso-positivo: só o
+// runner org presente é o estado durável correto, severidade OK.
+func TestCollectRunnerSerializationOKWhenOrgOnly(t *testing.T) {
+	t.Parallel()
+	opts := DefaultOptions()
+	opts.Repos = []string{"advoq/advoq"}
+	opts.HealthFn = func(context.Context) health.Report {
+		return health.Report{Checks: []health.Check{{Name: "DISK", Detail: "50 GB free", Status: health.StatusOK}}}
+	}
+	opts.SystemRunnersFn = func(context.Context) ([]runner.Status, error) {
+		return []runner.Status{
+			{UnitName: "actions.runner.advoq.civm-advoq-org.service", Repo: "advoq", Name: "civm-advoq-org", ActiveState: "active", SubState: "running"},
+		}, nil
+	}
+	stubHookContractOK(&opts)
+	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]GitHubRunner, error) {
+		return []GitHubRunner{{Repo: repo, Name: "civm-advoq-org", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
+	}
+	report, err := Collect(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Collect err = %v", err)
+	}
+	assertHookCheck(t, report, "RUNNER_SERIALIZATION", SeverityOK, "sem runner por-repo redundante")
 }
 
 func TestCollectInfersReposFromSystemdWhenReposUnset(t *testing.T) {
