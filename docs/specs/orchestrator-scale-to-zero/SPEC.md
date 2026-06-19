@@ -73,15 +73,16 @@ stop, evitando um SSH por tick.
 | `noop_off` | VM Off + nada | nada (linha 285) |
 | `panic_compact` | VM Running + `0<VFreeGB<PanicFloorGB` + `CanPanic` | `Invoke-StopAndCompact` MESMO ocupado (linha 305-318) |
 | `warn_clean` | VM Running + `0<VFreeGB<WarnFloorGB` | poda online, sem stop (linha 299-304) |
+| `boundary_compact` | VM Running + `Running==0` + `Queued>0` + `0<VFreeGB<BoundaryCompactFloorGB` | `Invoke-StopAndCompact` no GAP, **sem matar job** (Running==0) |
 | `mark_busy` | VM Running + `(queued+running)>0` | grava `lastBusyUtc` (linha 293) |
 | `idle_debounce` | VM Running + ocioso + `idle<IdleStopMinutes` | só loga (linha 294) |
 | `stop_aborted_active_job` | VM Running + ocioso ≥ debounce + probe SSH vê worker | aborta stop, re-arma busy (linha 295-298) |
 | `stop_and_compact` | VM Running + ocioso ≥ debounce + sem worker | `Invoke-StopAndCompact` (linha 319-324) |
 
 **Ordem de precedência** dentro de `Get-OrchestratorDecision` (crítica): VM Off
-primeiro → **segurança de disco** (panic, depois warn) **antes** do fluxo normal →
-busy → debounce → gate de stop. Disco apertado supera manter jobs vivos
-(`civm-orchestrator-decision.ps1:29-39`).
+primeiro → **segurança de disco** (panic, depois warn) → **boundary_compact** (gap
+entre PRs) **antes** do fluxo normal → busy → debounce → gate de stop. Disco
+apertado supera manter jobs vivos (`civm-orchestrator-decision.ps1:29-39`).
 
 ## 3. Requisitos
 
@@ -124,7 +125,59 @@ WSL↔Windows (`validation.md`, 2026-06-17 18:38). A camada de disco fecha esse 
 | Camada | Gatilho | Ação | Mata job? |
 | --- | --- | --- | --- |
 | `warn_clean` | `V: < WarnFloorGB` (28) | `docker builder prune -af` + `fstrim` online (`Invoke-GuestWarnClean`, `orchestrator.ps1:188-195`) | **Não** — poda só cache de build regenerável; nunca imagens de run (sem o bug de eviction que o age-guard consertou) |
+| `boundary_compact` | `Running==0` + `Queued>0` + `V: < BoundaryCompactFloorGB` (40) | `Stop-VM` + `Optimize-VHD` offline no GAP entre sequências de PR (`Invoke-StopAndCompact -Reason 'boundary_compact'`) | **Não** — nenhum job `in_progress` (Running==0); recupera o `V:` de graça antes da zona de perigo |
 | `panic_compact` | `V: < PanicFloorGB` (18) + `CanPanic` | `Stop-VM -Force` + `Optimize-VHD` offline **mesmo ocupado** (`orchestrator.ps1:305-318`) | **Sim** — jobs ativos morrem e re-rodam |
+
+### boundary_compact — o gap entre sequências (2026-06-19)
+
+O scale-to-zero só compactava no **idle total** (`Queued==0 + Running==0`), e o
+`panic`/`warn` só agem com `V:` já em perigo (< 28 / < 18). Sob **fila CONTÍNUA**
+(PRs back-to-back) havia um buraco: a VM ficava `Running` o tempo todo (sempre
+algo na fila), nunca chegava ao idle → o `stop_and_compact` ocioso **nunca rodava**
+→ o VHDX crescia job-a-job até bater no `panic`, que **mata 1 job**. O
+`boundary_compact` fecha esse buraco pegando a janela natural em que a sequência de
+jobs de **um** PR terminou (`Running==0`, nada `in_progress`) mas o próximo PR já
+está na fila (`Queued>0`): aí `Stop-VM` + `Optimize-VHD` **não matam nada** (não há
+job rodando), e o próximo tick religa pela lógica `start` (porque `Queued>0`, cold
+start). É o **mesmo** `Invoke-StopAndCompact` do panic (mesmo lock canônico, mesmo
+gate pós-Off `Test-OptimizeSlack`), mas **sem cooldown** — o cooldown do panic
+existe só para não re-matar jobs em loop, e aqui nenhum job morre.
+
+**Escolha do piso `BoundaryCompactFloorGB=40` (Kahneman #3 — ancorado em dado, não
+num default redondo):** o `stop`/`Optimize` custa ~8 min de cold-start no próximo
+batch, então só vale a pena quando o disco **já caiu o bastante**. 40 fica folgado
+sobre o `warn` (28) e o `panic` (18) — recupera **antes** da zona de perigo — e
+abaixo do `admit` (51): com `V:` 51 limpo, cair a 40 significa ~11 GB consumidos por
+um PR, o suficiente para justificar recuperar no gap. Acima de 40 (folgado) o caso
+cai no `mark_busy` normal e a VM segue ligada para o próximo batch (poupa o
+cold-start). Não é `> admit (51)`: queremos compactar no gap **quando já desceu**,
+não a cada gap mesmo com disco cheio.
+
+**Banda efetiva (precedência honesta):** `panic`/`warn` ficam **antes** na cadeia e
+testam `hasWork=(Queued+Running)>0` (verdadeiro quando `Queued>0`), então
+`boundary_compact` só dispara de fato na faixa **28..40**. Abaixo de 28 o `warn`
+online age primeiro; abaixo de 18 o `panic` ganha — e tudo bem, porque com
+`Running==0` o panic **também não mata job** (compacta igual). A única diferença
+sub-18 é o label/cooldown, inofensiva no gap. Boundary adiciona a recuperação
+proativa offline na faixa "ainda saudável mas descendo" (28..40), nos gaps.
+
+**Caso back-to-back SEM gap (limitação honesta):** se a fila é tão colada que um
+job novo entra `in_progress` **antes** de `Running` chegar a 0 (sequências que se
+sobrepõem, sem janela vazia), o `boundary_compact` **nunca** dispara — `Running`
+nunca é 0. Nesse perfil o `panic_compact` continua sendo o fallback que **mata 1
+job** quando o `V:` cruza 18. O boundary mitiga o caso comum (gaps existem entre a
+maioria dos PRs), não o elimina; o panic permanece a rede de segurança final.
+
+### Composição com a poda de imagens do #137
+
+O `boundary_compact` e a poda de imagens taggeadas de compose-project no
+`job-completed` (branch `fix/issue-137-source-reduction`, commit `da41d45`) se
+**compõem**, não se duplicam: o **#137 libera os blocos** dentro do guest (remove
+imagens de runs finalizadas → blocos viram TRIM-áveis), e o `boundary_compact`
+**recupera o `V:` do host** via `Optimize-VHD` offline (encolhe o VHDX de fato —
+podar imagem no guest sozinho NÃO encolhe o arquivo). Um prepara o espaço
+recuperável; o outro o devolve ao host no gap. São camadas distintas (guest-side
+free vs. host-side shrink) e não se sobrepõem.
 
 **Tradeoff explícito do panic** (`orchestrator.ps1:305-318`,
 `decision.ps1:29-38`): matar jobs que re-rodam é ruim, mas **disco encher é pior**
@@ -329,8 +382,9 @@ Linha NDJSON por evento (`Write-OrcLog`, `orchestrator.ps1:75-82`): `ts` (UTC IS
 | `idle_debounce` | ocioso antes do debounce | `idle_min`, `need` | `orchestrator.ps1:294` |
 | `stop_aborted_active_job` | stop abortado: worker ativo via SSH | `note` | `orchestrator.ps1:296` |
 | `disk_warn` | `warn_clean` disparado | `v_free_gb`, `floor` | `orchestrator.ps1:303` |
+| `disk_boundary_compact` | `boundary_compact` disparado (gap entre PRs, **não** mata job) | `v_free_gb`, `floor`, `queued`, `note` | switch `boundary_compact` |
 | `disk_panic` | `panic_compact` disparado (mata jobs) | `v_free_gb`, `floor`, `note` | `orchestrator.ps1:312` |
-| `would_start` / `would_stop_and_compact` / `would_warn_clean` / `would_panic_compact` | modo `-Observe` (loga, não age) | conforme a ação | `orchestrator.ps1:287,302,310,322` |
+| `would_start` / `would_stop_and_compact` / `would_warn_clean` / `would_boundary_compact` / `would_panic_compact` | modo `-Observe` (loga, não age) | conforme a ação | `orchestrator.ps1:287,302,310,322` |
 | `reclaim_start` | início de `Invoke-StopAndCompact` | `reason` | `orchestrator.ps1:218` |
 | `reclaim_post_off_remeasure` | re-medida de `V:` pós-Off (gate fase 2) | `v_free_after_off_gb`, `scratch_budget_gb` | `orchestrator.ps1:231` |
 | `reclaim_skip_insufficient_slack` | folga não cobre o scratch → pula compact | `v_free_after_off_gb`, `hard_floor_gb` | `orchestrator.ps1:235` |
@@ -405,7 +459,7 @@ Ver `validation.md` na raiz do repo (log append-only). Marcos:
 Testes (rodar localmente, sem Hyper-V):
 
 ```powershell
-pwsh deploy/windows/civm-orchestrator-decision.test.ps1   # 23 casos
+pwsh deploy/windows/civm-orchestrator-decision.test.ps1   # 38 casos (inclui boundary_compact)
 pwsh deploy/windows/civm-reclaim-gate.test.ps1            # 10 casos
 ```
 

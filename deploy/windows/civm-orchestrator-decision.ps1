@@ -15,6 +15,15 @@ function Get-OrchestratorDecision {
         [int]$VFreeGB = 999,
         [int]$WarnFloorGB = 28,
         [int]$PanicFloorGB = 18,
+        # PISO DO BOUNDARY-COMPACT (V: livre em GB). No GAP entre sequencias de PR
+        # (Running==0, mas Queued>0) compactamos de graca — nao ha job in_progress
+        # pra matar. So vale o custo do stop/Optimize (~8min de cold-start no proximo
+        # batch) se o disco JA caiu o suficiente: 40 fica folgado sobre o warn (28) e
+        # o panic (18), recuperando ANTES da zona de perigo, mas abaixo do admit (51)
+        # pra nao compactar a cada gap quando o disco ainda esta cheio. Pense:
+        # 51 (limpo) - 40 = ~11GB consumidos por um PR ja justifica recuperar no gap.
+        # Numero ancorado em dado (Kahneman #3), nao num default redondo arbitrario.
+        [int]$BoundaryCompactFloorGB = 40,
         # CanPanic=false (cooldown ativo) rebaixa o panic para warn_clean: nao
         # re-mata jobs dentro da janela de cooldown; so poda online. Calculado
         # pelo caller via Test-ReclaimCooldown (civm-reclaim-gate.ps1).
@@ -59,6 +68,21 @@ function Get-OrchestratorDecision {
     # (CanPanic); dentro, o panic rebaixa pra warn_clean (nao re-mata em loop).
     if ($hasWork -and $VFreeGB -gt 0 -and $VFreeGB -lt $PanicFloorGB -and $CanPanic) { return 'panic_compact' }
     if ($hasWork -and $VFreeGB -gt 0 -and $VFreeGB -lt $WarnFloorGB) { return 'warn_clean' }
+    # BOUNDARY-COMPACT — compactar no GAP entre sequencias, SEM matar job. A causa
+    # raiz (medida 2026-06-19): com fila CONTINUA (PRs back-to-back) a VM fica
+    # Running o tempo todo, nunca idla, entao o stop_and_compact ocioso NUNCA roda e
+    # o VHDX cresce job-a-job ate o panic (que mata 1 job). Aqui pegamos a janela em
+    # que a sequencia de jobs de UM PR acabou (Running==0, nada in_progress) mas o
+    # proximo PR ja esta na fila (Queued>0): compactar agora nao mata nada porque
+    # nenhum job esta rodando. Gate de disco (V < BoundaryCompactFloorGB, 40) pra so
+    # pagar o custo do stop/Optimize quando o disco ja caiu o bastante — quando esta
+    # folgado, cai pro mark_busy normal e a VM segue ligada pro proximo batch. Fica
+    # ANTES do mark_busy (senao mark_busy engoliria o caso, pois (Q+R)>0 e hasWork) e
+    # DEPOIS de panic/warn (disco critico/baixo com job rodando e mais urgente). O
+    # panic_compact permanece o fallback pra fila tao colada que Running nunca chega
+    # a 0 antes do V cair abaixo de 18. VFreeGB<=0 = "nao medi" -> fail-safe (#15),
+    # nao compacta. Apos o compact, o proximo tick religa pela logica 'start' (Q>0).
+    if ($Running -eq 0 -and $Queued -gt 0 -and $VFreeGB -gt 0 -and $VFreeGB -lt $BoundaryCompactFloorGB) { return 'boundary_compact' }
     # VM Running com trabalho: marca busy, nunca desliga.
     if ($hasWork) { return 'mark_busy' }
     # Ocioso mas antes do debounce: espera o IdleStopMinutes.

@@ -611,3 +611,55 @@ o slot); medir `docker system df` do guest antes/depois de uma rajada e contar
 **Categoria:** disk-reclaim
 **Como medir:** mid-burst no guest: `docker system df`; e no host:
 `Select-String disk_panic` no orchestrator log sobre uma janela de CI sustentado.
+## 2026-06-19 04:45 -03 — boundary_compact: compactar no GAP entre PRs (sem matar job) ✅/🟡
+
+**O que:** A decisao do orchestrator (`Get-OrchestratorDecision`) so compactava no
+idle TOTAL (`Queued==0 + Running==0`); o `panic`/`warn` so agem com `V:` ja em
+perigo (< 28 / < 18). Sob fila CONTINUA (PRs back-to-back) a VM ficava `Running` o
+tempo todo, nunca idlava, entao o `stop_and_compact` ocioso NUNCA rodava e o VHDX
+crescia job-a-job ate o `panic` matar 1 job. Nova acao `boundary_compact` pega o
+GAP entre sequencias de PR (Running==0, nada in_progress, mas Queued>0): compacta
+de graca porque nenhum job esta rodando.
+
+**Dados medidos:**
+
+- Gap (root cause, medido 2026-06-19): com fila colada a decisao era `mark_busy`
+  enquanto (Queued+Running)>0, e o `stop_and_compact` exigia Queued==0+Running==0
+  -> a box Running o tempo todo -> VHDX so cresce -> panic (mata job).
+- Fix (TDD RED->GREEN): `boundary_compact` na decisao pura — `Running==0 AND
+  Queued>0 AND 0<V<BoundaryCompactFloorGB(40)` -> compacta no gap. Fica ANTES do
+  `mark_busy` (senao mark_busy engolia, pois (Q+R)>0) e DEPOIS de panic/warn
+  (disco critico com job rodando e mais urgente). Reusa `Invoke-StopAndCompact`
+  (mesmo lock V:\civm-reclaim.lock + gate pos-Off Test-OptimizeSlack do panic),
+  mas SEM cooldown — nenhum job morre, entao nao ha loop a barrar. O panic
+  permanece o fallback (nao removido).
+- Piso 40 (Kahneman #3, ancorado em dado): folgado sobre warn(28)/panic(18),
+  abaixo do admit(51). 51 limpo - 40 = ~11GB consumidos por um PR ja justifica o
+  custo do stop/Optimize (~8min cold-start). Banda efetiva real = 28..40 (panic/
+  warn ganham < 28 pois testam hasWork=(Q+R)>0; sub-18 o panic compacta igual,
+  Running==0 nao mata job — so muda label/cooldown).
+- VALIDACAO: decision-table replicada fielmente em Python (cadeia identica ao .ps1)
+  -> 38/38 PASS (30 existentes + 8 novos do boundary, zero regressao). Os 4 casos
+  exigidos cobertos: (a) R=0/Q>0/V=35 -> boundary; (b) R=0/Q>0/V=45 -> mark_busy;
+  (c) R=2/Q>0/V=35 -> mark_busy (job rodando, NAO mata); (d) panic ainda dispara
+  V<18. Go `ps1_safety_test` (Int32 clamp) PASS. Balance de braces/parens OK nos 3
+  ps1. pwsh INDISPONIVEL no host -> a decision-table .ps1 (38 casos) e o gate
+  (10 casos) rodam na box (PS 5.1), igual ao deploy anterior; sintaxe validada
+  estaticamente aqui.
+
+**Veredito:** 🟡 implementado, testado (38/38 na simulacao fiel) e comentado, mas
+ainda NAO rodado em pwsh real nem disparado num evento ao vivo na box. Vira ✅
+pleno quando: (1) `pwsh civm-orchestrator-decision.test.ps1` der 38/38 na box, e
+(2) um `disk_boundary_compact` real for capturado no `V:\civm-orchestrator.log`
+(VM Running + Running==0 + Queued>0 + V<40). Limitacao honesta: no caso
+back-to-back SEM gap (job novo entra in_progress antes de Running chegar a 0), o
+boundary nunca dispara e o `panic_compact` segue sendo o fallback que mata 1 job.
+
+**Categoria:** infra-orchestrator (decisao de power-state / disco)
+
+**Como medir:** `pwsh deploy/windows/civm-orchestrator-decision.test.ps1` na box;
+e `Select-String boundary_compact V:\civm-orchestrator.log` pro disparo ao vivo.
+
+**Proxima acao:** rodar a decision-table em pwsh na box (38/38); capturar o 1o
+`disk_boundary_compact` ao vivo; nota de composicao com o #137 (libera blocos no
+guest; boundary recupera o V: via Optimize) ja registrada no SPEC.
