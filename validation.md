@@ -577,3 +577,37 @@ para confirmar in-vivo ainda (o reaper ainda não rodou num job-started que tive
 um `docker_reap_orphan_ci` com `Path="reaped N orphan CI container(s)"` no
 `/var/log/civm/hooks.jsonl` num job-started real; commit na branch fix/orphan-port-reaper
 (sem push — review do usuário).
+
+## 2026-06-18 21:30 -03 — Reap de imagens de run no job-completed reduz a FONTE (#137, unit)
+
+**O que:** O `job-completed` so removia imagens DANGLING; as imagens taggeadas de
+service que o run buildou (a E2E builda ~35GB/job) nunca saiam e acumulavam na
+rajada ate o panic floor. Adicionado `reapRunImages` (`internal/hook/hook.go`):
+`docker image prune -a -f --filter label=com.docker.compose.project=<scope>` por
+escopo, com `<scope>` = compose project DESTE runner (`<slot>` + `<slot>-<run_id>`,
+lidos de `CIVM_RUNNER_SLOT`/`COMPOSE_PROJECT_NAME`). Escopo box-unico por runner
+(multi-project-isolation) → sibling nunca tocado; vendor pull (sem label compose)
+nunca matched → o "No such image" race do PR #135 NAO volta.
+
+**Dados medidos:**
+
+- TDD RED→GREEN: 9 testes novos (`run_image_reap_test.go`), todos PASS.
+- Suite `internal/hook + hostdisk + civm + cleanup` com `-race -count=1`: 4/4 ok.
+- Suite `./internal/...` completa: 0 falhas. `go build ./...`: ok.
+- `gofmt -l`: limpo. `golangci-lint -c .golangci.yml ./internal/hook ./internal/civm`: 0 issues.
+- Guards de seguranca travados por teste: `image prune -a` SO com filtro de label
+  (nunca unscoped); sem slot no env → no-op; job-started NAO reapa por label;
+  falha de reap → Warning (job-completed segue exit 0).
+
+**Veredito:** 🟡 PARCIAL — concurrency-safety e fail-safes provados por unit, mas o
+EFEITO real (V: cai mais devagar sob a mesma rajada; menos `disk_panic` no log) so
+vira ✅ apos deploy + medir um ciclo de CI sustentado na box. O panic floor
+permanece como salvaguarda permanente (#15), nao substituido.
+
+**Proxima acao:** deploy do civmctl atualizado nos runners (`hook install` ja injeta
+o slot); medir `docker system df` do guest antes/depois de uma rajada e contar
+`disk_panic` no orchestrator log num periodo comparavel.
+
+**Categoria:** disk-reclaim
+**Como medir:** mid-burst no guest: `docker system df`; e no host:
+`Select-String disk_panic` no orchestrator log sobre uma janela de CI sustentado.

@@ -96,6 +96,17 @@ const (
 	// imagens recém-baixadas debaixo de um deploy concorrente — ver cleanup.go.)
 	DefaultDockerBuildxPruneFilter = "until=24h"
 
+	// Label que todo `docker compose` carimba nas imagens que builda. O job-completed
+	// reapa as imagens taggeadas do PRÓPRIO run que terminou filtrando por este label
+	// igual ao compose project deste runner (`<slot>` ou `<slot>-<run_id>`). É a
+	// redução-na-FONTE da issue #137: sem isso, as imagens de service de cada run
+	// (~35GB num job de E2E) só saíam como dangling — nunca — e acumulavam na rajada
+	// até o panic floor. O escopo por label é seguro porque o slot é box-único por
+	// runner (multi-project-isolation): um sibling jamais carrega o mesmo project, e
+	// imagem de vendor pull (redis/minio/postgres) não tem label de compose — então o
+	// "No such image" race que o PR #135 removeu do path online não volta.
+	DefaultDockerComposeProjectLabel = "com.docker.compose.project"
+
 	// Timeout por comando dentro do hook cleanup. Evita que um docker travado
 	// segure o runner durante todo o TimeoutStartSec do systemd (30 min).
 	DefaultRoutineCleanupCmdTimeoutSecs = 120

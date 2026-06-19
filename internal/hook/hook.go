@@ -91,10 +91,16 @@ type Options struct {
 	GitHubWorkspace string
 	Repository      string
 	RunID           string
-	LogPath         string
-	Now             time.Time
-	RunFn           func(ctx context.Context, name string, args ...string) ([]byte, error)
-	RemoveAllFn     func(path string) error
+	// ComposeProject é o COMPOSE_PROJECT_NAME/slot deste runner, injetado no .env
+	// pelo `hook install` (CIVM_RUNNER_SLOT). O job-completed o usa para escopar o
+	// reap das imagens de run ao compose project deste runner — box-único, então um
+	// sibling nunca é tocado. Vazio (env degradado) → o reap vira no-op (fail-safe:
+	// sem escopo seguro, não se reapa imagem taggeada).
+	ComposeProject string
+	LogPath        string
+	Now            time.Time
+	RunFn          func(ctx context.Context, name string, args ...string) ([]byte, error)
+	RemoveAllFn    func(path string) error
 	// SafeWorkDeleteFn removes one top-level _work entry, escalating to the
 	// privileged wrapper only when a root-owned file (a containerized CI step
 	// ran as root and wrote into the mounted _work) blocks the unprivileged
@@ -134,6 +140,7 @@ func DefaultOptionsFromEnv(event Event) Options {
 		GitHubWorkspace: os.Getenv("GITHUB_WORKSPACE"),
 		Repository:      os.Getenv("GITHUB_REPOSITORY"),
 		RunID:           os.Getenv("GITHUB_RUN_ID"),
+		ComposeProject:  composeProjectFromEnv(),
 		LogPath:         civm.DefaultHooksLogPath,
 		Now:             time.Now(),
 		RunFn:           defaultRun,
@@ -332,7 +339,9 @@ func cacheTrimIsIdle(ctx context.Context, opts Options, ownDirs []string) bool {
 func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	roots := workRoots(opts)
 	caps := cacheCaps()
-	estCap := 2*len(roots) + len(caps) + 8
+	// Slack de 10: buildx + image_prune + 2 reap scopes + container/volume prune +
+	// apt + journal + fstrim + cache_trim_deferred.
+	estCap := 2*len(roots) + len(caps) + 10
 	actions := make([]Action, 0, estCap)
 	for _, root := range roots {
 		// Kill orphan containers BEFORE deleting the root: a cancelled job's
@@ -399,6 +408,16 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 		actions = append(actions, commandActionWarn(opts, ctx, "docker_buildx_prune", "docker", "buildx", "prune", "--force", "--filter", civm.DefaultDockerBuildxPruneFilter))
 	}
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_image_prune", "docker", "image", "prune", "-f"))
+	// Redução-na-FONTE (issue #137): em modo rotineiro (job-completed), além do
+	// dangling-only acima, reapa as imagens TAGGEADAS que o próprio run buildou e
+	// agora estão sem container. Filtra pelo compose project DESTE runner — o
+	// `image prune -f` sozinho nunca tocava essas imagens de service (~35GB/job de
+	// E2E) e elas acumulavam na rajada até o panic floor. Em modo pressão
+	// (purgeCaches=true, job-started) o run mal começou e suas imagens ainda serão
+	// usadas, então o reap por label NÃO roda ali.
+	if !purgeCaches {
+		actions = append(actions, reapRunImages(opts, ctx)...)
+	}
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_container_prune", "docker", "container", "prune", "-f"))
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_volume_prune", "docker", "volume", "prune", "-f"))
 	// apt_clean, journal_vacuum and fstrim are opportunistic disk reclaim and
@@ -408,6 +427,58 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	actions = append(actions, commandActionWarn(opts, ctx, "apt_clean", "sudo", "apt-get", "clean"))
 	actions = append(actions, commandActionWarn(opts, ctx, "journal_vacuum", "sudo", "journalctl", "--vacuum-time=1d"))
 	actions = append(actions, commandActionWarn(opts, ctx, "fstrim", "sudo", "fstrim", "-av"))
+	return actions
+}
+
+// composeProjectFromEnv lê a identidade de compose project deste runner do env do
+// hook. O `.env` do runner (gravado por `hook install`) traz CIVM_RUNNER_SLOT e
+// COMPOSE_PROJECT_NAME=<slot>; preferimos o slot estável e caímos no
+// COMPOSE_PROJECT_NAME. Vazio → o reap de imagens vira no-op (fail-safe).
+func composeProjectFromEnv() string {
+	if slot := strings.TrimSpace(os.Getenv("CIVM_RUNNER_SLOT")); slot != "" {
+		return slot
+	}
+	return strings.TrimSpace(os.Getenv("COMPOSE_PROJECT_NAME"))
+}
+
+// runImageReapScopes deriva os labels de compose project a reapar para este run.
+// O consumidor usa tanto o slot bare (COMPOSE_PROJECT_NAME default) quanto
+// `<slot>-<run_id>` (a forma per-run recomendada na multi-project-isolation), então
+// reapamos ambos. Os dois são deste runner — box-único — nunca de um sibling.
+// Sem project (env degradado) → nenhum escopo → sem reap.
+func runImageReapScopes(opts Options) []string {
+	project := strings.TrimSpace(opts.ComposeProject)
+	if project == "" {
+		return nil
+	}
+	scopes := []string{project}
+	if run := strings.TrimSpace(opts.RunID); run != "" {
+		scopes = append(scopes, project+"-"+run)
+	}
+	return scopes
+}
+
+// reapRunImages reapa as imagens taggeadas que o run que terminou buildou, uma
+// chamada de `docker image prune -a -f --filter label=<project-label>=<scope>` por
+// escopo. O `-a` aqui é SEGURO porque o filtro de label restringe ao compose
+// project deste runner e o docker recusa remover imagem com container vivo — então
+// nunca toca a imagem de um sibling (label diferente) nem uma base de vendor pull
+// (sem label de compose). É a redução-na-FONTE da issue #137. Best-effort:
+// commandActionWarn — falha vira Warning, jamais falha o job-completed que segue.
+func reapRunImages(opts Options, ctx context.Context) []Action {
+	scopes := runImageReapScopes(opts)
+	if len(scopes) == 0 {
+		// Env degradado: sem escopo seguro, não reapamos nada (vs. um prune sem
+		// filtro que reabriria o "No such image" race cross-runner). Marca a
+		// decisão para observabilidade no hooks.jsonl.
+		return []Action{{Name: "docker_run_image_reap_skipped", Path: "(no compose project in env)"}}
+	}
+	actions := make([]Action, 0, len(scopes))
+	for _, scope := range scopes {
+		actions = append(actions, commandActionWarn(opts, ctx, "docker_run_image_reap",
+			"docker", "image", "prune", "-a", "-f",
+			"--filter", "label="+civm.DefaultDockerComposeProjectLabel+"="+scope))
+	}
 	return actions
 }
 

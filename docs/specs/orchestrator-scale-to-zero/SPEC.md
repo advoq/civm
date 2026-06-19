@@ -132,6 +132,33 @@ WSL↔Windows (`validation.md`, 2026-06-17 18:38). A camada de disco fecha esse 
 desligada) → sem o bug de eviction de imagem que ocorre online. A VM volta sozinha
 pela fila no próximo tick (cold start).
 
+### Redução na FONTE — reap de imagens de run no job-completed (#137)
+
+A camada acima é a **salvaguarda** (a jusante). A **fonte** do crescimento é o
+guest acumular imagens de service mais rápido do que o prune libera: a E2E builda
+~35 GB de imagens num único job (`validation.md`, 2026-06-18 19:17), e o
+`job-completed` só removia imagens **dangling** — as imagens taggeadas de service
+do run nunca saíam e empilhavam na rajada até o panic floor.
+
+O `job-completed` agora reapa as imagens taggeadas do PRÓPRIO run que terminou
+(`reapRunImages`, `internal/hook/hook.go`): um `docker image prune -a -f --filter
+label=com.docker.compose.project=<scope>` por escopo, onde `<scope>` é o compose
+project deste runner (`<slot>` e `<slot>-<run_id>`, lidos do `.env` via
+`CIVM_RUNNER_SLOT`/`COMPOSE_PROJECT_NAME`). O `-a` é seguro **porque escopado**:
+
+- o slot é **box-único por runner** (multi-project-isolation) — um sibling jamais
+  carrega o mesmo project, então o reap nunca evicta a imagem de outro run;
+- imagem de **vendor pull** (redis/minio/postgres/alpine/clamav) **não** tem label
+  de compose → nunca é matched, então o "No such image" race que o PR #135 removeu
+  do path online **não volta**;
+- o docker recusa remover imagem com container vivo, e o reap roda **depois** do
+  `killWorkRootContainers` + `container prune` — o run já terminou.
+
+Sem project no env (degradado) → no-op (fail-safe; sem escopo seguro, não se reapa
+nada). Falha do reap é Warning, nunca falha o job (higiene pós-job não vira job
+vermelho). É a redução de TAXA que faz o `panic_compact` quase nunca precisar
+disparar — o panic permanece como floor permanente (#15), não é substituído.
+
 Floors são parametrizáveis (`orchestrator.ps1:59-60`, defaults
 `WarnFloorGB=28`/`PanicFloorGB=18`). Os boundaries são `<` estrito: `V==18` →
 `warn` (não panic); `V==28` → `mark_busy` (não warn) — provados nos test casos
