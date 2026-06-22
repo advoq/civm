@@ -85,6 +85,7 @@ type Options struct {
 	Execute         bool
 	PreCleanupPct   int
 	HardFailPct     int
+	MinFreeGB       int
 	FilesystemPath  string
 	WorkRoot        string
 	RunnerTemp      string
@@ -135,6 +136,7 @@ func DefaultOptionsFromEnv(event Event) Options {
 		Event:           event,
 		PreCleanupPct:   civm.DefaultPreCleanupPct,
 		HardFailPct:     civm.DefaultHardFailPct,
+		MinFreeGB:       civm.DefaultMinFreeGB,
 		FilesystemPath:  "/",
 		RunnerTemp:      os.Getenv("RUNNER_TEMP"),
 		GitHubWorkspace: os.Getenv("GITHUB_WORKSPACE"),
@@ -232,7 +234,10 @@ func Run(ctx context.Context, opts Options) Result {
 		res.Actions = append(res.Actions, reapOrphanCIContainers(ctx, opts)...)
 		// Cleanup dispara por pressão do guest-% OU do host V: (warn/crit). A
 		// metade host-aware pega o caso que o guest-% perde: guest enxuto, V: cheio.
-		if usedPct >= opts.PreCleanupPct || host.WantsCleanup() {
+		freeGB, freeErr := diskFreeGB(opts)
+		// Piso de espaco GUEST: abaixo de MinFreeGB (58) full-clean restaura ~58 antes
+		// do build (cada PR limpo, sem cache). Soma aos gatilhos guest-% e host.
+		if usedPct >= opts.PreCleanupPct || host.WantsCleanup() || (freeErr == nil && freeGB < opts.MinFreeGB) {
 			res.Decision = DecisionCleanupApplied
 			// Disk pressure mode: purga caches ($HOME/.cache/go-build, npm, etc.)
 			// para liberar espaço suficiente.
@@ -942,6 +947,16 @@ func diskUsedPct(opts Options) (int, error) {
 	return int((total - free) * 100 / total), nil
 }
 
+// diskFreeGB retorna o espaco GUEST livre em GB (statfs). O job-started usa p/ o
+// piso MinFreeGB: abaixo dele, full-clean restaura >=58 antes do build.
+func diskFreeGB(opts Options) (int, error) {
+	_, free, err := opts.StatfsFn(opts.FilesystemPath)
+	if err != nil {
+		return 0, err
+	}
+	return int(free / (1024 * 1024 * 1024)), nil
+}
+
 // JobVDrainGB é a definição CANÔNICA do dreno de V: por job: quanto de V: livre
 // (GB no host) o job consumiu, medido como o high-water entre os dois extremos do
 // hooks.jsonl — vfree no job-started menos vfree no job-completed. É o número que
@@ -1095,6 +1110,9 @@ func applyDefaults(opts *Options) {
 	if opts.HardFailPct == 0 {
 		opts.HardFailPct = civm.DefaultHardFailPct
 	}
+	// MinFreeGB NÃO é defaultado aqui: 0 = desabilitado (o gate `freeGB < MinFreeGB`
+	// nunca dispara). Produção habilita via DefaultOptionsFromEnv (=58); testes que
+	// montam Options manualmente ficam desabilitados por padrão (sem interferência).
 	if opts.FilesystemPath == "" {
 		opts.FilesystemPath = "/"
 	}

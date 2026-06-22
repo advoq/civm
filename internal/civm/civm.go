@@ -38,6 +38,10 @@ const (
 	DefaultHardFailPct                = 90
 	DefaultWatchdogThresholdPct       = DefaultPreCleanupPct
 	DefaultCapacityMaxDiskPct         = DefaultHardFailPct
+	// DefaultMinFreeGB: piso de espaco GUEST livre garantido antes de cada job
+	// (job-started). Abaixo disso o hook full-clean (prune+cache+fstrim) restaura
+	// >=58 -> cada PR comeca com ~58GB limpos (cabe qualquer build, sem cache).
+	DefaultMinFreeGB = 58
 	// DefaultEmergencyBypassPct is the disk-usage level at which the
 	// disk-watchdog stops deferring SAFE reclaim (cache trim, old /tmp) to an
 	// idle tick. In the 2026-06-10 incident the watchdog fired at 83% while a

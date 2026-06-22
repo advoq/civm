@@ -1287,6 +1287,39 @@ func TestJobStartedDockerPruneErrorIsNonFatal(t *testing.T) {
 // volume V: do host ainda dispara cleanup (warn) e rejeita o job (crit fresco) —
 // exatamente o cenário do incidente 2026-06 (guest 69%, host V: 88%) que o gate
 // guest-% sozinho não pegava. Snapshot stale força cleanup mas nunca bloqueia.
+func TestJobStartedMinFreeGBFloor(t *testing.T) {
+	t.Setenv("GITHUB_REPOSITORY", "")
+	t.Setenv("GITHUB_RUN_ID", "")
+	const giB = uint64(1) << 30
+	base := func(freeGB uint64) Options {
+		o := DefaultOptionsFromEnv(EventJobStarted) // MinFreeGB=58 (produção)
+		o.Execute = true
+		o.PreCleanupPct = 99 // guest-% NÃO dispara; isola o piso MinFreeGB
+		o.HardFailPct = 100
+		o.StatfsFn = func(string) (uint64, uint64, error) { return 100 * giB, freeGB * giB, nil }
+		o.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+		o.RemoveAllFn = func(string) error { return nil }
+		o.MkdirAllFn = func(string, os.FileMode) error { return nil }
+		o.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+		o.WalkDirFn = func(string, fs.WalkDirFunc) error { return nil }
+		o.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
+		o.LogPath = ""
+		o.WorkRoot = "/home/civm-test/actions-runner/_work"
+		o.HostDiskFn = func() (hostdisk.Report, error) {
+			return hostdisk.Report{Metrics: hostdisk.Metrics{VFreeGB: 80}, Level: "ok"}, nil
+		}
+		return o
+	}
+	// free < MinFreeGB(58): full-clean dispara mesmo com guest-% e host ok (cada PR limpo).
+	if res := Run(context.Background(), base(50)); res.Decision != DecisionCleanupApplied {
+		t.Fatalf("free=50<58 deve disparar cleanup; decision=%v", res.Decision)
+	}
+	// free >= MinFreeGB(58): o piso NÃO dispara (disco já tem folga).
+	if res := Run(context.Background(), base(60)); res.Decision == DecisionCleanupApplied {
+		t.Fatalf("free=60>=58 não deve disparar cleanup por MinFreeGB; decision=%v", res.Decision)
+	}
+}
+
 func TestJobStartedHostAwareGate(t *testing.T) {
 	base := func() Options {
 		t.Setenv("HOME", t.TempDir())
@@ -1298,6 +1331,7 @@ func TestJobStartedHostAwareGate(t *testing.T) {
 		o.Execute = true
 		o.PreCleanupPct = 60
 		o.HardFailPct = 95
+		o.MinFreeGB = 0 // isola o efeito do HOST: desliga o piso MinFreeGB (statfs fake em bytes)
 		// guest 30% usado → o gate guest-% NÃO dispara; isola o efeito do host.
 		o.StatfsFn = func(string) (uint64, uint64, error) { return 100, 70, nil }
 		o.RemoveAllFn = func(string) error { return nil }
@@ -1384,6 +1418,7 @@ func TestJobStartedReclaimsWorkspaceOwnership(t *testing.T) {
 	opts.Execute = true
 	opts.PreCleanupPct = 99 // healthy disk -> no gated cleanup
 	opts.HardFailPct = 100
+	opts.MinFreeGB = 0                                                           // este teste exercita ownership, não o piso MinFreeGB (statfs fake em bytes)
 	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 70, nil } // 30% used
 	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
 	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
