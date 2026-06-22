@@ -116,8 +116,13 @@ function Get-RunCount {
         $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
         foreach ($run in $resp.workflow_runs) {
             if ($run.status -ne $Status) { continue }
-            $created = [datetime]::Parse([string]$run.created_at).ToUniversalTime()
-            if ($created -lt $cutoff) { continue }
+            # Idade pela ATIVIDADE recente (updated_at), nao created_at: um re-run reusa o
+            # created_at original (pode ser >12h) e seria descartado, cegando o orchestrator
+            # p/ re-runs (queued e in_progress). updated_at e fresco no re-run; fallback p/
+            # created_at se ausente. Mantem a guarda de staleness (run parado >12h = filtrado).
+            $tsRaw = if ($run.updated_at) { $run.updated_at } else { $run.created_at }
+            $ts = [datetime]::Parse([string]$tsRaw).ToUniversalTime()
+            if ($ts -lt $cutoff) { continue }
             $total++
         }
     }

@@ -804,3 +804,27 @@ ao vivo no cooldown-era), mas falta uma observacao ao vivo com **run FRESCO** (<
 
 **Proxima acao:** validar com 1 run fresco (organico ou dispatch) OU aceitar (unit+anti-thrash)
 e seguir p/ SPECv5 + commit. Lock fica ativo (bound de concorrencia). Decisao do usuario.
+
+---
+
+## 2026-06-22 — fix Get-RunCount (updated_at) + gate por-evento CONFIRMADO ao vivo 🟢
+
+> Fecha a lacuna do veredito anterior. **Causa do `running=0`:** `Get-RunCount` filtrava por
+> `created_at` (re-run reusa o original, 22-25h → cortado pelo cutoff 12h). **Fix:** filtrar
+> por `updated_at` (fresco no re-run; fallback created_at), mantendo a guarda de staleness
+> (run parado >12h ainda filtrado). Medido: Web CI `created_at=03:32 (25h)` vs `run_started_at
+> /updated_at` ~fresco.
+
+**VALIDACAO AO VIVO (re-run #1197+#1198 COM o fix, 2026-06-22 04:30):**
+- ✅ **`MAX running = 1`** (antes do fix: 0) → re-runs agora CONTADOS.
+- ✅ **`boundary_compact = 1`** (04:30:17), nota nova `"fim do PR (running >0->0)"`, `queued=30`,
+  `V=43<51` → **gate por-evento disparou numa TRANSICAO REAL** (running>0→0 com fila aguardando =
+  hand-off warm por-PR). 
+- ✅ **`reclaim_done recovered_gb=6 → V=57`** (~58). **`panic=0`** — zero thrash, zero job morto.
+- ✅ Pos-compact: `running=0, prev_running=0` → **NAO re-compactou** (anti-thrash por-evento);
+  04:50 `running=1` de novo (proximo ciclo).
+
+**Veredito:** 🟢 **gate por-evento funciona end-to-end ao vivo** — 1 compactacao na transicao do
+PR, V→57, sem thrash, sem kill. Fix `updated_at` torna re-run um teste valido (e conta re-runs
+em producao). **Nota:** os PRs em si falham em `yarn format:check` (formatacao do codigo do PR,
+NAO da box) — o gate/box estao OK; os PRs precisam de Prettier (problema separado).
