@@ -20,8 +20,9 @@ issues: []
 volumes 4.9 GB + 0 build cache); guest `/` 108 G, 54 G usado. Um build do stack inteiro
 usa ~10–25 GB transitórios → **um PR cabe FOLGADO em 58 GB**. O "não cabe em 58" de uma
 análise anterior foi **chute, não medição** — errado. O que enche o disco é **acumulação**
-(volumes/imagens/cache de runs antigos) + o VHDX que só encolhe via `Optimize-VHD` +
-**concorrência excessiva** — **não** o tamanho de um PR.
+(volumes/imagens/cache de runs antigos) + o VHDX que só encolhe via `Optimize-VHD` + o
+**thrash do gate antigo** (compactava a cada gap `running==0`) — **não** o tamanho de um PR,
+e **não** concorrência: o advoq tem **1 runner só** → jobs pesados já rodam 1 por vez.
 
 ## 2. Gate POR-EVENTO (a mudança central)
 
@@ -42,11 +43,19 @@ análise anterior foi **chute, não medição** — errado. O que enche o disco 
   `Optimize-VHD` → ~58.
 - **Backstops inalterados:** `panic` (<18) e `reclaim_before_admit` (VM-Off + fila + V<51).
 
-## 3. Serialização (bound de concorrência) — JÁ ativa
+## 3. Serialização — JÁ É NATURAL (1 runner), SEM lock
 
-`CIVM_E2E_RUNNER_AVAILABLE=true` → `civmctl lock --scope docker-heavy` → 1 build pesado por
-vez → o disco não estoura sob rajada. Como um PR cabe em 58, **não** é preciso serializar
-PR-level (concurrency group) — o lock + 1-compactação-por-PR + full-clean bastam.
+**Correção (2026-06-22):** o advoq tem **um único runner self-hosted** (`civm-advoq-org`,
+labels `[self-hosted, civm]`); os jobs pesados rodam em `[self-hosted, civm]` → **um por vez**
+por natureza. Não existe "concorrência pesada" no advoq pra serializar → **nenhum lock é
+necessário**. `civmctl lock` / `CIVM_E2E_RUNNER_AVAILABLE` **NÃO** fazem parte deste slice.
+
+⚠️ Versão anterior deste SPEC dizia que `CIVM_E2E_RUNNER_AVAILABLE=true` ativava um
+`civmctl lock --scope docker-heavy` — **ERRADO**. Essa variável **troca o runner-alvo** dos
+e2e para `[self-hosted, civm, civm-e2e]`, e o runner **`civm-e2e` não existe** (confirmado:
+o runner advoq só tem o label `civm`) → setá-la **travaria** os e2e queued. Foi setada por
+engano e **revertida** (deletada). O gate por-evento + o runner único entregam
+"~58 GB por PR, 1 PR por vez" — paridade com o CI pago — **sem** lock.
 
 ## 4. Precedência (inalterada vs SPECv4)
 `Off→admit barrier` → `panic(<18)` → **gate warm por-evento** → `warn(<28)` →

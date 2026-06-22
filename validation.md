@@ -828,3 +828,27 @@ e seguir p/ SPECv5 + commit. Lock fica ativo (bound de concorrencia). Decisao do
 PR, V→57, sem thrash, sem kill. Fix `updated_at` torna re-run um teste valido (e conta re-runs
 em producao). **Nota:** os PRs em si falham em `yarn format:check` (formatacao do codigo do PR,
 NAO da box) — o gate/box estao OK; os PRs precisam de Prettier (problema separado).
+
+---
+
+## 2026-06-22 — CORRECAO: o "lock" estava errado + gate RE-confirmado ao vivo
+
+> Auditoria. As entradas acima (2026-06-21/22) afirmavam que `CIVM_E2E_RUNNER_AVAILABLE=true`
+> ativava um `civmctl lock --scope docker-heavy` que "limita concorrencia pesada". **ERRADO.**
+
+- **A variavel NAO e lock.** Ela troca o runner-alvo dos e2e: `=true` → `[self-hosted, civm,
+  civm-e2e]`. O runner `civm-e2e` **nao existe** (o runner advoq so tem label `civm`,
+  confirmado no listener log) → seta-la **travaria** os e2e queued. Setei por engano (entendi
+  como "lock") → **REVERTIDA** (variavel deletada do repo advoq, volta a `[self-hosted, civm]`).
+- **Nao precisa de lock:** o advoq tem **1 runner self-hosted** (`civm-advoq-org`) → jobs
+  pesados rodam **1 por vez** por natureza. Nao ha "concorrencia pesada" no advoq pra serializar.
+  O death-spiral foi o **thrash do gate antigo** (compactava a cada gap) + acumulacao, NAO
+  concorrencia. (Commit 82e2844 e a msg dele tambem citam o "lock" — claim errado; nao re-escrito.)
+- **Gate RE-confirmado ao vivo (06:32):** `running=1→0, prev_running=1` → `disk_boundary_compact`
+  (nota "fim do PR") → reclaim → V 44→52→~58. 2a observacao de transicao REAL (alem da 04:30).
+- **Achado operacional:** ~40 re-runs de teste (meus, falhando em format) entupiram o runner
+  unico por horas (drain lento + compactacoes repetidas). Limpaveis via cancelamento.
+
+**Veredito final:** 🟢 gate por-evento correto + deployado + confirmado ao vivo 2x; box saudavel;
+advoq revertido (sem variavel, sem PR/codigo meu); paridade com pago = ~58/PR, 1 PR por vez,
+pelo runner unico (sem lock). Docs (SPECv5 §1/§3) corrigidos.
