@@ -53,12 +53,44 @@ compactado). **Custo:** cold-start de ~1-2 min na primeira rajada (boot + runner
 conectando) — aceitável para CI (`civm-vm-orchestrator.ps1:14-18`). Medido:
 `V:` 31 → 51 GB no primeiro ciclo idle ativo (`validation.md`, 2026-06-17 09:59).
 
+### Política definitiva — disco limpo (≥51 GB livre) por PR e por re-run
+
+Regra canônica do fluxo de checks (decisão do usuário, 2026-06-21):
+
+1. **Um PR só COMEÇA os checks com `V:` ≥ `AdmitFloorGB` (51 GB) livre.** Abaixo
+   disso, antes de admitir o batch, o orchestrator faz o ciclo completo de
+   recuperação: limpa TODOS os caches do guest (`docker system prune -af
+   --volumes` + `docker builder prune -af` + `~/.cache/*`) e **compacta o VHDX no
+   Windows** (`Stop-VM` + `Optimize-VHD -Mode Full`), repetindo até `V:` ≥ 51.
+2. **Depois que o PR inteiro termina**, se for pedido **re-run** dos checks: ANTES
+   de re-rodar, o orchestrator executa o **mesmo ciclo** (limpar todos os caches +
+   compactar no Windows) e **só** quando `V:` ≥ 51 GB de novo o re-run inicia.
+3. **Qualquer outro PR na fila** para rodar checks **respeita o mesmo fluxo**:
+   nenhum batch novo (PR inicial ou re-run) inicia sem o ciclo limpa+compacta →
+   ≥ 51 GB.
+
+A garantia é **por-batch**, independente do power-state da VM (warm ou Off) — não
+só no cold-start. É o `reclaim_before_admit` (§4.1) elevado a invariante de **todo**
+início de batch. O build cache é regenerável e DEVE ser descartado para o
+`Optimize-VHD` recuperar o `V:` (§4 — Redução na FONTE); preservar cache entre runs
+já falhou (enche o disco; `--filter until=` apaga imagem vendor recém-puxada,
+`7e9cc0d`). Implementação e gap: ver RF-10 e o PRD
+`docs/specs/civm-disk-gate-per-batch/` (PRD→SPEC→IMPL).
+
 ### Decisão pura, separada do efeito (Kahneman #13)
 
+> **Âncoras de linha (`decision.ps1:NN` / `orchestrator.ps1:NN`) neste doc** foram
+> deslocadas pela slice `civm-disk-gate-per-batch` (funções puras `Update-`/
+> `Resolve-AdmitTransition` + gate de admissão warm + remoção do param
+> `BoundaryCompactFloorGB`). São **aproximadas**; a autoridade do "o que/onde" é
+> `docs/specs/civm-disk-gate-per-batch/SPECv4.md`. Hygiene pendente: converter para
+> âncoras simbólicas (SPECv4 §9 + checklist grep).
+
 A lógica de decisão vive em `civm-orchestrator-decision.ps1`
-(`Get-OrchestratorDecision`, linhas 6-48): recebe o estado observado e devolve
-**uma** ação string; **não toca a VM**. O orchestrator só **executa** a ação no
-`switch` (`civm-vm-orchestrator.ps1:284-325`). Isso permite a decision-table
+(`Get-OrchestratorDecision` + as funções puras `Update-AdmitAttempts` /
+`Resolve-AdmitTransition`): recebe o estado observado e devolve **uma** ação string;
+**não toca a VM**. O orchestrator só **executa** a ação no `switch`
+(`civm-vm-orchestrator.ps1`). Isso permite a decision-table
 testar o **mesmo módulo deployado** sem Hyper-V (`civm-orchestrator-decision.ps1:1-5`).
 
 A probe de job ativo é um **scriptblock lazy** (`HasActiveJobProbe`,
@@ -73,16 +105,19 @@ stop, evitando um SSH por tick.
 | `noop_off` | VM Off + nada | nada (linha 285) |
 | `panic_compact` | VM Running + `0<VFreeGB<PanicFloorGB` + `CanPanic` | `Invoke-StopAndCompact` MESMO ocupado (linha 305-318) |
 | `warn_clean` | VM Running + `0<VFreeGB<WarnFloorGB` | poda online, sem stop (linha 299-304) |
-| `boundary_compact` | VM Running + `Running==0` + `Queued>0` + `0<VFreeGB<BoundaryCompactFloorGB` | `Invoke-StopAndCompact` no GAP, **sem matar job** (Running==0) |
+| `boundary_compact` | VM Running + `Running==0` + `Queued>0` + `0<VFreeGB<AdmitFloorGB(51)` + `attempts<2` | `Invoke-StopAndCompact` (gate de admissão warm), **sem matar job** (Running==0); senão `mark_busy` admite |
+| `disk_below_floor_admitted` (evento) | admite batch com `V<51` (após `attempts>=2`) | log de warning (warm/cold); gatilho de rollback/abort |
 | `mark_busy` | VM Running + `(queued+running)>0` | grava `lastBusyUtc` (linha 293) |
 | `idle_debounce` | VM Running + ocioso + `idle<IdleStopMinutes` | só loga (linha 294) |
 | `stop_aborted_active_job` | VM Running + ocioso ≥ debounce + probe SSH vê worker | aborta stop, re-arma busy (linha 295-298) |
 | `stop_and_compact` | VM Running + ocioso ≥ debounce + sem worker | `Invoke-StopAndCompact` (linha 319-324) |
 
-**Ordem de precedência** dentro de `Get-OrchestratorDecision` (crítica): VM Off
-primeiro → **segurança de disco** (panic, depois warn) → **boundary_compact** (gap
-entre PRs) **antes** do fluxo normal → busy → debounce → gate de stop. Disco
-apertado supera manter jobs vivos (`civm-orchestrator-decision.ps1:29-39`).
+**Ordem de precedência** dentro de `Get-OrchestratorDecision` (crítica; SPECv4 §0):
+VM Off primeiro → `panic_compact` (`<18`, preserva o piso crítico + cooldown) →
+**gate de admissão warm** (`Running==0` + `Queued>0` → `boundary_compact` se `V<51`,
+senão `mark_busy`) → `warn_clean` (`<28`, **só com job rodando**, `Running>0`) → busy
+→ debounce → gate de stop. O gate precede `warn` porque `warn` é online e **não**
+recupera o `V:` do host. Ver `docs/specs/civm-disk-gate-per-batch/SPECv4.md`.
 
 ## 3. Requisitos
 
@@ -97,6 +132,7 @@ apertado supera manter jobs vivos (`civm-orchestrator-decision.ps1:29-39`).
 | RF-7 | Contagem da fila ignora runs fantasmas: conta só `run.status` real + `created_at < MaxAgeHours` (12h) | `Get-RunCount` `orchestrator.ps1:107-125` |
 | RF-8 | Um PAT `actions:read` por resource owner; o stop-guard via SSH é a salvaguarda final independente de token | `orchestrator.ps1:38-54,166-175` |
 | RF-9 | Ownership exclusivo: orchestrator é o único dono do power-state + stop/compact (ver §2 Ownership abaixo) | `orchestrator.ps1:30-32`, `activate-orchestrator.ps1:12` |
+| RF-10 | **Disco limpo por batch (§2 Política definitiva):** todo início de batch (PR inicial OU re-run) só admite com `V:` ≥ `AdmitFloorGB` (51); abaixo disso, ciclo limpa-tudo + `Optimize-VHD` ANTES de iniciar, independente do power-state. Re-run após PR completo dispara o ciclo antes de re-rodar; PR na fila respeita o mesmo. **Estende** `reclaim_before_admit` (hoje só VM-Off+fila) e `boundary_compact` (hoje `<40` no gap) para disparar sempre que um batch novo vai iniciar e `V: < 51`. | `decision.ps1` (`reclaim_before_admit`/`boundary_compact`), `orchestrator.ps1:286` (AdmitFloorGB). **GAP: requer mudança na decisão + casos na decision-table (validar em pwsh na box)** |
 
 ### Ownership (CRÍTICO — um dono só, fail-safe #15)
 
@@ -125,48 +161,49 @@ WSL↔Windows (`validation.md`, 2026-06-17 18:38). A camada de disco fecha esse 
 | Camada | Gatilho | Ação | Mata job? |
 | --- | --- | --- | --- |
 | `warn_clean` | `V: < WarnFloorGB` (28) | `docker builder prune -af` + `fstrim` online (`Invoke-GuestWarnClean`, `orchestrator.ps1:188-195`) | **Não** — poda só cache de build regenerável; nunca imagens de run (sem o bug de eviction que o age-guard consertou) |
-| `boundary_compact` | `Running==0` + `Queued>0` + `V: < BoundaryCompactFloorGB` (40) | `Stop-VM` + `Optimize-VHD` offline no GAP entre sequências de PR (`Invoke-StopAndCompact -Reason 'boundary_compact'`) | **Não** — nenhum job `in_progress` (Running==0); recupera o `V:` de graça antes da zona de perigo |
+| `boundary_compact` (gate de admissão warm) | `Running==0` + `Queued>0` + `V: < AdmitFloorGB` (51) + `attempts<2` | `Stop-VM` + `Optimize-VHD` offline ANTES de admitir o batch (`Invoke-StopAndCompact -Reason 'boundary_compact'`); **precede `warn`** | **Não** — nenhum job `in_progress` (Running==0); recupera o `V:` a ≥51 por batch |
 | `panic_compact` | `V: < PanicFloorGB` (18) + `CanPanic` | `Stop-VM -Force` + `Optimize-VHD` offline **mesmo ocupado** (`orchestrator.ps1:305-318`) | **Sim** — jobs ativos morrem e re-rodam |
 
-### boundary_compact — o gap entre sequências (2026-06-19)
+### Gate de admissão warm — disco limpo (≥51) por batch (civm-disk-gate-per-batch)
 
-O scale-to-zero só compactava no **idle total** (`Queued==0 + Running==0`), e o
-`panic`/`warn` só agem com `V:` já em perigo (< 28 / < 18). Sob **fila CONTÍNUA**
-(PRs back-to-back) havia um buraco: a VM ficava `Running` o tempo todo (sempre
-algo na fila), nunca chegava ao idle → o `stop_and_compact` ocioso **nunca rodava**
-→ o VHDX crescia job-a-job até bater no `panic`, que **mata 1 job**. O
-`boundary_compact` fecha esse buraco pegando a janela natural em que a sequência de
-jobs de **um** PR terminou (`Running==0`, nada `in_progress`) mas o próximo PR já
-está na fila (`Queued>0`): aí `Stop-VM` + `Optimize-VHD` **não matam nada** (não há
-job rodando), e o próximo tick religa pela lógica `start` (porque `Queued>0`, cold
-start). É o **mesmo** `Invoke-StopAndCompact` do panic (mesmo lock canônico, mesmo
-gate pós-Off `Test-OptimizeSlack`), mas **sem cooldown** — o cooldown do panic
-existe só para não re-matar jobs em loop, e aqui nenhum job morre.
+> **Atualizado pela slice `civm-disk-gate-per-batch` (SPECv4).** O antigo
+> `boundary_compact` (piso 40, **depois** de `warn`) virou o **gate de admissão
+> warm** (piso `AdmitFloorGB=51`, **antes** de `warn`). A ação no `switch` continua
+> `boundary_compact` (reuso); o **piso (40→51)** e a **precedência** mudaram. O
+> contador `admitReclaimAttempts` é gerenciado pelo caller via `Resolve-AdmitTransition`.
 
-**Escolha do piso `BoundaryCompactFloorGB=40` (Kahneman #3 — ancorado em dado, não
-num default redondo):** o `stop`/`Optimize` custa ~8 min de cold-start no próximo
-batch, então só vale a pena quando o disco **já caiu o bastante**. 40 fica folgado
-sobre o `warn` (28) e o `panic` (18) — recupera **antes** da zona de perigo — e
-abaixo do `admit` (51): com `V:` 51 limpo, cair a 40 significa ~11 GB consumidos por
-um PR, o suficiente para justificar recuperar no gap. Acima de 40 (folgado) o caso
-cai no `mark_busy` normal e a VM segue ligada para o próximo batch (poupa o
-cold-start). Não é `> admit (51)`: queremos compactar no gap **quando já desceu**,
-não a cada gap mesmo com disco cheio.
+Sob **fila contínua** (PRs back-to-back) a VM fica `Running` o tempo todo, nunca
+chega ao idle → o `stop_and_compact` ocioso nunca roda. O gate pega a janela em que
+a sequência de **um** PR terminou (`Running==0`, nada `in_progress`) e o próximo já
+está na fila (`Queued>0`): se `V: < 51`, `Stop-VM` + `Optimize-VHD` recuperam o disco
+**sem matar job** (nenhum rodando), e o próximo tick religa via `start` (cold). É o
+mesmo `Invoke-StopAndCompact` (mesmo lock canônico, mesmo gate `Test-OptimizeSlack`).
 
-**Banda efetiva (precedência honesta):** `panic`/`warn` ficam **antes** na cadeia e
-testam `hasWork=(Queued+Running)>0` (verdadeiro quando `Queued>0`), então
-`boundary_compact` só dispara de fato na faixa **28..40**. Abaixo de 28 o `warn`
-online age primeiro; abaixo de 18 o `panic` ganha — e tudo bem, porque com
-`Running==0` o panic **também não mata job** (compacta igual). A única diferença
-sub-18 é o label/cooldown, inofensiva no gap. Boundary adiciona a recuperação
-proativa offline na faixa "ainda saudável mas descendo" (28..40), nos gaps.
+**Piso = `AdmitFloorGB` (51), não 40 (superseded):** a política definitiva é **≥51
+por batch** (o CI pago dá disco fresco por job; ver §2 "Política definitiva"). O
+antigo 40 era uma otimização de cold-start (não compactar entre 40–51) que a política
+≥51-por-batch **supera** — todo batch começa limpo, ao custo de ~1 compact/batch
+(aceito e medido; SPECv4 §10).
 
-**Caso back-to-back SEM gap (limitação honesta):** se a fila é tão colada que um
-job novo entra `in_progress` **antes** de `Running` chegar a 0 (sequências que se
-sobrepõem, sem janela vazia), o `boundary_compact` **nunca** dispara — `Running`
-nunca é 0. Nesse perfil o `panic_compact` continua sendo o fallback que **mata 1
-job** quando o `V:` cruza 18. O boundary mitiga o caso comum (gaps existem entre a
-maioria dos PRs), não o elimina; o panic permanece a rede de segurança final.
+**Precedência (gate ANTES de `warn`):** `warn_clean` é online (poda cache + `fstrim`)
+e **não** recupera o `V:` do host — só `Optimize-VHD` recupera. Logo, no gap warm
+(`Running==0`), o gate compacta até 51 em vez de podar online; `warn_clean` fica
+reservado a **job rodando** (`Running>0`, não dá para parar). `panic` (`<18`)
+permanece **antes** do gate (preserva o piso crítico + `lastPanicUtc`/cooldown); com
+`Running==0` o panic compacta sem matar e **conta** a tentativa (DT-9). O gate cobre a
+faixa **18..51** no gap.
+
+**Anti-deadlock (`attempts<2`):** o contador `admitReclaimAttempts` (incrementado em
+cada compact de admissão, zerado na admissão — tudo via a função pura
+`Resolve-AdmitTransition`, testada) garante que disco irrecuperável admite após **≤2
+compacts/episódio** emitindo `disk_below_floor_admitted` — nunca deadlock (fail-safe #15).
+
+**Caso back-to-back SEM gap + invariante no-kill (SPECv4 §0.1):** se um job novo entra
+`in_progress` antes de `Running` chegar a 0, o gate **nunca** dispara. Mas com
+clean-start ≥51 por batch um único batch não cai do piso de admissão (51) ao piso de
+kill (18) no meio → `panic_compact` (a única ação que mata job) **não deve disparar**
+em operação normal; é mantido como backstop, e disparar com `running>0` é sinal de
+**ABORT** (§7), não operação normal.
 
 ### Composição com a poda de imagens do #137
 
@@ -365,6 +402,14 @@ um** dos sinais objetivos no `V:\civm-orchestrator.log` ocorrer:
   o `v_free_gb` registrado continua `< PanicFloorGB`: a compactação não está
   recuperando o piso esperado (~25 GB), então o panic só está custando jobs sem
   ganho.
+- **(civm-disk-gate-per-batch) `disk_boundary_compact/h > 4` por ≥ 2 h consecutivas**
+  — a compactação de admissão virou o gargalo dominante (a box não sustenta a
+  política ≥51-por-batch); escalar para o fix maior (VM-por-job / mais disco).
+  *(valor inicial Slice 0, revisável após N batches medidos.)*
+- **(civm-disk-gate-per-batch) ≥ 3 `disk_below_floor_admitted` com `v_free_gb < 51`
+  em 1 h** — disco irrecuperável: admissões sujas recorrentes (anti-deadlock em
+  série). Nota: com a invariante no-kill (§4 / SPECv4 §0.1), **qualquer** `disk_panic`
+  com `running>0` já é alarme (esperado: zero).
 
 Reversão imediata (não destrutiva): `Disable-ScheduledTask civm-vm-orchestrator` +
 re-habilitar o caminho de optimize supervisionado. A VM volta a ser gerida pelo
@@ -382,9 +427,10 @@ Linha NDJSON por evento (`Write-OrcLog`, `orchestrator.ps1:75-82`): `ts` (UTC IS
 | `idle_debounce` | ocioso antes do debounce | `idle_min`, `need` | `orchestrator.ps1:294` |
 | `stop_aborted_active_job` | stop abortado: worker ativo via SSH | `note` | `orchestrator.ps1:296` |
 | `disk_warn` | `warn_clean` disparado | `v_free_gb`, `floor` | `orchestrator.ps1:303` |
-| `disk_boundary_compact` | `boundary_compact` disparado (gap entre PRs, **não** mata job) | `v_free_gb`, `floor`, `queued`, `note` | switch `boundary_compact` |
-| `disk_panic` | `panic_compact` disparado (mata jobs) | `v_free_gb`, `floor`, `note` | `orchestrator.ps1:312` |
-| `would_start` / `would_stop_and_compact` / `would_warn_clean` / `would_boundary_compact` / `would_panic_compact` | modo `-Observe` (loga, não age) | conforme a ação | `orchestrator.ps1:287,302,310,322` |
+| `disk_boundary_compact` | `boundary_compact` (gate de admissão warm, `V<51`, **não** mata job) | `v_free_gb`, `floor` (=`AdmitFloorGB` 51), `queued`, `note` | switch `boundary_compact` |
+| `disk_below_floor_admitted` | admite batch com `V<51` (warm/cold, após `attempts>=2`) — gatilho de rollback/abort | `v_free_gb`, `guest_free_gb`, `floor`, `attempts`, `path` | switch `start`/`mark_busy` |
+| `disk_panic` | `panic_compact` disparado (mata jobs — **não deve ocorrer**, SPECv4 §0.1) | `v_free_gb`, `floor`, `note` | `orchestrator.ps1:312` |
+| `would_start` / `would_stop_and_compact` / `would_warn_clean` / `would_boundary_compact` / `would_panic_compact` / `would_disk_below_floor_admitted` | modo `-Observe` (loga, não age) | conforme a ação | switch arms |
 | `reclaim_start` | início de `Invoke-StopAndCompact` | `reason` | `orchestrator.ps1:218` |
 | `reclaim_post_off_remeasure` | re-medida de `V:` pós-Off (gate fase 2) | `v_free_after_off_gb`, `scratch_budget_gb` | `orchestrator.ps1:231` |
 | `reclaim_skip_insufficient_slack` | folga não cobre o scratch → pula compact | `v_free_after_off_gb`, `hard_floor_gb` | `orchestrator.ps1:235` |
@@ -402,7 +448,7 @@ Auxiliares (WARN, best-effort, não bloqueiam): `guest_full_clean[_warn]`,
 - **#13 — existência ≠ função; deployado == testado.** A decisão pura é
   dot-sourced pelo orchestrator E pelos testes (`orchestrator.ps1:257-261`,
   `civm-orchestrator-decision.test.ps1:4`): o código deployado é o **mesmo** que a
-  decision-table exercita (23 casos) e `civm-reclaim-gate.test.ps1` (10 casos).
+  decision-table exercita (59: 47 table + 10 unit + 2 stateful) e `civm-reclaim-gate.test.ps1` (10 casos).
   Cada recusa é pareada com seu positivo (ex.: `V<18` panicar **vs.** `V<18` em
   cooldown rebaixar para warn — casos 20/30). `reclaim_no_progress` materializa o
   princípio: o `Optimize` "passar" não prova que liberou espaço — mede-se
@@ -445,7 +491,7 @@ Ver `validation.md` na raiz do repo (log append-only). Marcos:
 - **2026-06-17 09:59** — ✅ ciclo scale-to-zero COMPLETO medido: idle → compacta
   (`V:` 31→51) e fila → liga → 2 jobs reais rodando (sem flap).
 - **2026-06-17 18:38** — 🟡 death-spiral REAL medido (`V:` 39→16, interop caiu);
-  camada de disco coded + unit-validada (decision-table 20/20 à época, hoje 23).
+  camada de disco coded + unit-validada (decision-table 20/20 à época, hoje 59 com o gate de admissão warm).
 - **2026-06-17 19:45** — ✅ camada panic/warn DEPLOYADA: decision-table **20/20 no
   PowerShell 5.1 da box**, wiring `v_free_gb` vivo no tick real, sem erro. 🟡
   pendente: um `disk_panic` real (`V:<18` + VM Running) registrado num ciclo.
@@ -459,7 +505,7 @@ Ver `validation.md` na raiz do repo (log append-only). Marcos:
 Testes (rodar localmente, sem Hyper-V):
 
 ```powershell
-pwsh deploy/windows/civm-orchestrator-decision.test.ps1   # 38 casos (inclui boundary_compact)
+pwsh deploy/windows/civm-orchestrator-decision.test.ps1   # 59 (47 decision-table + 10 unit + 2 stateful; gate de admissão warm)
 pwsh deploy/windows/civm-reclaim-gate.test.ps1            # 10 casos
 ```
 

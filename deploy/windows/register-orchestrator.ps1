@@ -8,7 +8,7 @@ $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date)
 $trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Days 3650)).Repetition
 # Mesmo principal do autoreclaim: SYSTEM / Highest (le a ssh key; faz Hyper-V).
 $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew  # PT2H: cobre o Optimize (SPECv4 §8)
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
 "registered: $taskName (Observe, SYSTEM/Highest, every 2min)"
 # Roda uma vez agora pra validar como SYSTEM (ssh do stop-guard se aplicavel).

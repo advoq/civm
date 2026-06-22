@@ -663,3 +663,144 @@ e `Select-String boundary_compact V:\civm-orchestrator.log` pro disparo ao vivo.
 **Proxima acao:** rodar a decision-table em pwsh na box (38/38); capturar o 1o
 `disk_boundary_compact` ao vivo; nota de composicao com o #137 (libera blocos no
 guest; boundary recupera o V: via Optimize) ja registrada no SPEC.
+
+---
+
+## 2026-06-21 — civm-disk-gate-per-batch: gate de admissao warm @51 (SPECv4) DEPLOYADO
+
+> Slice `docs/specs/civm-disk-gate-per-batch/` (PRD -> SPEC -> SPECv2 -> SPECv3 ->
+> **SPECv4** = contrato; 5 rodadas de Passo 2.5, blockers 7->1->1->0->0). Substitui o
+> boundary @40 pelo gate de admissao warm: `Running==0 + Queued>0 + V<AdmitFloorGB(51)
+> + attempts<2 -> boundary_compact`, senao `mark_busy`; **precede warn** (panic <18
+> antes). Contador anti-deadlock via funcoes puras `Update-AdmitAttempts` /
+> `Resolve-AdmitTransition` (DT-9: panic conta so com Running==0).
+
+**VALIDACAO (medida na box, PS 5.1 via powershell.exe — o "pwsh real" que faltava):**
+- `civm-orchestrator-decision.test.ps1` -> **59 PASS / 0 FAIL** (47 decision-table +
+  10 unitarios + 2 stateful). O stateful roda `Get-OrchestratorDecision` +
+  `Resolve-AdmitTransition` REAIS e prova convergencia em **<=2 compacts/episodio** em
+  `[18,51)` E `V<18` (DT-9). Antes do fix do teste: 35/3 (so os casos 45/40/25 mudaram
+  p/ boundary), confirmando a mudanca sem regressao nos outros 35.
+- **AST OK** nos 4 `.ps1` (decision/caller/activate/register); `grep BoundaryCompactFloorGB`
+  = 0 no codigo.
+- **Dry-run `-Observe`** do caller novo na box (elevado, contexto SYSTEM real:
+  Get-VM/Get-RunCount/tokens) -> exit=0; decidiu `mark_busy` (running=1, RF-2 correto).
+- **DEPLOY** (activate elevado; mecanismo novo Unregister->copia 2->AST->Register):
+  task `state=Ready execLimit=PT2H`; `decision.ps1` deployado com
+  `Resolve-AdmitTransition`/`Update-AdmitAttempts` + 0 refs ao param removido; legados
+  Disabled; reclaim.lock livre. 1o tick pos-deploy (09:37, V=35, running=1) = `mark_busy`.
+
+**Veredito:** 🟢 **PLENO — implementado + deployado + provado ponta-a-ponta AO VIVO.**
+decision-table 59/0 (PS 5.1 REAL) + dry-run `-Observe` + deploy verificado, E o **ciclo
+completo capturado no log** (2026-06-21 10:09-10:19): a box estava em death-spiral (V
+travado em 29, queued=5-6, running=1 continuo); ao surgir o 1o gap (`running==0`):
+`disk_boundary_compact` (V=29, **floor:51**, "sem matar job") -> `guest_full_clean` (54)
+-> `reclaim_post_off_remeasure` (41) -> `reclaim_done` (**V=58, recovered=17 GB**) ->
+proximo tick `vm_started` (VM Off + V=58>=51 + queued=6 -> admite **LIMPO**). **Death-
+spiral quebrado, ZERO job morto** (em isolamento / carga leve).
+
+**TESTE DE CARGA (re-run dos PRs #1197+#1198, ~30 jobs concorrentes SEM o lock de
+serializacao, 10:19-11:11) — achado critico:** a **fila FOI respeitada** (os jobs
+esperaram o compact e a VM so religou em >=51 -> confirmado, era a pergunta), MAS a box
+**NAO sustentou >=51**: o `Optimize` recuperou **~0 GB** (`recovered_gb=0/1/2` ->
+`reclaim_no_progress` ERROR x4+; o V so sobe pelo `Stop-VM` e cai a ~50 em 1 batch) -> o
+gate **re-compactou a cada batch** (~8min, VM de pe ~2min/ciclo) -> a fila de 30 **travou**
+(= regressao de throughput B4 + o gatilho de rollback `reclaim_no_progress` disparando).
+**Causa:** sob carga concorrente o disco do guest enche de blocos docker **IN-USE**
+(nao-trimaveis) -> `Optimize` nao tem o que recuperar (pipeline de discard quebrado, ver
+`host-volume-reclamation` RF-1/RF-2). **Acao:** **revertido o deploy para HEAD (floor 40)**
+-> thrash parou, VM volta a ficar de pe (ticks 11:24/26/28 = mark_busy, sem compact),
+`running` 0->1, fila drena.
+
+**Veredito final:** 🟡 **logica CORRETA e provada** (decision-table 59/0 + 1o ciclo 17 GB
++ fila respeitada + zero kill), mas **DEPLOY de floor-51-por-batch GATED** em: (a) **lock
+de serializacao** (PAID-CI-PARITY §6.2, nao deployado) p/ a carga nao ser 30-concorrente,
+**e/ou** (b) **conserto do discard pipeline** (fstrim->VHDX) p/ o `Optimize` de fato
+recuperar. Sem (a)/(b), o floor-51 thrasha sob carga. Box atualmente rodando o HEAD (floor 40).
+
+**Categoria:** infra-orchestrator (decisao de power-state / disco) + disk-reclaim
+
+**Como medir:** `pwsh deploy/windows/civm-orchestrator-decision.test.ps1` (59/0);
+`Select-String "disk_boundary_compact|disk_below_floor_admitted" V:\civm-orchestrator.log`
+pro disparo ao vivo (quando a fila abrir um gap).
+
+**Proxima acao:** a logica do slice esta pronta, mas o **RE-DEPLOY de floor-51 esta
+GATED** em (a) lock de serializacao (PAID-CI-PARITY §6.2) e/ou (b) conserto do discard
+pipeline (Optimize precisa de fato recuperar). Avaliar tambem um **cooldown no
+boundary_compact** (nao re-compactar apos `reclaim_no_progress`) p/ evitar thrash mesmo
+sob carga. Hygiene: ~69 ancoras de linha da doc viva. Commit do slice quando o usuario pedir.
+
+---
+
+## 2026-06-21 — disk-gate PER-PR: cooldown + serializacao → thrash ELIMINADO (medido)
+
+> Correcao do achado do teste anterior (thrash por-gap). Duas pecas: (1) **cooldown**
+> no `boundary_compact` (`CanBoundaryCompact` via `Test-ReclaimCooldown` +
+> `lastBoundaryCompactUtc`, 20min) → 1 compactacao por janela (~= por PR), nao a cada
+> gap; (2) **serializacao** ativada (`CIVM_E2E_RUNNER_AVAILABLE=true` → `civmctl lock
+> --scope docker-heavy`, 1 docker-heavy por vez) → carga limitada → boundary limpo →
+> `Optimize` recupera. decision-table **61 PASS / 0 FAIL** (PS 5.1; +2 casos de cooldown).
+
+**VALIDACAO AO VIVO (re-run #1197+#1198 DE NOVO, 2026-06-21 ~21:40-22:13, COM cooldown +
+serializacao):**
+| Metrica | Antes (sem fix) | Agora |
+| --- | --- | --- |
+| `boundary_compact` / ~33min | ~5 (a cada gap) | **2** (1x/janela de cooldown) |
+| `reclaim_no_progress` | 4+ | 1 (benigno — V chegou a 58 pelo Stop) |
+| `disk_panic` (mata job) | risco | **0** |
+| Fila | **travada em 30** | **drenou (3→1→0)** |
+| V | death-spiral → 24 | **oscila 48–58, recupera a 58** |
+
+- **Cooldown provado:** ticks 22:00/22:02 (V=48-49<51, gap) com `can_boundary:false`
+  (compactou ha <20min) → **NAO re-compactou** → `disk_below_floor_admitted` (admitiu) →
+  sem thrash. 22:04 `can_boundary:true` → compactou **1x** → V=58. 1o ciclo recuperou **22 GB**.
+- **Serializacao:** `running` baixo (0-1), nao 30 concorrentes; boundary limpo → `Optimize`
+  recupera (22 GB) — raiz do `recovered_gb=0` (concorrencia) resolvida.
+
+**Veredito:** 🟢 **thrash eliminado, fila drena, zero job morto, V estavel 48–58 (recupera
+a 58)** — medido. **Ressalva ≥51:** durante o cooldown a box admite a **48–50** (em vez de
+re-compactar) — trade-off que mata o thrash; nao e "≥51 ao pe da letra sempre", e "~51 com
+recuperacao a 58". ≥51-estrito-sempre = thrash. Encurtar o cooldown (ex.: 10min) aperta
+p/ ~50-58 se desejado.
+
+**Nota:** `reclaim_no_progress` (recovered_gb<3) pode false-fire quando o `Stop-VM` ja levou
+V a ~56-58 e o `Optimize` so adiciona ~2 — V esta OK (58), o sinal mede so o delta do Optimize.
+
+**Proxima acao:** SPECv5 (revisao per-gap→per-PR + cooldown + serializacao); decidir
+cooldown 20→10min se quiser ≥51 mais apertado; commit do slice quando o usuario pedir.
+
+---
+
+## 2026-06-22 — disk-gate POR-EVENTO (transicao running>0->0) substitui o cooldown
+
+> **Correcao de SHAPE (feedback do usuario):** o cooldown era por-TEMPO (20min); o usuario
+> quer por-EVENTO — **1 compactacao por PR** (no fim), nunca no meio (o tenant-smoke dura
+> >1h e roda inteiro). **Medicao** (`docker system df`): docker ~5 GB (1 img 37MB + 53 vols
+> 4.9GB); um build do stack ~10-25 GB → **um PR cabe FOLGADO em 58** (meu "nao cabe 58"
+> anterior foi chute errado). O que enche e ACUMULACAO + concorrencia, nao o tamanho do PR.
+
+**Mudanca:** gate warm dispara so na **transicao `prevRunning>0 AND running==0`** (PR/onda
+acabou) + `queued>0` + `V<51`. `running` preso em 0 (pos-compact) → `prevRunning==0` → sem
+transicao → **sem re-compactar** (anti-thrash por-evento, sem timer). `prevRunning` rastreado
+no `state` por tick. `Get-RunCount` conta `workflow_runs in_progress` → `running` fica >0 o
+PR inteiro e →0 no fim (boundary natural). decision-table **62 PASS / 0 FAIL** (+ stateful
+`Test-PrLifecycle`: ciclo (0,2,2,0,0,0) → compacta EXATAMENTE 1x, so na transicao 2→0).
+
+**VALIDACAO AO VIVO — PARCIAL (honesto, Kahneman #13):**
+- ✅ **Anti-thrash provado:** pos-deploy, ticks com `running=0, prevRunning=0, V=41<51, queued>0`
+  por 10+min → **ZERO compactacoes** (so `disk_below_floor_admitted`). O gate floor-51 antigo
+  teria thrashado aqui.
+- ⚠️ **Compactar-na-transicao-real NAO observado ao vivo** — ARTEFATO DO TESTE: re-rodei runs
+  com `created_at` de **22.6h atras** (ex.: Web CI `2026-06-21T03:32Z`); `Get-RunCount` filtra
+  `created_at > 12h` (guarda de staleness) → re-runs antigos **nao sao contados** → orchestrator
+  ve `running=0` mesmo com o job rodando → sem transicao. NAO e bug do gate; em producao runs
+  frescos (created_at≈now) sao contados. Re-run reusa o created_at original → invalido p/ este teste.
+- ✅ **Lock que ativei (`CIVM_E2E_RUNNER_AVAILABLE=true`) NAO quebrou a CI:** Web CI falhou em
+  `yarn format:check` (formatacao do PR #1197), hooks civm OK (`job-started/completed`, disk 58%).
+
+**Veredito:** 🟡 gate por-evento **logicamente provado (62/0) + deployado + anti-thrash ao
+vivo**; o "compacta 1x na transicao" e o MESMO caminho ja provado (unit + mecanismo de compact
+ao vivo no cooldown-era), mas falta uma observacao ao vivo com **run FRESCO** (<12h) p/ fechar.
+
+**Proxima acao:** validar com 1 run fresco (organico ou dispatch) OU aceitar (unit+anti-thrash)
+e seguir p/ SPECv5 + commit. Lock fica ativo (bound de concorrencia). Decisao do usuario.
