@@ -10,6 +10,7 @@ import (
 
 	"github.com/advoq/civm/internal/capacity"
 	"github.com/advoq/civm/internal/civm"
+	"github.com/advoq/civm/internal/memwatchdog"
 	"github.com/advoq/civm/internal/metrics"
 )
 
@@ -41,7 +42,8 @@ func runMetricsDump(args []string) int {
 	defer cancel()
 
 	r := capacity.Check(ctx, capacity.DefaultOptions())
-	samples := buildSamples(r)
+	mem := memwatchdog.Check(ctx, memwatchdog.DefaultOptions())
+	samples := buildSamples(r, mem)
 	if *stdout {
 		if err := metrics.Render(os.Stdout, samples); err != nil {
 			fmt.Fprintln(os.Stderr, "erro ao renderizar metrics:", err)
@@ -56,7 +58,7 @@ func runMetricsDump(args []string) int {
 	return 0
 }
 
-func buildSamples(r capacity.Report) []metrics.Metric {
+func buildSamples(r capacity.Report, mem memwatchdog.Result) []metrics.Metric {
 	accepting := 0.0
 	if r.AcceptingJobs {
 		accepting = 1
@@ -68,5 +70,14 @@ func buildSamples(r capacity.Report) []metrics.Metric {
 		{Name: "civm_runner_services_active", Help: "Quantidade de services actions.runner.*", Type: metrics.TypeGauge, Value: float64(r.RunnerServices)},
 		{Name: "civm_runner_workers_active", Help: "Quantidade de workers Runner.Worker em execução", Type: metrics.TypeGauge, Value: float64(r.RunnerWorkers)},
 		{Name: "civm_accepting_jobs", Help: "1 se runner está aceitando jobs (disco abaixo do threshold); 0 caso contrário", Type: metrics.TypeGauge, Value: accepting},
+		// Pressao de memoria (CIVM-4 / ADR-107): o admit ja gateia jobs heavy por
+		// RAM, mas ate aqui a pressao era invisivel no Prometheus — sem como
+		// correlacionar OOM/thrash com timeout de bring-up. Leitura de meminfo que
+		// falha -> Decision critical + campos zerados (o proprio pressure=2 sinaliza).
+		{Name: "civm_mem_total_mb", Help: "RAM total em MB", Type: metrics.TypeGauge, Value: float64(mem.Mem.MemTotalMB)},
+		{Name: "civm_mem_available_mb", Help: "RAM disponivel (free + reclaimable) em MB", Type: metrics.TypeGauge, Value: float64(mem.Mem.MemAvailableMB)},
+		{Name: "civm_mem_available_pct", Help: "RAM disponivel como percentual do total", Type: metrics.TypeGauge, Value: float64(mem.Mem.AvailPct)},
+		{Name: "civm_swap_used_mb", Help: "Swap em uso em MB (thrash quando alto)", Type: metrics.TypeGauge, Value: float64(mem.Mem.SwapUsedMB)},
+		{Name: "civm_mem_pressure", Help: "Pressao de memoria: 0=ok, 1=warn, 2=critical", Type: metrics.TypeGauge, Value: float64(mem.Decision.ExitCode())},
 	}
 }
