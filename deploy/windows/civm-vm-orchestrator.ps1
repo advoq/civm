@@ -320,10 +320,16 @@ function Invoke-StopAndCompact {
         $vAfterGB = [int]((Get-PSDrive V).Free / 1GB)
         $recoveredGB = $vAfterGB - $vBeforeGB
         Write-OrcLog 'reclaim_done' @{ reason = $Reason; vhdx_gb = [int]($vhd.FileSize / 1GB); v_free_gb = $vAfterGB; recovered_gb = $recoveredGB }
-        if ($recoveredGB -lt $MinRecoverGB) {
-            # O Optimize "passou" mas nao recuperou nada util -> disco apertado que
-            # o compact nao resolve (precisa de humano), nao um falso-verde.
-            Write-OrcLog 'reclaim_no_progress' @{ reason = $Reason; recovered_gb = $recoveredGB; min_recover_gb = $MinRecoverGB } 'ERROR'
+        if (Test-ReclaimStuck -RecoveredGB $recoveredGB -VFreeAfterGB $vAfterGB -AdmitFloorGB $AdmitFloorGB) {
+            # Recuperou < min E o V: SEGUE abaixo do piso -> disco apertado que o
+            # compact nao resolve (precisa de humano), nao um falso-verde.
+            Write-OrcLog 'reclaim_no_progress' @{ reason = $Reason; recovered_gb = $recoveredGB; v_free_gb = $vAfterGB; min_recover_gb = $MinRecoverGB; floor = $AdmitFloorGB } 'ERROR'
+        }
+        elseif ($recoveredGB -lt $MinRecoverGB) {
+            # Recuperou pouco MAS o V: ja esta >= piso: o VHDX ja esta compacto
+            # (footprint do guest estavel), nao ha o que devolver. Steady-state
+            # saudavel — INFO, nao ERROR (evita o falso-vermelho perpetuo).
+            Write-OrcLog 'reclaim_already_compact' @{ reason = $Reason; recovered_gb = $recoveredGB; v_free_gb = $vAfterGB; floor = $AdmitFloorGB } 'INFO'
         }
     }
     finally {

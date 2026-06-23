@@ -24,5 +24,13 @@ Check 'cooldown 5min depois -> NAO pode (loop barrado)' (Test-ReclaimCooldown -L
 Check 'cooldown exatamente 15min -> pode (boundary >=)' (Test-ReclaimCooldown -LastReclaimUtc '2026-06-17T21:45:00Z' -NowUtc $now) $true
 Check 'cooldown data ilegivel -> pode (fail-safe)' (Test-ReclaimCooldown -LastReclaimUtc 'lixo' -NowUtc $now) $true
 
+# Test-ReclaimStuck: reclaim_no_progress so e ERRO quando recuperou < min (3) E
+# o V: continua < piso (51). V: >= piso -> recuperar pouco e esperado (compacto).
+Check 'stuck: recuperou 1, V=40 (<51) -> ERRO real (preso)' (Test-ReclaimStuck -RecoveredGB 1 -VFreeAfterGB 40) $true
+Check 'stuck: recuperou 2, V=57 (>=51) -> NAO erro (VHDX ja compacto)' (Test-ReclaimStuck -RecoveredGB 2 -VFreeAfterGB 57) $false
+Check 'stuck: recuperou 10, V=40 (<51) -> NAO erro (recuperou bem)' (Test-ReclaimStuck -RecoveredGB 10 -VFreeAfterGB 40) $false
+Check 'stuck: recuperou 0, V=51 (==piso) -> NAO erro (boundary >=)' (Test-ReclaimStuck -RecoveredGB 0 -VFreeAfterGB 51) $false
+Check 'stuck: recuperou 2, V=50 (<51) -> ERRO (preso na borda)' (Test-ReclaimStuck -RecoveredGB 2 -VFreeAfterGB 50) $true
+
 ''; "RESULTADO: $pass PASS / $fail FAIL"
 if ($fail -gt 0) { exit 1 }
