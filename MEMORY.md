@@ -731,3 +731,58 @@ brutos aqui.
     rollout local/VM.
   - Limpeza de branches locais/remotas mergeadas deve ocorrer depois de
     confirmar refs e PRs no GitHub.
+
+## 2026-06-21 — disk-clean-per-batch-policy (≥51 GB por PR e por re-run)
+
+- **Branch:** fix/ci-e2e-bringup-support (WIP).
+- **Scope:** registrar de forma DEFINITIVA a política de disco do orchestrator —
+  todo início de batch de checks (PR inicial OU re-run) só admite com `V:` ≥
+  `AdmitFloorGB` (51 GB) livre; abaixo disso, ciclo limpa-tudo + `Optimize-VHD`
+  ANTES de iniciar; re-run após o PR completo dispara o ciclo antes de re-rodar;
+  PR na fila respeita o mesmo. Garantia por-batch, independente do power-state.
+- **Decisão (usuário, 2026-06-21):** o build cache é regenerável e descartado para
+  o `Optimize-VHD` recuperar o `V:`; preservar cache entre runs JÁ FALHOU (enche o
+  disco; `--filter until=` apaga imagem vendor recém-puxada, `7e9cc0d`). Confirma
+  `docker builder prune --force --all` incondicional (sem gate de idade).
+- **Onde:** `docs/specs/orchestrator-scale-to-zero/SPEC.md` §2 "Política
+  definitiva" + RF-10.
+- **Gap (implementação, NÃO feito):** hoje `reclaim_before_admit` só dispara
+  VM-Off+fila e `boundary_compact` só `< 40` no gap. RF-10 exige o reclaim
+  disparar sempre que um batch novo vai iniciar e `V: < 51`, mesmo VM Running
+  (incl. re-run). Requer mudança em `civm-orchestrator-decision.ps1` + casos na
+  decision-table, validados em pwsh na box (não validável fora do host Windows).
+- **Open items:**
+  - Implementar RF-10 na decisão pura + decision-table (pwsh na box).
+  - Wire do hook job-completed para disparar o ciclo de reclaim ao fim do PR,
+    antes de aceitar re-run.
+
+## 2026-06-23 — fstrim no full-clean + reclaim_no_progress era falso alarme
+
+- **Branch:** fix/ci-e2e-bringup-support. Contexto: queda de energia derrubou a
+  box; auto-recuperou (task tem `-AtStartup`). Investiguei o `reclaim_no_progress`
+  recorrente. Detalhes medidos em `validation.md` (entrada 2026-06-23 01:10).
+- **3 bugs corrigidos + deployados ao vivo:**
+  1. `Invoke-GuestFullClean` sem `fstrim` -> Optimize recuperava ~0; add `fstrim
+     -av` no fim do clean (`d5556c1`). Provado: 11.3 GiB trimados ao vivo; pos-clean
+     `fstrim` reporta 0B.
+  2. `reclaim_no_progress` era falso-vermelho (disparava com `v_free=57`);
+     `Test-ReclaimStuck` (gate puro + 5 testes) so alerta com `recovered<3 E
+     v_free<51`; senao `reclaim_already_compact` INFO (`3a4ed93`). Confirmado ao
+     vivo: INFO substituiu o ERROR nas mesmas condicoes.
+  3. `activate-orchestrator.ps1` so copiava 2 dos 3 .ps1 dot-sourced (gate ficava
+     velho) -> copia+valida os 3 (`073e88e`).
+  - Tambem: SSH ao guest com retry/backoff + fallback IP (transitoria de hostname
+    pos-reboot), no commit do fstrim.
+- **Achado-chave:** o VHDX (62G) ja esta no piso real (~52G usados no guest:
+  16G runners, **12G `/home/emdev/codespace` = workspace do usuario, NAO mexer**,
+  6G go cache, ~12G OS). Nao ha bloat grande seguro pra recuperar; `recovered` baixo
+  e esperado. Box saudavel `v_free~57` (~alvo 58).
+- **Deploy:** via `sudo.exe powershell` (UAC off, inline). Queries de
+  Scheduled Task no Windows PRECISAM ser elevadas (a nao-elevada nao enxerga tasks
+  de SYSTEM -> falso "task nao encontrada").
+- **Tooling:** SSH direto ao guest funciona do WSL (`ssh gha-ubuntu-2404`, chave
+  `~/.ssh/id_ed25519`); util pra auditar disco do guest sem passar pelo orchestrator.
+- **WIP CIVM-6/ADR-107 commitado junto** (doctor UNIT_SCRIPTS_INSTALLED, bootstrap
+  copia deploy/bin, registry-cache.service, mem metrics, ciguard devctl).
+- **Open items:** RF-10 (reclaim no admit com V<51 mesmo VM Running) segue pendente
+  — e ortogonal a estes fixes.

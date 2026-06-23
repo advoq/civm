@@ -852,3 +852,52 @@ NAO da box) — o gate/box estao OK; os PRs precisam de Prettier (problema separ
 **Veredito final:** 🟢 gate por-evento correto + deployado + confirmado ao vivo 2x; box saudavel;
 advoq revertido (sem variavel, sem PR/codigo meu); paridade com pago = ~58/PR, 1 PR por vez,
 pelo runner unico (sem lock). Docs (SPECv5 §1/§3) corrigidos.
+
+## 2026-06-23 01:10 -03 — fstrim no full-clean + reclaim_no_progress era falso alarme
+
+> **Categoria:** `disk-reclaim`. Investigacao do `reclaim_no_progress` recorrente
+> apos a queda de energia (box auto-recuperou: task tem `-AtStartup`). Diagnostico
+> ao vivo via SSH direto no guest (`ssh gha-ubuntu-2404`) + log do orchestrator.
+
+- **Bug 1 — fstrim ausente no full-clean.** `Invoke-GuestFullClean` (o clean que
+  roda no boundary, antes do `Stop-VM`+`Optimize-VHD`) NAO chamava `fstrim`, so o
+  `Invoke-GuestWarnClean` (que so dispara em `V<28`). Sem TRIM/UNMAP o VHDX
+  dinamico nao via os blocos liberados -> Optimize recuperava ~1GB. Fix: `sudo
+  fstrim -av` no fim do full-clean (commit `d5556c1`).
+- **Dado medido (fstrim funciona):** `sudo fstrim -av` no guest ao vivo (job
+  rodando) trimou **11.3 GiB** em `/dev/sda2`; logo apos um boundary clean ja com
+  o fix, `fstrim -av` reportou **`/: 0 B`** (nada sobrou) -> o trim do clean pega
+  tudo.
+- **Achado: o VHDX ja esta no piso real.** Guest `df`: 108G fs, **52G usados**
+  (16G runners+`_tool`, **12G `/home/emdev/codespace` = workspace do usuario com
+  trabalho nao-commitado, NAO tocado**, 6G go cache, ~12G OS), VHDX=62G. Logo
+  `recovered_gb` baixo e ESPERADO; nao ha bloat grande seguro pra recuperar.
+- **Bug 2 — `reclaim_no_progress` era falso-vermelho.** Disparava ERROR todo
+  boundary mesmo com `v_free=57` (~alvo 58). Fix: `Test-ReclaimStuck` (gate puro,
+  testado) so alerta se `recovered<3` E `v_free<51` (preso de verdade); senao loga
+  `reclaim_already_compact` INFO (commit `3a4ed93`).
+- **Bug 3 — deploy incompleto.** `activate-orchestrator.ps1` copiava 2 dos 3 .ps1
+  dot-sourced; o gate ficava de fora. Fix: copia+valida os 3 (commit `073e88e`).
+- **Tambem:** SSH ao guest com retry/backoff + fallback p/ IP da VM (transitoria
+  `Could not resolve hostname gha-ubuntu-2404` pos-reboot) — mesmo commit do fstrim.
+
+**Dados medidos (antes/depois, mesmo boundary serial):**
+
+| Instante | evento | recovered_gb | v_free_gb | nivel |
+| --- | --- | --- | --- | --- |
+| 03:44 UTC (pre-fix3) | reclaim_done -> reclaim_no_progress | 1 | 57 | ERROR (falso) |
+| 04:09 UTC (pos-fix3) | reclaim_done -> reclaim_already_compact | 2 | 57 | INFO (correto) |
+
+- Estatica: AST OK (orchestrator+gate); gate tests **15/0** (5 casos novos de
+  `Test-ReclaimStuck`); decision tests **62/0** (sem regressao); `go test ./...` do
+  modulo verde.
+- Deploy ao vivo via `sudo.exe powershell` (UAC off, inline): "3 .ps1 copiados +
+  validados por AST", `orch_state=Ready`, gate deployado com `Test-ReclaimStuck`
+  confirmado.
+
+**Veredito:** 🟢 fstrim no full-clean correto + deployado (impacto pequeno: VHDX ja
+no piso real ~52G usados); `reclaim_no_progress` falso alarme **eliminado**
+(confirmado ao vivo: `reclaim_already_compact` INFO substituiu o ERROR nas mesmas
+condicoes); SSH resiliente; box saudavel `v_free~57`. **Proxima acao:** se o
+`v_free` de fato cair < 51 e persistir, o `reclaim_no_progress` volta a disparar
+(agora verdadeiro) -> ai sim investigar bloat novo no guest.
