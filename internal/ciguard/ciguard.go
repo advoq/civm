@@ -255,8 +255,13 @@ var (
 	// forms are intentionally not matched.
 	staticHostPortRe = regexp.MustCompile(`^\s*-\s*["']?(\d+):\d+(?:/\w+)?["']?\s*$`)
 	composeInvokeRe  = regexp.MustCompile(`docker[\s-]compose\b|docker-compose\b`)
-	dockerHeavyUpRe  = regexp.MustCompile(`docker[\s-]compose\b.*\bup\b|--build\b|\bmake\s+up`)
-	projectNameRe    = regexp.MustCompile(`-p\b|--project-name\b|COMPOSE_PROJECT_NAME`)
+	// dockerHeavyUpRe casa passos docker-heavy: `docker compose up`, `--build`,
+	// `make up`/`make up-local*` e `devctl ci up`. O e2e-tenant-isolation.yml chama
+	// `go run .../devctl ci up core`, que por dentro roda `make up-local-smoke`
+	// — docker-heavy real, mas invisivel aos demais padroes. O `\b` apos `up`
+	// evita falso-positivo em `make update`/`make upstream`. Ver ADR-107.
+	dockerHeavyUpRe = regexp.MustCompile(`docker[\s-]compose\b.*\bup\b|--build\b|\bmake\s+up\b|\bdevctl\b.*\bci\s+up\b`)
+	projectNameRe   = regexp.MustCompile(`-p\b|--project-name\b|COMPOSE_PROJECT_NAME`)
 	// lockWrapRe matches ONLY `civmctl lock` — the heartbeat-backed cross-repo
 	// docker-heavy lock the disk-watchdog cleanup honors via dockerlock.IsActive.
 	// A bare repo-local `flock` is intentionally NOT accepted: it serializes
