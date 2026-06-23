@@ -105,13 +105,16 @@ genérico sem lock).
 | Tools / OS | Runner-image versionada; matriz LARGA (Go 1.22-1.25, Node 20/22/24, Python 3.10-3.14, Ruby, Java, browsers+drivers, AWS/Az/GCP CLI, DBs, Android SDK). Docker 28.0.4. |
 | Cleanup / falha | N/A — VM incinerada. Cleanup é grátis e perfeito; falha de infra re-provisiona limpo. |
 
-### civm — a box REAL (`ssh gha-ubuntu-2404`, medido 2026-06-16, snapshot)
+### civm — a box REAL (`ssh gha-ubuntu-2404`)
+
+> **Hardware definitivo e exato: [`docs/HARDWARE.md`](docs/HARDWARE.md)** (medido 2026-06-23). Os valores
+> abaixo são contexto de paridade; números de disco/RAM/CPU devem bater com o HARDWARE.md.
 
 | Recurso | Realidade |
 | --- | --- |
-| Modelo de execução | **1 VM Hyper-V permanente** (`up 2:49h`); **8 runners systemd** long-lived, NÃO-efêmeros, reusados job a job. |
-| CPU / RAM | **12 vCPU / 7.8 GiB RAM** (snapshot; já foi reportado 9.9 GiB — resize volátil), 4 GiB swap (559 MiB em uso), load `4.83`. Dividido por 8 runners. |
-| Disco | `/dev/sda2 108G, 35G livre @ 67%` (snapshot; já esteve em 15G @ 86%). **Não** 128 GB (README desatualizado). Único e compartilhado. |
+| Modelo de execução | **1 VM Hyper-V permanente**; **8 runners systemd** long-lived, NÃO-efêmeros, reusados job a job (advoq-org em piloto **ephemeral** — ver §4 #1/#8). |
+| CPU / RAM | **Host:** Ryzen 5 3600 (12 threads), **31.9 GB RAM**. **VM/guest:** **8 GB RAM** (= o VMRS de 8 GB no V:) / 12 vCPU compartilhadas. (O "7.8 GiB" de snapshots antigos era a RAM *disponível* do guest, não o total.) |
+| Disco | **Host V: = SSD dedicado de 119.2 GB** (128G nominal), só pra VM. **Guest `/` = 108 GB** (no VHDX dinâmico, ~38 usados pós-pente-fino). V: livre: **72 Off ↔ 54-64 Running** (o swing de 8 GB é o VMRS/RAM). Ver `docs/HARDWARE.md`. |
 | Docker daemon | **1 daemon único** `29.1.3` (overlayfs, containerd snapshotter, `/var/lib/docker`). Snapshot: 0 images / **106 volumes órfãos** (`advoq-<runId>_*` de runs distintas) / build cache 589 MB. |
 | `$HOME` / FS | **`/home/emdev` ÚNICO** compartilhado pelos 8 runners. |
 | Rede | `eth0 192.168.0.50/24` (**LAN doméstica + NAT**) + `tailscale0 100.123.103.106` + `docker0`; `iptables FORWARD policy DROP`. **Não** é egress datacenter. |

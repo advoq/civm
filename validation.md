@@ -901,3 +901,34 @@ no piso real ~52G usados); `reclaim_no_progress` falso alarme **eliminado**
 condicoes); SSH resiliente; box saudavel `v_free~57`. **Proxima acao:** se o
 `v_free` de fato cair < 51 e persistir, o `reclaim_no_progress` volta a disparar
 (agora verdadeiro) -> ai sim investigar bloat novo no guest.
+
+## 2026-06-23 04:31 -03 — Pente-fino do guest + V: 72GB + HARDWARE.md definitivo
+
+**O que:** A entrada anterior concluiu "VHDX ja no piso real, sem bloat seguro". Um pente-fino mais fino
+contradisse: `/home/emdev/codespace` tinha ~12 GB de **clones manuais stale** (CI debug de 2026-05-10:
+`advoq-vmci-m24-*`, `advoq-ci-main-direct`, etc.) que NENHUMA rotina limpava (fora do escopo do
+`Invoke-GuestFullClean`/`civmctl cleanup`). Criados por sessoes de IA antigas acessando a box "da forma
+antiga" (clonar repo na VM). Removidos com backup previo (bundles/patches dos dirty -> host `~/civm-attic`,
+210 MB; os 3 commits "unpushed" do `advoq-ci-main-direct` confirmados ja em advoq/advoq).
+
+**Dados medidos (guest + host V:):**
+
+| Instante | guest `/` usado | V: livre (off) | recovered_gb | VHDX file |
+| --- | --- | --- | --- | --- |
+| pre-cleanup | 50 GB | 57 | ~2 | 62 |
+| pos rm 12GB + `fstrim` | 38 GB | — | — | — |
+| pos `boundary_compact` | 38 GB | **72** | **14** | **47** |
+
+- `fstrim` trimou **33.5 GiB** no `/` (blocos liberados que o `Optimize-VHD` nao enxergava).
+- `disk_below_floor_admitted`: **259 (cronico) -> 0** desde o compact pos-cleanup (medido no log).
+- Hardware definitivo travado em **`docs/HARDWARE.md`**: host Ryzen 5 3600 / **31.9 GB RAM** / V: SSD
+  dedicado **119.2 GB**; VM **8 GB RAM** (= o **VMRS de 8 GB** no V:). O "overhead de 8 GB" do V: e o VMRS
+  (estado de RAM), liberado quando a VM desliga (`Stop-VM -Force`) — **NAO e cruft deletavel**.
+
+**Veredito:** 🟢 o below-floor era **bloat real** (clones stale), nao limite do decision-gate. Removido ->
+V: 57->72, recovered 2->14, below-floor 259->0. O **RF-10** (compactar sempre que V<51) teria **thrashado** a
+box (boot materializa ~8 GB de VMRS, Optimize recuperava ~1, o contador resetava a cada compact -> loop
+infinito sem rodar job) — **NAO implementado, de proposito** (Kahneman #13: "a funcao existir" nao prova o
+efeito). Sustentavel: passo `codespace_stale` adicionado ao `civmctl cleanup` (mtime>7d, espelha `work_old`;
+`go test` verde). **Proxima acao:** deploy do `codespace_stale` no guest; piloto ephemeral advoq-org
+(clean-slate por job, simulacao serializada do pago) aguardando o front PR da outra sessao.
