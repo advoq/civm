@@ -103,13 +103,14 @@ type Report struct {
 }
 
 type Options struct {
-	Repos        []string
-	InferRepos   bool
-	WorkflowFile string
-	WorkDir      string
-	HooksDir     string
-	CivmctlPath  string
-	RunnerGlob   string
+	Repos          []string
+	InferRepos     bool
+	WorkflowFile   string
+	WorkDir        string
+	HooksDir       string
+	CivmctlPath    string
+	RunnerGlob     string
+	UnitsSourceDir string
 
 	HealthFn        func(ctx context.Context) health.Report
 	SystemRunnersFn func(ctx context.Context) ([]runner.Status, error)
@@ -117,17 +118,19 @@ type Options struct {
 	RunFn           func(ctx context.Context, name string, args ...string) ([]byte, error)
 	GlobFn          func(pattern string) ([]string, error)
 	ReadFileFn      func(path string) ([]byte, error)
+	StatFn          func(path string) (os.FileInfo, error)
 }
 
 func DefaultOptions() Options {
 	return Options{
-		InferRepos:   true,
-		WorkflowFile: "ci.yml",
-		WorkDir:      civm.DefaultHealthDiskPath,
-		HooksDir:     hook.DefaultHooksDir,
-		CivmctlPath:  hook.DefaultCivmctlBin,
-		RunnerGlob:   hook.DefaultRunnerGlob,
-		RunFn:        defaultRun,
+		InferRepos:     true,
+		WorkflowFile:   "ci.yml",
+		WorkDir:        civm.DefaultHealthDiskPath,
+		HooksDir:       hook.DefaultHooksDir,
+		CivmctlPath:    hook.DefaultCivmctlBin,
+		RunnerGlob:     hook.DefaultRunnerGlob,
+		UnitsSourceDir: civm.DefaultUnitsSourceDir,
+		RunFn:          defaultRun,
 	}
 }
 
@@ -216,6 +219,9 @@ func applyDefaults(opts *Options) {
 	if opts.RunnerGlob == "" {
 		opts.RunnerGlob = hook.DefaultRunnerGlob
 	}
+	if opts.UnitsSourceDir == "" {
+		opts.UnitsSourceDir = civm.DefaultUnitsSourceDir
+	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
 	}
@@ -224,6 +230,9 @@ func applyDefaults(opts *Options) {
 	}
 	if opts.ReadFileFn == nil {
 		opts.ReadFileFn = os.ReadFile
+	}
+	if opts.StatFn == nil {
+		opts.StatFn = os.Stat
 	}
 	if opts.HealthFn == nil {
 		opts.HealthFn = func(ctx context.Context) health.Report {
@@ -285,6 +294,7 @@ func collectHookChecks(ctx context.Context, opts Options, systemd []runner.Statu
 		checkRunnerServices(systemd, systemdErr),
 		checkRunnerSerialization(systemd, systemdErr),
 		checkScopedSudoers(ctx, opts),
+		checkUnitScriptsInstalled(opts),
 	}
 	worst := SeverityOK
 	for _, check := range checks {
