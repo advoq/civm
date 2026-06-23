@@ -9,13 +9,18 @@ Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Silent
 if (Test-Path 'V:\civm-reclaim.lock') { throw 'reclaim em curso (V:\civm-reclaim.lock); abortar deploy' }
 $dst = 'C:\civm-deploy'
 if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
+# O caller dot-sourceia decision + reclaim-gate via $PSScriptRoot -> os 3 DEVEM
+# ser copiados juntos, senao o orchestrator novo chama uma funcao que o gate
+# velho em C:\civm-deploy nao tem (ex.: Test-ReclaimStuck) e quebra no tick.
 Copy-Item (Join-Path $PSScriptRoot 'civm-orchestrator-decision.ps1') $dst -Force
+Copy-Item (Join-Path $PSScriptRoot 'civm-reclaim-gate.ps1') $dst -Force
 Copy-Item (Join-Path $PSScriptRoot 'civm-vm-orchestrator.ps1') $dst -Force
 $perr = $null
 [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $dst 'civm-vm-orchestrator.ps1'), [ref]$null, [ref]$perr) | Out-Null
 if ($perr) { throw "parse error no caller deployado: $($perr -join '; ')" }
 . (Join-Path $dst 'civm-orchestrator-decision.ps1')  # dot-source so as funcoes -> valida
-'deploy: 2 .ps1 copiados + validados por AST'
+. (Join-Path $dst 'civm-reclaim-gate.ps1')            # idem: valida o gate (Test-ReclaimStuck etc.)
+'deploy: 3 .ps1 copiados + validados por AST'
 $arg = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\civm-deploy\civm-vm-orchestrator.ps1'
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date)
