@@ -156,40 +156,96 @@ function Save-State {
     try { ($State | ConvertTo-Json -Compress) | Set-Content -LiteralPath $StatePath -Encoding UTF8 } catch { }
 }
 
+# Monta os args de SSH (batch, timeout, chave) para um alvo. Centralizado: as 3
+# funcoes que falam com o guest reusam a mesma config em vez de duplicar.
+function Get-GuestSshArgs {
+    param([Parameter(Mandatory)][string]$Target)
+    $a = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new')
+    if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) { $a += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath) }
+    $a += $Target
+    return $a
+}
+
+# Descobre o IPv4 do guest direto do Hyper-V (sem DNS). Usado como fallback
+# quando o NOME gha-ubuntu-2404 nao resolve no boot. Exige integration services
+# reportando IP (poucos segundos pos-Start-VM). Falha -> $null (o caller so usa
+# se nao for nulo).
+function Get-GuestIPAddress {
+    try {
+        $ips = (Get-VMNetworkAdapter -VMName $VMName -ErrorAction Stop).IPAddresses
+        return ($ips | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } | Select-Object -First 1)
+    }
+    catch { return $null }
+}
+
+# SSH ao guest com retry/backoff. Pos-reboot (ex.: queda de energia) o nome
+# gha-ubuntu-2404 demora a resolver pelo switch Hyper-V -> "Could not resolve
+# hostname"/"Connection refused" transitorios faziam o clean+fstrim e o
+# stop-guard pularem (a limpeza nao rodava -> o Optimize nao recuperava nada).
+# Tenta ate $Retries vezes; se o NOME nao resolve, acrescenta o IP da VM como
+# alvo e tenta por IP (remove a dependencia de DNS). $ErrorActionPreference local
+# = Continue para o stderr do ssh nao virar throw -> decidimos sucesso pelo
+# $LASTEXITCODE. Retorna a ultima linha do stdout; $script:LastGuestSshOk diz se
+# algum alvo respondeu com exit 0.
+function Invoke-GuestSsh {
+    param(
+        [Parameter(Mandatory)][string]$Command,
+        [int]$Retries = 3,
+        [int]$BackoffSeconds = 5
+    )
+    $ErrorActionPreference = 'Continue'
+    $script:LastGuestSshOk = $false
+    $user = ($GuestSshTarget -split '@')[0]
+    $targets = [System.Collections.Generic.List[string]]::new()
+    $targets.Add($GuestSshTarget)
+    $lastLine = $null
+    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+        for ($i = 0; $i -lt $targets.Count; $i++) {
+            $out = (& ssh @(Get-GuestSshArgs $targets[$i]) $Command 2>&1)
+            if ($LASTEXITCODE -eq 0) { $script:LastGuestSshOk = $true; return ($out | Select-Object -Last 1) }
+            $lastLine = ($out | Select-Object -Last 1)
+            if (($out | Out-String) -match 'resolve hostname' -and $targets.Count -eq 1) {
+                $ip = Get-GuestIPAddress
+                if ($ip) { $targets.Add("$user@$ip") }
+            }
+        }
+        if ($attempt -lt $Retries) { Start-Sleep -Seconds $BackoffSeconds }
+    }
+    return $lastLine
+}
+
 # Limpeza total do guest antes de desligar: zera os caches dos 7 repos e as
 # imagens de service de runs finalizadas, devolvendo a VM ao estado limpo
 # (~51GB livres) para o proximo PR. Best-effort: falha de SSH nao bloqueia o
 # stop (o disco ja sera compactado offline de qualquer forma).
 function Invoke-GuestFullClean {
-    $sshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new')
-    if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) { $sshArgs += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath) }
-    $sshArgs += $GuestSshTarget
     # Deep clean (#137): alem dos caches dos 7 repos, remove o que so crescia e
     # nunca era limpo — _diag (logs do runner), o conteudo de _work exceto _tool
     # (hosted node/go cache, caro de re-baixar), journal e /tmp. Sem isso o piso
     # "limpo" caia de ~51 pra ~47 ao longo das runs, e a E2E (builda ~35GB de
     # imagens num job) batia no panic floor. df --output=avail evita o awk e o
     # tr -dc 0-9 evita o arg de espaco: os escapes via PowerShell -> SSH -> bash
-    # corrompiam o campo, deixando o ssh sair non-zero (guest_full_clean_warn
-    # cosmetico — a limpeza ja rodava, so o log do free_after falhava).
-    $remote = 'rm -rf ~/.cache/* 2>/dev/null; rm -rf ~/actions-runner*/_diag/* 2>/dev/null; for w in ~/actions-runner*/_work; do find "$w" -maxdepth 1 -mindepth 1 ! -name _tool -exec rm -rf {} + 2>/dev/null; done; sudo journalctl --vacuum-size=50M >/dev/null 2>&1; sudo rm -rf /tmp/* /var/tmp/* 2>/dev/null; sudo docker system prune -af --volumes >/dev/null 2>&1; sudo docker builder prune -af >/dev/null 2>&1; df -BG --output=avail / | tail -1 | tr -dc 0-9'
-    try { $free = (& ssh @sshArgs $remote 2>&1 | Select-Object -Last 1); Write-OrcLog 'guest_full_clean' @{ free_after = "$free" } }
-    catch { Write-OrcLog 'guest_full_clean_warn' @{ error = $_.Exception.Message } 'WARN' }
+    # corrompiam o campo, deixando o ssh sair non-zero.
+    # fstrim -av no FIM (pos-prune, ainda com a VM Running, antes do Stop-VM): o
+    # rm/docker-prune libera dezenas de GB mas, sem o UNMAP/TRIM, o VHDX dinamico
+    # nao ve esses blocos como livres -> o Optimize-VHD offline recuperava ~0
+    # (reclaim_no_progress) e o piso "limpo" caia abaixo de 58. O trim marca os
+    # blocos pra o Optimize compactar de verdade (mesma razao do warn_clean).
+    $remote = 'rm -rf ~/.cache/* 2>/dev/null; rm -rf ~/actions-runner*/_diag/* 2>/dev/null; for w in ~/actions-runner*/_work; do find "$w" -maxdepth 1 -mindepth 1 ! -name _tool -exec rm -rf {} + 2>/dev/null; done; sudo journalctl --vacuum-size=50M >/dev/null 2>&1; sudo rm -rf /tmp/* /var/tmp/* 2>/dev/null; sudo docker system prune -af --volumes >/dev/null 2>&1; sudo docker builder prune -af >/dev/null 2>&1; sudo fstrim -av >/dev/null 2>&1; df -BG --output=avail / | tail -1 | tr -dc 0-9'
+    $free = Invoke-GuestSsh -Command $remote
+    if ($script:LastGuestSshOk) { Write-OrcLog 'guest_full_clean' @{ free_after = "$free" } }
+    else { Write-OrcLog 'guest_full_clean_warn' @{ error = "$free" } 'WARN' }
 }
 
 # Stop-guard independente do token: pergunta ao proprio guest se ha algum
 # Runner.Worker ativo (qualquer repo, qualquer dono). E a salvaguarda real contra
 # desligar a VM com um job rodando que o PAT (escopado a 1 dono) nao ve via API.
-# Fail-safe: SSH falhou -> assume "ha job" -> nao desliga (Kahneman #15).
+# Fail-safe: SSH falhou (mesmo apos retries) -> assume "ha job" -> nao desliga
+# (Kahneman #15).
 function Get-GuestHasActiveJob {
-    $sshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new')
-    if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) { $sshArgs += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath) }
-    $sshArgs += $GuestSshTarget
-    try {
-        $n = (& ssh @sshArgs 'pgrep -c "[R]unner.Worker" 2>/dev/null || echo 0' 2>&1 | Select-Object -Last 1)
-        return ([int]$n -gt 0)
-    }
-    catch { Write-OrcLog 'guest_active_probe_failed' @{ error = $_.Exception.Message } 'WARN'; return $true }
+    $n = Invoke-GuestSsh -Command 'pgrep -c "[R]unner.Worker" 2>/dev/null || echo 0'
+    if (-not $script:LastGuestSshOk) { Write-OrcLog 'guest_active_probe_failed' @{ error = "$n" } 'WARN'; return $true }
+    return ([int]$n -gt 0)
 }
 
 # Mede o V: livre em GB. 0 = medida falhou -> a decisao trata como fail-safe (nao
@@ -204,12 +260,10 @@ function Get-VFreeGB {
 # eviction que o age-guard consertou) + fstrim (marca os blocos liberados pra a
 # VHDX dinamica reusa-los em vez de crescer). Best-effort.
 function Invoke-GuestWarnClean {
-    $sshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new')
-    if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) { $sshArgs += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath) }
-    $sshArgs += $GuestSshTarget
     $remote = 'sudo docker builder prune -af >/dev/null 2>&1; sudo fstrim / >/dev/null 2>&1; df -BG --output=avail / | tail -1 | tr -dc 0-9'
-    try { $free = (& ssh @sshArgs $remote 2>&1 | Select-Object -Last 1); Write-OrcLog 'disk_warn_clean' @{ free_after = "$free" } }
-    catch { Write-OrcLog 'disk_warn_clean_warn' @{ error = $_.Exception.Message } 'WARN' }
+    $free = Invoke-GuestSsh -Command $remote
+    if ($script:LastGuestSshOk) { Write-OrcLog 'disk_warn_clean' @{ free_after = "$free" } }
+    else { Write-OrcLog 'disk_warn_clean_warn' @{ error = "$free" } 'WARN' }
 }
 
 # Desliga a VM e compacta o VHDX offline com o gate de 2 fases provado do #106
