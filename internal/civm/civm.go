@@ -16,6 +16,11 @@ const (
 	DefaultWorkDir        = "/home/runner/_work"
 	DefaultHealthDiskPath = "/"
 	DefaultTmpDir         = "/tmp"
+	// DefaultCodespaceDir e um sentinel (como DefaultWorkDir): quando o caller nao
+	// sobrescreve, o cleanup descobre os codespaces reais via glob /home/*/codespace.
+	// Sao clones manuais parados que o CI nunca usa (ele clona em _work) — drift que
+	// nenhuma rotina limpava ate o codespace_stale (ponto cego do paridade-pago).
+	DefaultCodespaceDir   = "/home/runner/codespace"
 	DefaultSystemdDir     = "/etc/systemd/system"
 	DefaultUnitsSourceDir = "/opt/civm/deploy/systemd"
 	DefaultCivmctlPath    = "/usr/local/bin/civmctl"

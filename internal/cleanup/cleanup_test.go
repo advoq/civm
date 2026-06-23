@@ -127,9 +127,12 @@ func TestRun_DryRun_DetectsOldFiles(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
 	mfs := mkFS(now)
+	// Clone parado em codespace (>7d) -> codespace_stale o detecta (ponto cego antigo).
+	mfs["codespace/stale.bin"] = &fstest.MapFile{Data: []byte("ssssss"), ModTime: now.Add(-30 * 24 * time.Hour)}
 	opts := DefaultOptions()
 	opts.WorkDir = "work"
 	opts.TmpDir = "tmp"
+	opts.CodespaceDir = "codespace"
 	opts.Now = now
 	opts.WalkFn = walkFS(mfs)
 	opts.RunFn = func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -139,8 +142,8 @@ func TestRun_DryRun_DetectsOldFiles(t *testing.T) {
 	opts.AptClean = false
 
 	actions := Run(context.Background(), opts)
-	if len(actions) != 2 {
-		t.Fatalf("len(actions) = %d, want 2 (tmp_old + work_old)", len(actions))
+	if len(actions) != 3 {
+		t.Fatalf("len(actions) = %d, want 3 (tmp_old + work_old + codespace_stale)", len(actions))
 	}
 	for _, a := range actions {
 		if a.Err != nil {
@@ -208,6 +211,55 @@ func TestRun_DefaultWorkDirDiscoversRunnerWorkDirs(t *testing.T) {
 	}
 	if !strings.Contains(work.Path, "actions-runner-a/_work") || !strings.Contains(work.Path, "actions-runner-b/_work") {
 		t.Fatalf("work_old Path omitiu roots descobertos: %s", work.Path)
+	}
+}
+
+// TestRun_CodespaceStaleDiscoversAndAgeGates prova o passo codespace_stale: descobre
+// /home/*/codespace via glob, remove clones parados (>7d) e preserva os recentes (<2h).
+// E o ponto cego do paridade-pago — o CI clona em _work, nunca em codespace, e nenhuma
+// rotina limpava esse dir, entao clones manuais acumulavam indefinidamente.
+func TestRun_CodespaceStaleDiscoversAndAgeGates(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-30 * 24 * time.Hour)
+	mfs := fstest.MapFS{
+		"home/emdev/codespace/stale-clone.bin": {Data: []byte("aaaaaa"), ModTime: old},                    // delete (>7d, >2h)
+		"home/emdev/codespace/fresh-clone.bin": {Data: []byte("bb"), ModTime: now.Add(-30 * time.Minute)}, // skip (<2h)
+	}
+	opts := DefaultOptions()
+	opts.WorkDir = "work" // non-sentinel: pula o glob de _work
+	opts.TmpDir = "tmp"
+	opts.Now = now
+	opts.WalkFn = walkFS(mfs)
+	opts.GlobFn = func(pattern string) ([]string, error) {
+		if pattern == "/home/*/codespace" {
+			return []string{"home/emdev/codespace"}, nil
+		}
+		return nil, nil
+	}
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.DockerPrune = false
+	opts.AptClean = false
+
+	var cs *Action
+	actions := Run(context.Background(), opts)
+	for i := range actions {
+		if actions[i].Name == "codespace_stale" {
+			cs = &actions[i]
+			break
+		}
+	}
+	if cs == nil {
+		t.Fatalf("no codespace_stale action in %+v", actions)
+	}
+	if cs.Err != nil {
+		t.Fatalf("codespace_stale err = %v", cs.Err)
+	}
+	if cs.BytesFound != 6 {
+		t.Fatalf("codespace_stale BytesFound = %d, want 6 (so o clone parado >7d)", cs.BytesFound)
+	}
+	if !strings.Contains(cs.Path, "home/emdev/codespace") {
+		t.Fatalf("codespace_stale Path omitiu o root descoberto: %s", cs.Path)
 	}
 }
 
@@ -442,6 +494,7 @@ func TestRun_Execute_BytesFreedTracksEachPathOnce(t *testing.T) {
 	opts := testExecuteOptions()
 	opts.TmpDir = "tmp"
 	opts.WorkDir = "tmp"
+	opts.CodespaceDir = "tmp"
 	opts.Now = now
 	opts.WalkFn = walkFS(mfs)
 	opts.DockerPrune = false

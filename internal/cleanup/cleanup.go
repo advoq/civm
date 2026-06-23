@@ -76,14 +76,16 @@ type Action struct {
 
 // Options control which steps run.
 type Options struct {
-	Execute       bool
-	WorkDir       string
-	TmpDir        string
-	TmpThreshold  time.Duration
-	WorkThreshold time.Duration
-	DockerPrune   bool
-	AptClean      bool
-	SkipIdleGuard bool
+	Execute            bool
+	WorkDir            string
+	TmpDir             string
+	CodespaceDir       string
+	TmpThreshold       time.Duration
+	WorkThreshold      time.Duration
+	CodespaceThreshold time.Duration
+	DockerPrune        bool
+	AptClean           bool
+	SkipIdleGuard      bool
 	// EmergencyBypassIdle stops deferring the SAFE reclaim (old /tmp, cache
 	// trim) when the host is busy. Set by the disk-watchdog at
 	// civm.DefaultEmergencyBypassPct: a busy host filling its own disk is
@@ -125,25 +127,27 @@ type Options struct {
 // orphaned dirs from crashes or runner restarts, kept short to free SSD space.
 func DefaultOptions() Options {
 	return Options{
-		Execute:        false,
-		WorkDir:        civm.DefaultWorkDir,
-		TmpDir:         civm.DefaultTmpDir,
-		TmpThreshold:   24 * time.Hour,
-		WorkThreshold:  3 * 24 * time.Hour,
-		DockerPrune:    true,
-		AptClean:       true,
-		IdleProbeDelay: 2 * time.Second,
-		Now:            time.Now(),
-		WalkFn:         filepath.WalkDir,
-		StatFn:         defaultStat,
-		GlobFn:         filepath.Glob,
-		RemoveAllFn:    os.RemoveAll,
-		RunFn:          defaultRun,
-		ActivityFn:     defaultActivities,
-		LockActiveFn:   defaultLockActive,
-		ReclaimStaleFn: defaultReclaimStale,
-		LockHolderFn:   defaultLockHolder,
-		SafeDeleteFn:   defaultSafeDelete,
+		Execute:            false,
+		WorkDir:            civm.DefaultWorkDir,
+		TmpDir:             civm.DefaultTmpDir,
+		CodespaceDir:       civm.DefaultCodespaceDir,
+		TmpThreshold:       24 * time.Hour,
+		WorkThreshold:      3 * 24 * time.Hour,
+		CodespaceThreshold: 7 * 24 * time.Hour,
+		DockerPrune:        true,
+		AptClean:           true,
+		IdleProbeDelay:     2 * time.Second,
+		Now:                time.Now(),
+		WalkFn:             filepath.WalkDir,
+		StatFn:             defaultStat,
+		GlobFn:             filepath.Glob,
+		RemoveAllFn:        os.RemoveAll,
+		RunFn:              defaultRun,
+		ActivityFn:         defaultActivities,
+		LockActiveFn:       defaultLockActive,
+		ReclaimStaleFn:     defaultReclaimStale,
+		LockHolderFn:       defaultLockHolder,
+		SafeDeleteFn:       defaultSafeDelete,
 	}
 }
 
@@ -241,6 +245,11 @@ func Run(ctx context.Context, opts Options) []Action {
 	var out []Action
 	out = append(out, scanAndMaybeDelete(ctx, opts, "tmp_old", opts.TmpDir, opts.TmpThreshold))
 	out = append(out, scanWorkAndMaybeDelete(ctx, opts))
+	// Clones parados em /home/*/codespace: o CI clona em _work, nunca aqui; este dir era
+	// um ponto cego (nenhuma rotina o limpava) e acumulava drift de paridade-pago. Gated
+	// pelo mesmo ensureIdle acima, entao nunca roda mid-job; alem disso, apagar codespace
+	// nao toca _work, entao e seguro mesmo se um job estivesse ativo.
+	out = append(out, scanCodespaceAndMaybeDelete(ctx, opts))
 	// Bound the regenerable CI caches (the named-dir gap). The job hook trims
 	// these at job-started, but a disk-watchdog tick (idle runner, disk filled by
 	// caches) must trim them too — same cachetrim policy, applied as root across
@@ -321,6 +330,47 @@ func workCleanupRoots(opts Options) []string {
 	}
 	sort.Strings(matches)
 	return matches
+}
+
+// codespaceCleanupRoots descobre os dirs /home/*/codespace (espelha workCleanupRoots).
+// Quando CodespaceDir e o sentinel (DefaultCodespaceDir), faz glob; senao usa o literal.
+// Sao clones manuais parados — o CI clona em _work, nunca em codespace; nada operacional
+// referencia esse dir, entao um clone parado alem do threshold e drift seguro de remover.
+func codespaceCleanupRoots(opts Options) []string {
+	dir := filepath.Clean(opts.CodespaceDir)
+	if dir != filepath.Clean(civm.DefaultCodespaceDir) {
+		return []string{opts.CodespaceDir}
+	}
+	matches, err := opts.GlobFn("/home/*/codespace")
+	if err != nil || len(matches) == 0 {
+		return nil
+	}
+	sort.Strings(matches)
+	return matches
+}
+
+// scanCodespaceAndMaybeDelete varre cada /home/*/codespace e remove os clones parados
+// (mtime > CodespaceThreshold, com a guarda de 2h herdada de scanAndMaybeDelete). Diferente
+// de work_old, nao ha filhos protegidos (_tool/_actions) — todo clone parado e descartavel.
+func scanCodespaceAndMaybeDelete(ctx context.Context, opts Options) Action {
+	roots := codespaceCleanupRoots(opts)
+	if len(roots) == 0 {
+		return Action{Name: "codespace_stale", Path: "(nenhum /home/*/codespace)"}
+	}
+	if len(roots) == 1 {
+		return scanAndMaybeDelete(ctx, opts, "codespace_stale", roots[0], opts.CodespaceThreshold)
+	}
+	a := Action{Name: "codespace_stale", Path: strings.Join(roots, ", ")}
+	for _, root := range roots {
+		part := scanAndMaybeDelete(ctx, opts, "codespace_stale", root, opts.CodespaceThreshold)
+		a.BytesFound += part.BytesFound
+		a.BytesFreed += part.BytesFreed
+		a.Executed = a.Executed || part.Executed
+		if part.Err != nil && a.Err == nil {
+			a.Err = part.Err
+		}
+	}
+	return a
 }
 
 // cacheHomeRoots derives the runner user home(s) from the discovered _work roots
