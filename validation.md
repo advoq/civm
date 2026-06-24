@@ -932,3 +932,37 @@ infinito sem rodar job) — **NAO implementado, de proposito** (Kahneman #13: "a
 efeito). Sustentavel: passo `codespace_stale` adicionado ao `civmctl cleanup` (mtime>7d, espelha `work_old`;
 `go test` verde). **Proxima acao:** deploy do `codespace_stale` no guest; piloto ephemeral advoq-org
 (clean-slate por job, simulacao serializada do pago) aguardando o front PR da outra sessao.
+
+## 2026-06-24 18:21 -03 — Floor de admissao 70->55 (alcancavel) + compact incondicional por PR
+
+**O que:** Continuacao da sessao interrompida pela queda de energia (17:11 -03). O gate warm do
+orchestrator ja estava (pre-outage) compactando INCONDICIONAL 1x por PR na transicao running >0->0
+(anti-thrash por-evento via PrevRunning) + floors separados host/guest. A queda interrompeu o sync do
+arquivo de teste `civm-orchestrator-decision.test.ps1`. Terminei o sync, e a observacao do log VIVO da
+box revelou que o floor host=70 era fisicamente inalcancavel sob CI -> baixei pra 55 (alcancavel). Sync
+de teste + alinhamento de comentarios (Kahneman #13) + floor 55 nos 3 `.ps1` (decision/orchestrator/
+reclaim-gate) + os 2 testes.
+
+**Dados medidos (log da box 2026-06-24, com o floor=70 ANTES do fix):**
+
+| Instante UTC | evento | v_free | recovered | resultado |
+| --- | --- | --- | --- | --- |
+| 20:29 | boundary_compact (fim do PR) | 39->67 | 20 | compacta OK, VHDX piso ~52GB |
+| 20:37 | reclaim_before_admit (67<70!) | 67 | 0 | compact EXTRA inutil |
+| 20:42 | reclaim_no_progress ERROR | 67 | 0 | FALSO-vermelho (67 e saudavel) |
+| 20:43 | disk_below_floor_admitted attempts=2 | 67 | — | admite so apos ~6min de spiral |
+
+- Ceiling real sob CI ativo: V: ~67 (o VHDX tem piso ~52GB = dados genuinos + cache `_tool`
+  preservado). 70 e inalcancavel sob carga -> spiral de reclaim + `reclaim_no_progress` falso +
+  ~6min de atraso por PR (= a lentidao "tnant demora ~10min pra iniciar" reclamada).
+- Fix: `AdmitFloorGB` 70->55 (12GB de margem abaixo do ceiling 67 -> admite logo apos compactar).
+  `GuestFloorGB` 40 mantido (guest fica ~45-63). `boundary_compact` incondicional mantido (compacta
+  todo PR, libera o maximo dos 2 lados: guest_full_clean no Linux + Optimize-VHD no host).
+- Testes (via `pwsh.exe` na box): decision **64/0**, reclaim-gate **15/0**, AST ok nos 3 `.ps1`.
+- Deploy: 3 `.ps1` copiados pra `C:\civm-deploy` (deployed==source, diff 0); proximo tick (2min) roda
+  floor=55. `reclaim.lock=False` no momento do deploy.
+
+**Veredito:** 🟢 sync de teste concluido (o passo que a queda interrompeu) + bug do floor=70 corrigido
+por evidencia VIVA, nao por suposicao (Kahneman #13). Floor 55 alcancavel elimina o spiral + o
+`reclaim_no_progress` falso. **Proxima acao:** observar 2-3 ticks pos-deploy pra confirmar admissao
+direta (V:~67>=55 -> start sem reclaim extra); depois seguir o #1227 ate verde.

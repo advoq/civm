@@ -139,8 +139,8 @@ function Get-State {
     if (-not ($s.PSObject.Properties.Name -contains 'lastPanicUtc')) {
         $s | Add-Member -NotePropertyName lastPanicUtc -NotePropertyValue '' -Force
     }
-    # Garante admitReclaimAttempts — a barreira de admissao (51GB) conta compacts
-    # que nao chegaram em 51 pra evitar deadlock da fila (>=2 admite mesmo assim).
+    # Garante admitReclaimAttempts — a barreira de admissao (host 55 / guest 40) conta
+    # compacts que nao chegaram no floor pra evitar deadlock da fila (>=2 admite mesmo assim).
     if (-not ($s.PSObject.Properties.Name -contains 'admitReclaimAttempts')) {
         $s | Add-Member -NotePropertyName admitReclaimAttempts -NotePropertyValue 0 -Force
     }
@@ -354,9 +354,14 @@ try {
     $last = [datetime]::Parse($state.lastBusyUtc).ToUniversalTime()
     $idleMin = ((Get-Date).ToUniversalTime() - $last).TotalMinutes
     $vfree = Get-VFreeGB
-    # Barreira de admissao (51GB nos 2 lados): o guest free vem do snapshot de
-    # host-metrics; 999 = snapshot ausente/ilegivel -> desconhecido, nao bloqueia.
-    $AdmitFloorGB = 51
+    # Barreira de admissao (backstop): host V: >= 55GB (alcancavel; o compact chega a
+    # ~67 sob CI) E guest >= 40GB (o guest so alcanca ~45-63, nunca 70 -> floor proprio
+    # menor). O compact entre PRs e INCONDICIONAL (boundary_compact a cada PR; ver
+    # decision) e libera o MAXIMO dos 2 lados; 55 e o piso alcancavel pra admitir logo
+    # apos compactar (mirar 70 spiralava com reclaim_no_progress falso). O guest free vem
+    # do snapshot de host-metrics; 999 = ausente/ilegivel -> desconhecido, nao bloqueia.
+    $AdmitFloorGB = 55
+    $GuestFloorGB = 40
     $guestFree = 999
     try {
         $snap = Get-Content -LiteralPath 'V:\civm-host-metrics.json' -Raw -ErrorAction Stop | ConvertFrom-Json
@@ -374,12 +379,12 @@ try {
     # Decide no modulo puro testado (civm-orchestrator-decision.test.ps1); o
     # switch abaixo so EXECUTA a acao. A probe SSH e lazy: Get-OrchestratorDecision
     # so a chama no gate de stop. VFreeGB + CanPanic armam a seguranca de disco.
-    $decision = Get-OrchestratorDecision -VmState "$($vm.State)" -Queued $queued -Running $running -IdleMinutes $idleMin -IdleStopMinutes $IdleStopMinutes -HasActiveJobProbe { Get-GuestHasActiveJob } -VFreeGB $vfree -WarnFloorGB $WarnFloorGB -PanicFloorGB $PanicFloorGB -CanPanic $canPanic -AdmitFloorGB $AdmitFloorGB -GuestFreeGB $guestFree -AdmitReclaimAttempts ([int]$state.admitReclaimAttempts) -PrevRunning $prevRunning
+    $decision = Get-OrchestratorDecision -VmState "$($vm.State)" -Queued $queued -Running $running -IdleMinutes $idleMin -IdleStopMinutes $IdleStopMinutes -HasActiveJobProbe { Get-GuestHasActiveJob } -VFreeGB $vfree -WarnFloorGB $WarnFloorGB -PanicFloorGB $PanicFloorGB -CanPanic $canPanic -AdmitFloorGB $AdmitFloorGB -GuestFloorGB $GuestFloorGB -GuestFreeGB $guestFree -AdmitReclaimAttempts ([int]$state.admitReclaimAttempts) -PrevRunning $prevRunning
 
     switch ($decision) {
         'noop_off' { }
         'start' {
-            # Admite: se ainda <51 (so ocorre com attempts>=2 -> anti-deadlock), emite o
+            # Admite: se ainda <55 (so ocorre com attempts>=2 -> anti-deadlock), emite o
             # evento rastreavel (rollback/abort dependem dele). O reset do contador e do
             # Resolve-AdmitTransition pos-switch (SPECv4 ITEM-2).
             if ($vfree -gt 0 -and $vfree -lt $AdmitFloorGB) {
@@ -393,20 +398,20 @@ try {
             }
         }
         'reclaim_before_admit' {
-            # BARREIRA DE ADMISSAO: VM Off + fila, mas disco < 51GB. Compacta ANTES
-            # de admitir (nao starta sujo, evita o caso #1182 a V:18). Conta a
-            # tentativa; se o compact maxar sem chegar em 51, a 2a tentativa admite
-            # mesmo assim (anti-deadlock da fila, decidido no modulo puro).
+            # BARREIRA DE ADMISSAO: VM Off + fila, mas disco < floor (host 55 ou
+            # guest 40). Compacta ANTES de admitir (nao starta sujo, evita o caso
+            # #1182 a V:18). Conta a tentativa; se o compact maxar sem chegar no
+            # floor, a 2a tentativa admite mesmo assim (anti-deadlock, modulo puro).
             if ($Observe) { Write-OrcLog 'would_reclaim_before_admit' @{ v_free_gb = $vfree; guest_free_gb = $guestFree; floor = $AdmitFloorGB; attempts = [int]$state.admitReclaimAttempts } }
             else {
                 Write-OrcLog 'reclaim_before_admit' @{ v_free_gb = $vfree; guest_free_gb = $guestFree; floor = $AdmitFloorGB; attempts = [int]$state.admitReclaimAttempts }
                 Invoke-StopAndCompact -Reason 'admit_barrier'
-                # O incremento do contador (se vAfter ainda <51) e do Resolve-AdmitTransition
+                # O incremento do contador (se vAfter ainda <55) e do Resolve-AdmitTransition
                 # pos-switch (SPECv4 ITEM-2; era inline aqui).
             }
         }
         'mark_busy' {
-            # Admissao warm (Running==0 + Queued>0): se admite sujo (<51, via attempts>=2),
+            # Admissao warm (Running==0 + Queued>0): se admite sujo (<55, via attempts>=2),
             # emite o evento. O reset do contador e do Resolve-AdmitTransition pos-switch.
             if ($running -eq 0 -and $queued -gt 0 -and $vfree -gt 0 -and $vfree -lt $AdmitFloorGB) {
                 $evt = if ($Observe) { 'would_disk_below_floor_admitted' } else { 'disk_below_floor_admitted' }
@@ -428,8 +433,8 @@ try {
             else { Write-OrcLog 'disk_warn' @{ v_free_gb = $vfree; floor = $WarnFloorGB }; Invoke-GuestWarnClean }
         }
         'boundary_compact' {
-            # GATE DE ADMISSAO WARM (Running==0 + Queued>0 + V<AdmitFloorGB 51): compacta
-            # ANTES de admitir o batch (PR/re-run). NAO mata job (nenhum in_progress). O
+            # COMPACT ANTES DE CADA PR (Running==0 + Queued>0 na transicao >0->0): compacta
+            # INCONDICIONAL (independente do V), pra cada PR comecar limpo. NAO mata job. O
             # lock V:\civm-reclaim.lock + o gate Test-OptimizeSlack do Invoke-StopAndCompact
             # valem aqui. Apos compactar (VM Off), o proximo tick cai no ramo Off e religa
             # via 'start'. Se a folga pos-Off nao cobrir o scratch, o Invoke-StopAndCompact
@@ -437,7 +442,7 @@ try {
             # e do Resolve-AdmitTransition pos-switch (SPECv4 ITEM-2).
             if ($Observe) { Write-OrcLog 'would_boundary_compact' @{ v_free_gb = $vfree; floor = $AdmitFloorGB; queued = $queued } }
             else {
-                Write-OrcLog 'disk_boundary_compact' @{ v_free_gb = $vfree; floor = $AdmitFloorGB; queued = $queued; note = 'fim do PR (running >0->0) -> compacta ate ~58 sem matar job (Running==0)' }
+                Write-OrcLog 'disk_boundary_compact' @{ v_free_gb = $vfree; floor = $AdmitFloorGB; queued = $queued; note = 'fim do PR (running >0->0) -> compacta ate ~67 sem matar job (Running==0)' }
                 Invoke-StopAndCompact -Reason 'boundary_compact'
             }
         }

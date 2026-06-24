@@ -39,14 +39,14 @@ function Test-OptimizeSlack {
 # que o compact nao resolve -> precisa de humano). Se o V: ja esta >= piso,
 # recuperar pouco e ESPERADO: o VHDX ja esta compacto (o footprint do guest e
 # estavel ~52GB de arquivos genuinos), nao ha o que devolver. Sem este gate o
-# ERROR disparava todo boundary num disco saudavel (v_free ~57) — falso-vermelho
+# ERROR disparava todo boundary num disco saudavel (v_free ~67) — falso-vermelho
 # perpetuo (Kahneman #13: um sinal que nao bate com o estado real e bug).
 function Test-ReclaimStuck {
     param(
         [Parameter(Mandatory)][int]$RecoveredGB,
         [Parameter(Mandatory)][int]$VFreeAfterGB,
         [int]$MinRecoverGB = $script:MinRecoverGB,
-        [int]$AdmitFloorGB = 51
+        [int]$AdmitFloorGB = 55
     )
     return (($RecoveredGB -lt $MinRecoverGB) -and ($VFreeAfterGB -lt $AdmitFloorGB))
 }
