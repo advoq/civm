@@ -434,17 +434,27 @@ try {
         }
         'boundary_compact' {
             # COMPACT ANTES DE CADA PR (Running==0 + Queued>0 na transicao >0->0): compacta
-            # INCONDICIONAL (independente do V), pra cada PR comecar limpo. NAO mata job. O
-            # lock V:\civm-reclaim.lock + o gate Test-OptimizeSlack do Invoke-StopAndCompact
+            # incondicional no V, mas a decision so chega aqui depois da probe SSH confirmar
+            # o guest OCIOSO — sem esse gate o running count laggado do GitHub fazia o
+            # Stop-VM matar um job em checkout (incidente 2026-06-24 22:13). O lock
+            # V:\civm-reclaim.lock + o gate Test-OptimizeSlack do Invoke-StopAndCompact
             # valem aqui. Apos compactar (VM Off), o proximo tick cai no ramo Off e religa
             # via 'start'. Se a folga pos-Off nao cobrir o scratch, o Invoke-StopAndCompact
             # pula (reclaim_skip_insufficient_slack). O incremento do contador (anti-deadlock)
             # e do Resolve-AdmitTransition pos-switch (SPECv4 ITEM-2).
             if ($Observe) { Write-OrcLog 'would_boundary_compact' @{ v_free_gb = $vfree; floor = $AdmitFloorGB; queued = $queued } }
             else {
-                Write-OrcLog 'disk_boundary_compact' @{ v_free_gb = $vfree; floor = $AdmitFloorGB; queued = $queued; note = 'fim do PR (running >0->0) -> compacta ate ~67 sem matar job (Running==0)' }
+                Write-OrcLog 'disk_boundary_compact' @{ v_free_gb = $vfree; floor = $AdmitFloorGB; queued = $queued; note = 'fim do PR (running >0->0) -> compacta ate ~67 (probe SSH confirmou guest ocioso, nao mata job em voo)' }
                 Invoke-StopAndCompact -Reason 'boundary_compact'
             }
+        }
+        'boundary_aborted_active_job' {
+            # A probe SSH viu Runner.Worker ativo no guest (o running count do GitHub ainda
+            # nao tinha pego o job recem-despachado): NAO para a VM, senao mataria o job em
+            # voo. Reseta o idle timer porque a box esta de fato ocupada. Espelha o gate do
+            # stop ocioso (stop_aborted_active_job).
+            Write-OrcLog 'boundary_aborted_active_job' @{ note = 'job ativo no guest (running count do GitHub laggou) -> NAO compacta, preserva o job em voo' }
+            if (-not $Observe) { $state.lastBusyUtc = $nowUtc; Save-State $state }
         }
         'panic_compact' {
             # Disco CRITICO (V < PanicFloor): compacta MESMO ocupado. Mata os jobs

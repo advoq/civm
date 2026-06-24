@@ -966,3 +966,37 @@ reclaim-gate) + os 2 testes.
 por evidencia VIVA, nao por suposicao (Kahneman #13). Floor 55 alcancavel elimina o spiral + o
 `reclaim_no_progress` falso. **Proxima acao:** observar 2-3 ticks pos-deploy pra confirmar admissao
 direta (V:~67>=55 -> start sem reclaim extra); depois seguir o #1227 ate verde.
+
+## 2026-06-24 19:21 -03 — boundary_compact matava job em voo (running count laggado) -> probe-gate
+
+**O que:** Observando o #1227 pos-fix-do-floor, achei a causa REAL dos "jobs derrubados antes de
+terminar" (a queixa original): o `boundary_compact` parava a VM (Stop-VM) quando o running count do
+GitHub era 0, mas esse count LAGGA ~30-60s. Um job recem-despachado (em checkout) ainda aparece como
+running=0, e o Stop-VM o matava em voo. O comentario do gate dizia "NAO mata job (Running==0)" — FALSO
+(Kahneman #13). Fix: o `boundary_compact` agora consulta a probe SSH `Get-GuestHasActiveJob`
+(Runner.Worker no guest, verdade em tempo real, fail-safe: SSH falho -> assume ativo) ANTES de parar a
+VM. Job ativo -> novo outcome `boundary_aborted_active_job` (nao para a VM). Espelha o gate ja existente
+do stop ocioso (`stop_aborted_active_job`).
+
+**Dados medidos (smoking gun, log da box + GitHub API 2026-06-24):**
+
+| Instante UTC | fonte | evento |
+| --- | --- | --- |
+| 22:12:43 | GitHub job | `govulncheck (ms-billing)` started (runner civm-advoq-org) |
+| 22:13:17 | orch log | tick v=40 r=0 prev=1 -> `disk_boundary_compact` -> `reclaim_start` (Stop-VM) |
+| 22:13:31 | GitHub job | `govulncheck (ms-billing)` **cancelled** ("operation was canceled") |
+| 22:13:34 | orch log | `reclaim_post_off_remeasure` (VM ja off) |
+
+- O Stop-VM do boundary_compact (22:13:17) matou o job que comecara 34s antes (22:12:43). Mesma
+  assinatura dos checkouts cancelados de `Trivy` e `changes` (todos "operation was canceled" no checkout).
+  O floor=55 NAO resolvia isto — e race do running count, nao disco.
+- Fix validado (via `pwsh.exe` na box): decision **66/0** (2 casos novos de probe-gate:
+  job ativo na transicao -> `boundary_aborted_active_job`), reclaim-gate **15/0**, AST ok.
+- Deploy: 3 `.ps1` -> `C:\civm-deploy` (deployed==source, diff 0); novo outcome wired em decision +
+  orchestrator. Proximo tick usa o probe-gate.
+
+**Veredito:** 🟢 race do job-kill fechada por evidencia VIVA (Kahneman #13: o comentario "nao mata job"
+nao batia com o efeito real). A probe SSH e a verdade em tempo real; o running count do GitHub nao.
+**Proxima acao:** confirmar no log um `boundary_aborted_active_job` (prova o gate disparando) + ausencia
+de novos "operation was canceled"; re-rodar os jobs ja cancelados (Trivy/changes/govulncheck) quando as
+runs deles terminarem; seguir o #1227 ate verde.

@@ -57,7 +57,11 @@ $cases = @(
     @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 40; exp = 'boundary_compact'; d = 'GAP + V=40 -> compacta' },
     @{ vm = 'Running'; q = 2; r = 0; idle = 0; stop = 10; job = $F; vfree = 55; exp = 'boundary_compact'; d = 'GAP + V=55 -> compacta incondicional (no design antigo @51 era mark_busy)' },
     @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 51; exp = 'boundary_compact'; d = 'GAP + V=51 -> compacta incondicional' },
-    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 0; exp = 'boundary_compact'; d = 'GAP + V=0 (medida falhou) -> compacta mesmo assim (nao mata job em R==0; o fail-safe #15 fica no panic, que checa V>0)' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 0; exp = 'boundary_compact'; d = 'GAP + V=0 (medida falhou) + probe ocioso -> compacta mesmo assim (o fail-safe #15 de V fica no panic, que checa V>0)' },
+    # --- PROBE-GATE: o running count do GitHub LAGGA ~30-60s; antes de parar a VM a probe
+    # --- SSH (Runner.Worker no guest, verdade em tempo real) confirma ocioso. Job em voo -> aborta.
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $T; vfree = 45; exp = 'boundary_aborted_active_job'; d = 'GAP na transicao MAS a probe ve job ativo no guest -> NAO compacta (evita matar job em voo; incidente 2026-06-24 22:13)' },
+    @{ vm = 'Running'; q = 3; r = 0; idle = 0; stop = 10; job = $T; vfree = 67; exp = 'boundary_aborted_active_job'; d = 'GAP + disco folgado MAS probe ve job ativo -> aborta (a probe manda, nao o running count laggado)' },
     @{ vm = 'Running'; q = 1; r = 2; idle = 0; stop = 10; job = $F; vfree = 35; exp = 'mark_busy'; d = 'Running=2 (job rodando) -> gate NAO dispara (NAO mata job), mark_busy' },
     @{ vm = 'Running'; q = 2; r = 2; idle = 0; stop = 10; job = $F; vfree = 45; exp = 'mark_busy'; d = 'RF-2: Running=2 (job rodando) -> gate NAO dispara, mark_busy' },
     @{ vm = 'Running'; q = 2; r = 0; idle = 0; stop = 10; job = $F; vfree = 45; ra = 2; exp = 'mark_busy'; d = 'GAP + 2 tentativas (>=2) -> admite sujo (anti-deadlock da fila)' },
