@@ -66,6 +66,15 @@ param(
     # Estado da fila FIFO por-PR (Phase 1b, observe-mode): contextos em ordem de chegada
     # + o slot simulado. Por enquanto so LOGA (would_grant/would_advance), nao impoe.
     [string]$PrQueuePath = 'V:\civm-pr-queue.json',
+    # Caminho HOST do contexto concedido. O gate job (runner Windows do HOST, label
+    # civm-gate) le isto e segura os jobs reais Linux ate ser a vez do PR. Fica no HOST
+    # de proposito: sobrevive ao Stop-VM do guest no compact de boundary (um gate dentro
+    # do guest seria cancelado pelo compact). So e escrito com -EnforceQueue.
+    [string]$CurrentContextPath = 'V:\civm-current-context',
+    # Liga o ENFORCE da fila por-PR: publica o currentPr no host + limpa+compacta no
+    # boundary do contexto. Default OFF (so observe). Ligar SO depois do canario provar
+    # o gate (gate-no-host) num PR throwaway — nunca direto nos 7 workflows.
+    [switch]$EnforceQueue,
     # Modo observe: loga "would_start"/"would_stop" em vez de agir. Valida a
     # logica contra a box real sem mexer na VM — mais limpo que -WhatIf (que
     # suprime ate o Add-Content do log e os New-Alias do modulo Hyper-V).
@@ -537,6 +546,24 @@ try {
         if ($slot.action -ne 'hold' -or "$($pq.currentPr)" -ne "$($slot.currentPr)") {
             $ctxStr = (@($ordered | ForEach-Object { $cid = "$($_.id)"; "${cid}:$([int]$act[$cid])" }) -join ' ')
             Write-OrcLog "would_$($slot.action)" @{ current = "$($slot.currentPr)"; ctxs = $ctxStr; reason = $slot.reason }
+        }
+        # ENFORCE (so com -EnforceQueue, fora de -Observe): publica o ctx concedido no
+        # HOST (o gate Windows le; sobrevive ao Stop-VM) e, no boundary do contexto,
+        # limpa+compacta antes de liberar o proximo PR. O probe-gate evita compactar com
+        # job real ativo no guest (mesma seguranca do stop ocioso).
+        if ($EnforceQueue -and -not $Observe) {
+            $prevCtx = "$($pq.currentPr)"
+            try { "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii }
+            catch { Write-OrcLog 'pr_publish_error' @{ error = "$($_.Exception.Message)" } 'WARN' }
+            if ($slot.action -eq 'boundary_advance') {
+                if (Get-GuestHasActiveJob) {
+                    Write-OrcLog 'pr_boundary_deferred' @{ done = $prevCtx; reason = 'guest com job real ativo -> adia o compact' } 'WARN'
+                }
+                else {
+                    Write-OrcLog 'pr_boundary_compact' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = (Get-VFreeGB) }
+                    Invoke-StopAndCompact -Reason 'pr_boundary'
+                }
+            }
         }
         $pq.contexts = $ordered
         $pq.currentPr = "$($slot.currentPr)"
