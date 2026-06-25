@@ -553,16 +553,34 @@ try {
         # job real ativo no guest (mesma seguranca do stop ocioso).
         if ($EnforceQueue -and -not $Observe) {
             $prevCtx = "$($pq.currentPr)"
-            try { "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii }
-            catch { Write-OrcLog 'pr_publish_error' @{ error = "$($_.Exception.Message)" } 'WARN' }
             if ($slot.action -eq 'boundary_advance') {
-                if (Get-GuestHasActiveJob) {
-                    Write-OrcLog 'pr_boundary_deferred' @{ done = $prevCtx; reason = 'guest com job real ativo -> adia o compact' } 'WARN'
+                # No boundary o proximo PR so e liberado quando a box esta apta. Tres casos:
+                # (a) box JA fresca (V>=floor) -> nao compacta, avanca direto — sem desperdicio
+                #     entre PRs leves que nao sujaram a box;
+                # (b) box suja + guest com job (da main/PR terminando) -> NAO avanca, segura no
+                #     atual e espera esvaziar p/ compactar antes de liberar (senao o proximo
+                #     rodaria numa box suja); preserva o grace e re-tenta no proximo tick;
+                # (c) box suja + guest idle -> compacta e SO entao libera (box fresca).
+                $vNow = Get-VFreeGB
+                if ($vNow -ge $AdmitFloorGB) {
+                    Write-OrcLog 'pr_boundary_skip_clean' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow }
+                    "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                }
+                elseif (Get-GuestHasActiveJob) {
+                    Write-OrcLog 'pr_boundary_deferred' @{ done = $prevCtx; reason = 'guest com job ativo -> espera esvaziar p/ compactar antes de liberar' } 'WARN'
+                    "$prevCtx" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                    $slot.currentPr = $prevCtx
+                    $slot.idleSinceUtc = "$($pq.currentIdleSinceUtc)"
                 }
                 else {
-                    Write-OrcLog 'pr_boundary_compact' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = (Get-VFreeGB) }
+                    Write-OrcLog 'pr_boundary_compact' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow } 'WARN'
                     Invoke-StopAndCompact -Reason 'pr_boundary'
+                    "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
                 }
+            }
+            else {
+                try { "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii }
+                catch { Write-OrcLog 'pr_publish_error' @{ error = "$($_.Exception.Message)" } 'WARN' }
             }
         }
         $pq.contexts = $ordered
