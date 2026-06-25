@@ -39,6 +39,12 @@ keying do orquestrador (`Get-PrActivity`: `pr-<num>` ou `branch-<ref>`).
    `$tok = gh api -X POST /orgs/advoq/actions/runners/registration-token --jq .token`
    `pwsh C:\civm-deploy\civm-gate-runner-provision.ps1 -RegToken $tok -Index 1`
    Conferir: `gh api orgs/advoq/actions/runners --jq '.runners[]|select(.name|endswith("-gate"))|.name'`.
+   **Persistencia (sobreviver reboot/crash):** NAO use o service do Windows
+   (`config.cmd --runasservice` da `Win32 1068` nesta box mesmo sem dependencias
+   declaradas — beco sem saida). Use o WATCHDOG via scheduled task:
+   `pwsh C:\civm-deploy\civm-gate-task-setup.ps1 -Index 1` (deleta o service
+   quebrado e registra uma task com trigger `AtStartup` + tick de 2min
+   `IgnoreNew`, mesmo padrao do orquestrador). Repita o `-Index` por runner do pool.
 2. **Ligar o enforce** no orquestrador: re-registrar a scheduled task com `-EnforceQueue`
    (editar o `-Argument` no `activate-orchestrator.ps1` -> `... civm-vm-orchestrator.ps1 -EnforceQueue`).
 3. **PR throwaway A** com o gate so no `go.yml`. Abrir **PR throwaway B** logo depois.
