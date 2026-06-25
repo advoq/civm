@@ -63,6 +63,9 @@ param(
     # Lock canonico de reclaim (SPECv3 DT-v3-3): exclusao mutua com qualquer outro
     # reclaimer do mesmo VHDX. Mesmo path do civm-vhdx-autoreclaim/optimize.
     [string]$ReclaimLockPath = 'V:\civm-reclaim.lock',
+    # Estado da fila FIFO por-PR (Phase 1b, observe-mode): contextos em ordem de chegada
+    # + o slot simulado. Por enquanto so LOGA (would_grant/would_advance), nao impoe.
+    [string]$PrQueuePath = 'V:\civm-pr-queue.json',
     # Modo observe: loga "would_start"/"would_stop" em vez de agir. Valida a
     # logica contra a box real sem mexer na VM — mais limpo que -WhatIf (que
     # suprime ate o Add-Content do log e os New-Alias do modulo Hyper-V).
@@ -127,6 +130,32 @@ function Get-RunCount {
         }
     }
     return $total
+}
+
+# Get-PrActivity: agrupa os runs de box ATIVOS (queued+in_progress) do advoq/advoq por
+# CONTEXTO — um PR (pr-<num>) ou um push de branch (branch-<ref>). Retorna um hashtable
+# id -> contagem de runs ativos. E o que a fila FIFO agrupa (todos os checks de um
+# contexto antes do proximo). Falha de API -> pula o status (fail-safe; o tick observe so
+# loga). per_page=100 + os 2 status; idade pela atividade (updated_at), igual Get-RunCount.
+function Get-PrActivity {
+    param([int]$MaxAgeHours = 12)
+    $cutoff = (Get-Date).ToUniversalTime().AddHours(-$MaxAgeHours)
+    $counts = @{}
+    $token = Get-GhTokenForOwner -Owner 'advoq'
+    $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'civm-orchestrator'; Accept = 'application/vnd.github+json' }
+    foreach ($status in @('queued', 'in_progress')) {
+        $uri = "https://api.github.com/repos/advoq/advoq/actions/runs?status=$status&per_page=100"
+        try { $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20 } catch { continue }
+        foreach ($run in $resp.workflow_runs) {
+            if ($run.status -ne $status) { continue }
+            $tsRaw = if ($run.updated_at) { $run.updated_at } else { $run.created_at }
+            if ([datetime]::Parse([string]$tsRaw).ToUniversalTime() -lt $cutoff) { continue }
+            $ctx = if ($run.pull_requests -and @($run.pull_requests).Count -gt 0) { 'pr-' + [int]$run.pull_requests[0].number } else { 'branch-' + [string]$run.head_branch }
+            if (-not $counts.ContainsKey($ctx)) { $counts[$ctx] = 0 }
+            $counts[$ctx]++
+        }
+    }
+    return $counts
 }
 
 function Get-State {
@@ -343,6 +372,7 @@ function Invoke-StopAndCompact {
 # codigo testado).
 . "$PSScriptRoot\civm-orchestrator-decision.ps1"
 . "$PSScriptRoot\civm-reclaim-gate.ps1"
+. "$PSScriptRoot\civm-pr-queue.ps1"
 
 # ---- decisao principal ----
 try {
@@ -488,6 +518,32 @@ try {
         $state.prevRunning = $running
         Save-State $state
     }
+
+    # ---- OBSERVE da fila FIFO por-PR (Phase 1b: so LOGA, nunca impoe) ----
+    # Agrupa a atividade de box por contexto (PR/branch), mantem a ordem FIFO em
+    # $PrQueuePath, e loga o que a fila FARIA (grant/advance) sem mexer no power/compact.
+    # Valida o cerebro (Resolve-PrSlot) contra a box real antes de ligar o enforce.
+    try {
+        $act = Get-PrActivity
+        $pq = $null
+        if (Test-Path -LiteralPath $PrQueuePath) { try { $pq = Get-Content -LiteralPath $PrQueuePath -Raw | ConvertFrom-Json } catch {} }
+        if ($null -eq $pq) { $pq = [pscustomobject]@{ contexts = @(); currentPr = ''; currentIdleSinceUtc = '' } }
+        $seen = @{}; foreach ($c in @($pq.contexts)) { if ($null -ne $c) { $seen["$($c.id)"] = $c.firstSeenUtc } }
+        $ordered = @()
+        foreach ($c in @($pq.contexts)) { if ($null -ne $c -and $act.ContainsKey("$($c.id)")) { $ordered += [pscustomobject]@{ id = "$($c.id)"; firstSeenUtc = $c.firstSeenUtc } } }
+        foreach ($id in ($act.Keys | Sort-Object)) { if (-not $seen.ContainsKey("$id")) { $ordered += [pscustomobject]@{ id = "$id"; firstSeenUtc = $nowUtc } } }
+        $prs = @(); foreach ($c in $ordered) { $prs += [pscustomobject]@{ number = $c.id; realJobs = [int]$act["$($c.id)"] } }
+        $slot = Resolve-PrSlot -Prs $prs -CurrentPr "$($pq.currentPr)" -CurrentIdleSinceUtc "$($pq.currentIdleSinceUtc)" -NowUtc $nowUtc
+        if ($slot.action -ne 'hold' -or "$($pq.currentPr)" -ne "$($slot.currentPr)") {
+            $ctxStr = (@($ordered | ForEach-Object { $cid = "$($_.id)"; "${cid}:$([int]$act[$cid])" }) -join ' ')
+            Write-OrcLog "would_$($slot.action)" @{ current = "$($slot.currentPr)"; ctxs = $ctxStr; reason = $slot.reason }
+        }
+        $pq.contexts = $ordered
+        $pq.currentPr = "$($slot.currentPr)"
+        $pq.currentIdleSinceUtc = "$($slot.idleSinceUtc)"
+        try { ($pq | ConvertTo-Json -Depth 5 -Compress) | Set-Content -LiteralPath $PrQueuePath -Encoding UTF8 } catch {}
+    }
+    catch { Write-OrcLog 'pr_queue_observe_error' @{ error = "$($_.Exception.Message)" } 'WARN' }
 }
 catch {
     # Fail-safe: na duvida NUNCA desliga (so o caminho de Start e seguro). Um
