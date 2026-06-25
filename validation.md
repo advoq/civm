@@ -1000,3 +1000,24 @@ nao batia com o efeito real). A probe SSH e a verdade em tempo real; o running c
 **Proxima acao:** confirmar no log um `boundary_aborted_active_job` (prova o gate disparando) + ausencia
 de novos "operation was canceled"; re-rodar os jobs ja cancelados (Trivy/changes/govulncheck) quando as
 runs deles terminarem; seguir o #1227 ate verde.
+
+## 2026-06-24 22:24 -03 — #1227 VERDE + os 2 fixes da box provados ao vivo
+
+**O que:** Fechamento. Apos floor=55 + probe-gate, re-rodei os 3 jobs que tinham sido mortos pre-fix
+(`changes`, `Trivy`, `govulncheck ms-billing`) e acompanhei o #1227 ate o fim.
+
+**Dados medidos:**
+
+- **#1227: 45 pass / 0 fail / 6 skip** (paid), `mergeable=MERGEABLE`, `mergeStateStatus=CLEAN`. Os 3
+  re-runs passaram (a box nao matou mais nenhum). NAO mergeado (decisao do user).
+- **Floor=55 provado:** `vm_started` a `v_free=66` (22:21 UTC) sem `reclaim_before_admit` extra nem
+  `reclaim_no_progress` falso — sob floor=70 teria spiralado (66<70).
+- **Probe-gate provado AO VIVO:** `boundary_aborted_active_job` disparou 2x (23:49 e 00:03 UTC) — a box
+  viu Runner.Worker ativo via SSH e ABORTOU o Stop-VM ("preserva o job em voo") em vez de matar o job.
+- Zero `reclaim_no_progress` ERROR e zero job morto desde os deploys.
+
+**Veredito:** 🟢 sessao (pos queda de energia) concluida: o passo interrompido (sync de teste) + 2 bugs
+reais da box (floor inalcancavel + race do job-kill), achados por evidencia VIVA e provados em producao.
+**Proxima acao:** (a pedido do user) projetar a fila FIFO por-PR real (10+ PRs, compact entre cada) —
+hoje a box e job-FIFO, nao PR-grouped (RUNNER-SERIALIZATION.md §Residual). Plano comparando 2
+arquiteturas em andamento.
