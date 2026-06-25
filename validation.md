@@ -1021,3 +1021,35 @@ reais da box (floor inalcancavel + race do job-kill), achados por evidencia VIVA
 **Proxima acao:** (a pedido do user) projetar a fila FIFO por-PR real (10+ PRs, compact entre cada) —
 hoje a box e job-FIFO, nao PR-grouped (RUNNER-SERIALIZATION.md §Residual). Plano comparando 2
 arquiteturas em andamento.
+
+## 2026-06-25 05:01 -03 — Gate de fila por-PR provado AO VIVO end-to-end (canary + 7 workflows)
+
+**O que:** A fila FIFO por-PR planejada na entrada anterior foi construida e
+validada AO VIVO, fim-a-fim. Cada workflow box-heavy ganhou um job `wait-for-slot`
+num runner HOST (`civm-gate`), com os jobs reais em `needs: wait-for-slot`; o
+orchestrator `-EnforceQueue` agrupa a atividade por contexto (`pr-<num>` / push
+`branch-<ref>`), mantem FIFO, publica o contexto corrente em
+`V:\civm-current-context` e, no boundary, faz clean completo + compact do VHDX
+antes de avancar. Isso troca o job-FIFO antigo por **1 PR por vez, compactando
+entre cada**.
+
+**Dados medidos:**
+
+- **Canary fim-a-fim:** o `wait-for-slot` do canary ficou **segurado atras de
+  `branch-main`** e so liberou **apos o compact no boundary** — `FULL-FLOW DONE`
+  no log (job `wait-for-slot` success + `canary-work` success), com o
+  `canary-work` rodando numa box **recem-limpa** (fresh). Prova o ciclo completo:
+  gate segura -> boundary compacta -> gate libera -> job roda no box limpo.
+- **Enforce nao matou job em voo:** **zero** `pr_boundary_compact` enquanto o E2E
+  rodou (janela **05:39 -> 06:11 UTC**). O `-EnforceQueue` so compacta quando o
+  contexto corrente drena — nunca interrompeu um job ativo (ao contrario do
+  job-kill por running-count laggado fechado em 2026-06-24).
+- **Rollout:** gate `wait-for-slot` rolado aos **7 workflows box-heavy** no
+  **PR #1235**; os gates liberaram nos workflows reais (nao so no canary).
+
+**Veredito:** ✅ a fila por-PR funciona ao vivo: o gate segura o PR no host (sem
+contender a box), o boundary compacta o VHDX (V: ~67) e so entao a box atende o
+proximo contexto. O residual "job-FIFO, nao PR-grouped" da RUNNER-SERIALIZATION.md
+esta RESOLVIDO (Kahneman #13: provado por canary fim-a-fim, nao asseverado).
+**Proxima acao:** provisionar pool de gate runners + corrigir service-persistence
+(erro 1068); mergear #1235 -> main verde (E2E com timeout 120min).
