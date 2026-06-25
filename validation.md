@@ -1053,3 +1053,52 @@ proximo contexto. O residual "job-FIFO, nao PR-grouped" da RUNNER-SERIALIZATION.
 esta RESOLVIDO (Kahneman #13: provado por canary fim-a-fim, nao asseverado).
 **Proxima acao:** provisionar pool de gate runners + corrigir service-persistence
 (erro 1068); mergear #1235 -> main verde (E2E com timeout 120min).
+
+## 2026-06-25 09:29 -03 — Pool de 4 gate runners + persistencia via watchdog (service 1068 morto)
+
+**O que:** Fechar a proxima-acao anterior — provisionar o POOL de gate runners
+host-side da fila por-PR e dar a eles uma persistencia que sobreviva reboot/crash.
+O service do Windows (`config.cmd --runasservice`) foi descartado como beco sem
+saida; o fix e uma scheduled task watchdog, o mesmo padrao do orquestrador.
+
+**Categoria:** runner-health
+
+**Como medir:**
+`gh api orgs/advoq/actions/runners --jq '[.runners[]|select(.name|startswith("civm-advoq-gate"))]|length'`
+(deve ser 4, todos `online`); kill→revive: matar `Runner.Listener` de um runner e
+medir se a task o re-sobe (efeito, nao existencia).
+
+**Dados medidos:**
+
+- **Pool:** 4 gate runners host-side `civm-advoq-gate-1..4` (label `civm-gate`),
+  todos `online` na org advoq.
+- **Service = beco sem saida (1068):** `config.cmd --runasservice` instala o
+  service, mas o start SEMPRE da `Win32Exception 1068` ("dependency service failed
+  to start") — mesmo SEM dependencias declaradas, rodando como NETWORK SERVICE e
+  AUTO_START. Persiste no retry manual; o `_diag` mostra a falha puramente no
+  `StartService` do SCM, nao um erro mais fundo do runner. NAO e quirk de timing.
+- **Fix (watchdog):** `deploy/windows/civm-gate-task-setup.ps1` deleta o service
+  quebrado e registra uma task com 2 triggers — `AtStartup` (sobrevive reboot) +
+  repeticao de 2min (`MSFT_TaskTimeTrigger rep=PT2M`), `MultipleInstances=IgnoreNew`.
+  Insight: `run.cmd` sai com codigo 0 mesmo quando o listener e morto a forca
+  (verificado: a task foi a `Ready / LastTaskResult=0`), entao o "restart-on-failure"
+  do Task Scheduler NUNCA dispara — dai o tick watchdog de 2min que re-sobe o
+  `run.cmd` so se ele morreu (IgnoreNew pula quando vivo).
+- **Prova kill→revive (Kahneman #13, efeito nao existencia):** matei o
+  `Runner.Listener` do `runner-2` (PID 3736); ~150s depois ele voltou a `online`
+  sozinho, com um processo de listener NOVO. Reboot-survival (trigger `AtStartup`)
+  esta configurado mas NAO testado ao vivo (nao da pra rebootar o host de prod sem
+  interromper a main CI rodando).
+- **Sync:** `deploy/windows/civm-gate-task-setup.ps1` copiado pra `C:\civm-deploy`
+  (`diff -q` = identico, exit 0).
+
+**Veredito:** ✅ pool de 4 gate runners `online` + persistencia watchdog provada por
+EFEITO (runner-2 morto e auto-revivido em ~150s com listener novo). O service 1068
+e beco sem saida confirmado, substituido pelo watchdog (mesmo padrao do
+orquestrador). 🟡 residual: reboot-survival configurado mas nao live-tested; e o
+`runner-1` segue como processo detached avulso (ocupado servindo os gates do
+#1235/main) — converter pra task watchdog quando a box idlar. O fail-safe in-gate
+de 170min permanece como ultimo backstop contra qualquer outage da gate-infra.
+
+**Proxima acao:** converter o `runner-1` pra task watchdog quando a box idlar;
+live-test do reboot-survival na proxima janela de manutencao do host.
