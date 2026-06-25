@@ -106,29 +106,20 @@ function Get-OrchestratorDecision {
     # warn_clean poda cache de build (seguro, sem matar job). Fora do cooldown
     # (CanPanic); dentro, o panic rebaixa pra warn_clean (nao re-mata em loop).
     if ($hasWork -and $VFreeGB -gt 0 -and $VFreeGB -lt $PanicFloorGB -and $CanPanic) { return 'panic_compact' }
-    # COMPACT ANTES DE CADA PR (precede warn; panic <18 ja ganhou acima). VM Running,
-    # Running==0 (nenhum job no count do GitHub) e batch na fila (Queued>0): COMPACTA
-    # incondicional (Stop+Optimize -> V: ~67) antes de admitir o proximo PR, INDEPENDENTE
-    # do V: atual (45, 55 ou 67 -> compacta igual). Assim cada PR roda com a box recem-
-    # compactada. PrevRunning>0 = so na TRANSICAO running>0->0 (1 compact por PR, anti-
-    # thrash por-evento; pos-compact running e prevRunning 0 -> sem re-compactar). HOST-
-    # ONLY (o guest snapshot e de 10min, stale; Kahneman #15). AdmitReclaimAttempts>=2 ->
-    # admite mesmo assim (anti-deadlock; o caller conta via Resolve-AdmitTransition).
+    # FILA QUENTE (VM Running, Running==0, Queued>0): ha job na FILA esperando o runner
+    # pegar. MANTEM a VM up (mark_busy) — NAO compacta no meio do batch.
     #
-    # CRITICO: o running count do GitHub LAGGA ~30-60s. Um job recem-despachado (em
-    # checkout) ainda aparece como running=0; um Stop-VM aqui o MATARIA em voo (incidente
-    # 2026-06-24 22:13: govulncheck cancelado pelo boundary_compact que parou a VM 34s
-    # depois do job comecar). Por isso, antes de parar a VM, a probe SSH (Runner.Worker
-    # no guest, verdade em tempo real, fail-safe: SSH falho -> assume ativo) tem a palavra
-    # final: job ativo -> boundary_aborted_active_job (NAO para a VM). Espelha o gate do
-    # stop ocioso (stop_aborted_active_job).
-    if ($Running -eq 0 -and $Queued -gt 0) {
-        if ($PrevRunning -gt 0 -and $AdmitReclaimAttempts -lt 2) {
-            if (& $HasActiveJobProbe) { return 'boundary_aborted_active_job' }
-            return 'boundary_compact'
-        }
-        return 'mark_busy'
-    }
+    # O boundary_compact "incondicional" (compactar em todo running>0->0 com fila cheia)
+    # THRASHAVA: o running count do GitHub oscila entre as ONDAS de jobs do MESMO push
+    # (um push de main = 8 workflows; running cai a 0 num gap mesmo com 8 jobs na fila),
+    # e cada gap virava um Stop-VM de ~6min com a fila cheia e o runner OFFLINE (incidente
+    # main-push 699eb1d 02:17: 8 jobs travados). A heuristica "running==0 + queued>0 ==
+    # fim de PR" e furada — nao distingue gap-de-batch de boundary-de-PR. O probe-gate so
+    # cobria job ATIVO (Runner.Worker), nao job na FILA. O compact ENTRE PRs de verdade vem
+    # da fila FIFO por-PR (civm-pr-queue.ps1: grace + PR-grouping; so compacta quando o PR
+    # atual ACABOU). Sem ela, so se compacta quando a fila ZERA (o idle stop_and_compact
+    # abaixo, Queued==0) — seguro, nunca orfana a fila.
+    if ($Running -eq 0 -and $Queued -gt 0) { return 'mark_busy' }
     # Disco baixo com JOB RODANDO (Running>0): poda online, sem stop/kill.
     if ($hasWork -and $VFreeGB -gt 0 -and $VFreeGB -lt $WarnFloorGB) { return 'warn_clean' }
     # VM Running com trabalho: marca busy, nunca desliga.
