@@ -12,6 +12,23 @@ import (
 // runners por-repo seguem "civm-<repo>" sem o sufixo.
 const orgRunnerNameSuffix = "-org"
 
+// gateRunnerNameSuffix identifica runners do pool "civm-gate" — jobs leves de
+// polling que aguardam a vez de um PR na fila FIFO sem jamais executar
+// Docker/disco. Runners desse pool são registrados com `--labels civm-gate` e
+// nomeados com o sufixo "-gate" (ex.: "civm-advoq-gate"). Não são candidatos
+// à colisão porque:
+//   - Atendem somente a jobs `runs-on: [self-hosted, civm-gate]`; nenhum job
+//     `[self-hosted, civm]` pode aterrissar num runner gate.
+//   - Não realizam operações de Docker/disco, portanto não provocam o
+//     "concurrent prune on shared civm runner" que o invariante de serialização
+//     guarda (incidente #1184).
+//
+// Convenção de nomeação: `--name civm-<owner>-gate`, logo `Status.Name` termina
+// em "-gate". Como `Status` não carrega o campo Labels da API do GitHub
+// (parseSystemctlList não tem acesso a ele), o sufixo do nome é o único
+// discriminador confiável disponível em DetectCollisions.
+const gateRunnerNameSuffix = "-gate"
+
 // Collision descreve um runner por-repo que é REDUNDANTE porque um runner
 // org da mesma organização já atende os jobs daquele repo com o mesmo label
 // civm. Dois runners elegíveis para o mesmo repo = dois jobs concorrentes no
@@ -57,6 +74,16 @@ func isOrgRunner(s Status) bool {
 	return s.Repo != "" && !strings.Contains(s.Repo, "/")
 }
 
+// isGateRunner decide se um runner é do pool "civm-gate". O pool carrega o
+// label `civm-gate` (configurado via --labels) e adota o sufixo "-gate" no
+// nome (convenção operacional). Como Status não expõe o campo Labels do GitHub,
+// o sufixo exato "-gate" em Status.Name é o único discriminador disponível
+// em DetectCollisions — o match é por pertencimento exato de sufixo, não por
+// substring, para evitar falsos positivos com nomes que contenham "-gate-" no meio.
+func isGateRunner(s Status) bool {
+	return strings.HasSuffix(s.Name, gateRunnerNameSuffix)
+}
+
 // orgOwner devolve o login da org de um runner org. Para o runner org o
 // segmento de repo JÁ é o login puro (sem barra), então é só o próprio Repo.
 func orgOwner(s Status) string {
@@ -88,12 +115,25 @@ func repoOwner(s Status) string {
 // isso o estado durável correto é a REMOÇÃO completa do runner por-repo
 // (svc.sh stop+uninstall + config.sh remove + rm -rf) — assim List() nunca mais
 // o vê. RepoActive=true sinaliza que ele ainda está de pé e precisa de remoção.
+//
+// Runners do pool "civm-gate" (sufixo "-gate" no nome, label `civm-gate`) são
+// EXCLUÍDOS da detecção de colisão: um runner gate nunca recebe jobs
+// `[self-hosted, civm]` e não realiza Docker/disco, portanto não viola o
+// invariante de serialização.
 func DetectCollisions(units []Status) []Collision {
-	// 1) Indexa os runners org por login de org. Mais de um runner org da
-	//    mesma org é improvável, mas se houver, o primeiro em ordem estável
-	//    é o "sobrevivente" referenciado nos diagnósticos.
+	// 1) Indexa os runners org por login de org. Runners do pool civm-gate são
+	//    pulados: um runner "-gate" nunca é o runner org canônico, e incluí-lo
+	//    aqui faria um gate runner ser incorretamente tratado como org runner caso
+	//    o nome termine em "-org" por coincidência futura. A verificação via
+	//    isGateRunner tem precedência: o sufixo "-gate" exclui antes de qualquer
+	//    comparação de "-org".
+	//    Mais de um runner org da mesma org é improvável, mas se houver, o
+	//    primeiro em ordem estável é o "sobrevivente" referenciado nos diagnósticos.
 	orgByOwner := map[string]Status{}
 	for _, u := range units {
+		if isGateRunner(u) {
+			continue
+		}
 		if !isOrgRunner(u) {
 			continue
 		}
@@ -110,8 +150,13 @@ func DetectCollisions(units []Status) []Collision {
 	}
 
 	// 2) Para cada runner por-repo cujo owner tem runner org, registra colisão.
+	//    Runners do pool civm-gate são excluídos: um runner gate atende somente
+	//    jobs com label `civm-gate` e não concorre com o runner org pelo mesmo job.
 	var collisions []Collision
 	for _, u := range units {
+		if isGateRunner(u) {
+			continue
+		}
 		if isOrgRunner(u) {
 			continue
 		}
