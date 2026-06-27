@@ -3,6 +3,39 @@
 # Recebe o estado observado e devolve UMA acao. A probe de job ativo e um
 # scriptblock lazy: so e chamada quando se chega ao gate de stop (evita um SSH
 # por tick).
+
+# Aritmetica do contador da barreira de admissao — PURA e testavel (Kahneman #13).
+# vAfter = V: livre medido APOS o compact. vAfter<=0 (nao medi) -> PRESERVA (nao perde
+# progresso anti-deadlock nem da false give-up; #15). <Floor -> +1. >=Floor (limpo,
+# incl. ==Floor) -> 0. NOTA: um skip do Invoke-StopAndCompact (lock/slack) deixa
+# vAfter<Floor -> conta como tentativa (por design; lock persistente -> admite em ~2).
+function Update-AdmitAttempts {
+    param([Parameter(Mandatory)]$State, [int]$VAfter, [int]$Floor = 55)
+    if (-not ($State.PSObject.Properties.Name -contains 'admitReclaimAttempts')) {
+        $State | Add-Member -NotePropertyName admitReclaimAttempts -NotePropertyValue 0 -Force
+    }
+    if ($VAfter -le 0) { return $State }
+    if ($VAfter -lt $Floor) { $State.admitReclaimAttempts = [int]$State.admitReclaimAttempts + 1 }
+    else { $State.admitReclaimAttempts = 0 }
+    return $State
+}
+
+# ORQUESTRACAO PURA decisao -> efeito-no-contador (Kahneman #13: o caller CHAMA esta;
+# o teste exercita a MESMA). A regra "panic conta so com Running==0" (admissao que
+# comecou por panic) vive AQUI, nao no switch do caller. Retorna o $State mutado.
+function Resolve-AdmitTransition {
+    param([Parameter(Mandatory)]$State, [Parameter(Mandatory)][string]$Decision,
+          [int]$Running, [int]$Queued, [int]$VAfter, [int]$Floor = 55)
+    switch ($Decision) {
+        'reclaim_before_admit' { return (Update-AdmitAttempts -State $State -VAfter $VAfter -Floor $Floor) }
+        'boundary_compact'     { return (Update-AdmitAttempts -State $State -VAfter $VAfter -Floor $Floor) }
+        'panic_compact'        { if ($Running -eq 0) { return (Update-AdmitAttempts -State $State -VAfter $VAfter -Floor $Floor) }; return $State }
+        'start'                { $State.admitReclaimAttempts = 0; return $State }
+        'mark_busy'            { if ($Running -eq 0 -and $Queued -gt 0) { $State.admitReclaimAttempts = 0 }; return $State }
+        default                { return $State }
+    }
+}
+
 function Get-OrchestratorDecision {
     [CmdletBinding()]
     param(
@@ -15,40 +48,46 @@ function Get-OrchestratorDecision {
         [int]$VFreeGB = 999,
         [int]$WarnFloorGB = 28,
         [int]$PanicFloorGB = 18,
-        # PISO DO BOUNDARY-COMPACT (V: livre em GB). No GAP entre sequencias de PR
-        # (Running==0, mas Queued>0) compactamos de graca — nao ha job in_progress
-        # pra matar. So vale o custo do stop/Optimize (~8min de cold-start no proximo
-        # batch) se o disco JA caiu o suficiente: 40 fica folgado sobre o warn (28) e
-        # o panic (18), recuperando ANTES da zona de perigo, mas abaixo do admit (51)
-        # pra nao compactar a cada gap quando o disco ainda esta cheio. Pense:
-        # 51 (limpo) - 40 = ~11GB consumidos por um PR ja justifica recuperar no gap.
-        # Numero ancorado em dado (Kahneman #3), nao num default redondo arbitrario.
-        [int]$BoundaryCompactFloorGB = 40,
         # CanPanic=false (cooldown ativo) rebaixa o panic para warn_clean: nao
         # re-mata jobs dentro da janela de cooldown; so poda online. Calculado
         # pelo caller via Test-ReclaimCooldown (civm-reclaim-gate.ps1).
         [bool]$CanPanic = $true,
-        # BARREIRA DE ADMISSAO: o disco DEVE estar limpo em AdmitFloorGB (51GB)
-        # livres nos DOIS lados (host V: + guest) antes de admitir o proximo batch.
-        # GuestFreeGB vem do snapshot de host-metrics; 999 = desconhecido (nao
-        # bloqueia). AdmitReclaimAttempts conta compacts que nao chegaram em 51
-        # (rastreado pelo caller); >=2 admite mesmo assim (anti-deadlock da fila).
-        [int]$AdmitFloorGB = 51,
+        # BARREIRA DE ADMISSAO: antes de admitir o proximo PR a box libera o MAXIMO
+        # possivel dos 2 lados (guest_full_clean no Linux + Optimize-VHD no host) — o
+        # boundary_compact incondicional faz isso a cada PR. O floor host (AdmitFloorGB 55)
+        # e o piso ALCANCAVEL: sob CI ativo o compact chega a ~67 (o VHDX tem piso real
+        # ~52GB de dados genuinos + cache _tool preservado), entao 55 admite LOGO apos
+        # compactar, sem spiral. Mirar 70 (inalcancavel sob carga) so gerava um reclaim
+        # extra que recupera 0 + reclaim_no_progress falso + ~6min de atraso por PR
+        # (medido no log 2026-06-24 20:37-20:43). Guest tem floor proprio menor (40): a VM
+        # Ubuntu fica ~45-63 livre, nunca 70. GuestFreeGB vem do snapshot de host-metrics;
+        # 999 = desconhecido (nao bloqueia). AdmitReclaimAttempts conta compacts que nao
+        # chegaram no floor; >=2 admite mesmo assim (anti-deadlock da fila).
+        [int]$AdmitFloorGB = 55,
         [int]$GuestFreeGB = 999,
-        [int]$AdmitReclaimAttempts = 0
+        [int]$GuestFloorGB = 40,
+        [int]$AdmitReclaimAttempts = 0,
+        # PrevRunning = running do tick ANTERIOR. O gate warm so compacta na TRANSICAO
+        # running >0->0 (um PR/onda de runs ACABOU), nao a cada running==0. Se running
+        # fica preso em 0 (pos-compact, VM religando), prevRunning=0 -> sem transicao ->
+        # sem re-compactar (anti-thrash por-EVENTO; 1 compactacao por PR, sem timer). Um
+        # PR cabe folgado em 58 (medido), entao 1 compactacao por PR basta.
+        [int]$PrevRunning = 0
     )
     # VM Off com fila: BARREIRA DE ADMISSAO. So admite o proximo batch com o disco
-    # LIMPO em AdmitFloorGB (51) nos DOIS lados — host V: e guest. Disco sujo ->
-    # reclaim_before_admit (compacta offline primeiro), NAO starta. Incidente
-    # 2026-06-18: o orchestrator startava no "tem fila" sem a pre-condicao, e o
-    # #1182 rodou os checks a V:18, furando. VFreeGB<=0 / GuestFreeGB<=0 = "nao
+    # LIMPO: host V: >= AdmitFloorGB (55, alcancavel; o compact chega a ~67 sob CI) E
+    # guest >= GuestFloorGB (40). Os floors sao separados porque a VM Ubuntu so chega a
+    # ~45-63 livre, nunca 70. Disco sujo de
+    # qualquer lado -> reclaim_before_admit (compacta offline primeiro), NAO starta.
+    # Incidente 2026-06-18: o orchestrator startava no "tem fila" sem a pre-condicao,
+    # e o #1182 rodou os checks a V:18, furando. VFreeGB<=0 / GuestFreeGB<=0 = "nao
     # medi" -> nao bloqueia (fail-safe, nao trava a fila por telemetria ausente).
-    # AdmitReclaimAttempts >= 2 = o compact ja maxou sem chegar em 51 -> admite
-    # mesmo assim (evita deadlock da fila quando 51 nao e atingivel).
+    # AdmitReclaimAttempts >= 2 = o compact ja maxou sem chegar no floor -> admite
+    # mesmo assim (evita deadlock da fila quando o floor nao e atingivel).
     if ($VmState -eq 'Off') {
         if ((($Queued + $Running) -gt 0)) {
             $hostBelow = ($VFreeGB -gt 0 -and $VFreeGB -lt $AdmitFloorGB)
-            $guestBelow = ($GuestFreeGB -gt 0 -and $GuestFreeGB -lt $AdmitFloorGB)
+            $guestBelow = ($GuestFreeGB -gt 0 -and $GuestFreeGB -lt $GuestFloorGB)
             if (($hostBelow -or $guestBelow) -and $AdmitReclaimAttempts -lt 2) { return 'reclaim_before_admit' }
             return 'start'
         }
@@ -56,10 +95,10 @@ function Get-OrchestratorDecision {
     }
     $hasWork = (($Queued + $Running) -gt 0)
     # SEGURANCA DE DISCO — so quando ha TRABALHO. Ociosa, o fluxo normal abaixo faz
-    # stop_and_compact (Optimize OFFLINE -> V: ~51), que e MELHOR que o warn online
+    # stop_and_compact (Optimize OFFLINE -> V: ~72), que e MELHOR que o warn online
     # (este so libera o guest e da fstrim, nao encolhe a VHDX). Sem o gate hasWork,
     # a box ociosa com V<28 ficava presa em warn_clean a cada tick: a VM nunca
-    # desligava e o V: nunca voltava pra 51 (bug achado 2026-06-18: idle 27min,
+    # desligava e o V: nunca voltava pra ~72 (bug achado 2026-06-18: idle 27min,
     # V: travado em 22, VM Running). O disco encher DURANTE CI supera manter jobs
     # vivos (death-spiral chegou a 16GB, saturou o host, derrubou o interop). So
     # age com medida valida: VFreeGB <= 0 = "nao medi" -> fail-safe (Kahneman #15).
@@ -67,22 +106,22 @@ function Get-OrchestratorDecision {
     # warn_clean poda cache de build (seguro, sem matar job). Fora do cooldown
     # (CanPanic); dentro, o panic rebaixa pra warn_clean (nao re-mata em loop).
     if ($hasWork -and $VFreeGB -gt 0 -and $VFreeGB -lt $PanicFloorGB -and $CanPanic) { return 'panic_compact' }
+    # FILA QUENTE (VM Running, Running==0, Queued>0): ha job na FILA esperando o runner
+    # pegar. MANTEM a VM up (mark_busy) — NAO compacta no meio do batch.
+    #
+    # O boundary_compact "incondicional" (compactar em todo running>0->0 com fila cheia)
+    # THRASHAVA: o running count do GitHub oscila entre as ONDAS de jobs do MESMO push
+    # (um push de main = 8 workflows; running cai a 0 num gap mesmo com 8 jobs na fila),
+    # e cada gap virava um Stop-VM de ~6min com a fila cheia e o runner OFFLINE (incidente
+    # main-push 699eb1d 02:17: 8 jobs travados). A heuristica "running==0 + queued>0 ==
+    # fim de PR" e furada — nao distingue gap-de-batch de boundary-de-PR. O probe-gate so
+    # cobria job ATIVO (Runner.Worker), nao job na FILA. O compact ENTRE PRs de verdade vem
+    # da fila FIFO por-PR (civm-pr-queue.ps1: grace + PR-grouping; so compacta quando o PR
+    # atual ACABOU). Sem ela, so se compacta quando a fila ZERA (o idle stop_and_compact
+    # abaixo, Queued==0) — seguro, nunca orfana a fila.
+    if ($Running -eq 0 -and $Queued -gt 0) { return 'mark_busy' }
+    # Disco baixo com JOB RODANDO (Running>0): poda online, sem stop/kill.
     if ($hasWork -and $VFreeGB -gt 0 -and $VFreeGB -lt $WarnFloorGB) { return 'warn_clean' }
-    # BOUNDARY-COMPACT — compactar no GAP entre sequencias, SEM matar job. A causa
-    # raiz (medida 2026-06-19): com fila CONTINUA (PRs back-to-back) a VM fica
-    # Running o tempo todo, nunca idla, entao o stop_and_compact ocioso NUNCA roda e
-    # o VHDX cresce job-a-job ate o panic (que mata 1 job). Aqui pegamos a janela em
-    # que a sequencia de jobs de UM PR acabou (Running==0, nada in_progress) mas o
-    # proximo PR ja esta na fila (Queued>0): compactar agora nao mata nada porque
-    # nenhum job esta rodando. Gate de disco (V < BoundaryCompactFloorGB, 40) pra so
-    # pagar o custo do stop/Optimize quando o disco ja caiu o bastante — quando esta
-    # folgado, cai pro mark_busy normal e a VM segue ligada pro proximo batch. Fica
-    # ANTES do mark_busy (senao mark_busy engoliria o caso, pois (Q+R)>0 e hasWork) e
-    # DEPOIS de panic/warn (disco critico/baixo com job rodando e mais urgente). O
-    # panic_compact permanece o fallback pra fila tao colada que Running nunca chega
-    # a 0 antes do V cair abaixo de 18. VFreeGB<=0 = "nao medi" -> fail-safe (#15),
-    # nao compacta. Apos o compact, o proximo tick religa pela logica 'start' (Q>0).
-    if ($Running -eq 0 -and $Queued -gt 0 -and $VFreeGB -gt 0 -and $VFreeGB -lt $BoundaryCompactFloorGB) { return 'boundary_compact' }
     # VM Running com trabalho: marca busy, nunca desliga.
     if ($hasWork) { return 'mark_busy' }
     # Ocioso mas antes do debounce: espera o IdleStopMinutes.

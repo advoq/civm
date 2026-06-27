@@ -32,6 +32,7 @@ func runHookEvent(args []string) int {
 	jsonOut := fs.Bool("json", false, "saida JSON")
 	preCleanupPct := fs.Int("pre-cleanup-pct", civm.DefaultPreCleanupPct, "job-started: limpar se disco usado >= pct")
 	hardFailPct := fs.Int("hard-fail-pct", civm.DefaultHardFailPct, "job-started: rejeitar job se disco usado >= pct apos limpeza")
+	minFreeGB := fs.Int("min-free-gb", civm.DefaultMinFreeGB, "job-started: full-clean se GB livre < N (piso clean-slate; 0 desliga)")
 	hostMetricsPath := fs.String("host-metrics-path", civm.DefaultHostMetricsPath, "snapshot de host-metrics lido pelo gate host-aware")
 	timeoutMin := fs.Int("timeout", civm.DefaultCleanupTimeoutMinutes, "timeout em minutos")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -44,6 +45,7 @@ func runHookEvent(args []string) int {
 	opts.Execute = *execute
 	opts.PreCleanupPct = *preCleanupPct
 	opts.HardFailPct = *hardFailPct
+	opts.MinFreeGB = *minFreeGB
 	opts.HostDiskFn = func() (hostdisk.Report, error) {
 		o := hostdisk.DefaultOptions()
 		o.Path = *hostMetricsPath

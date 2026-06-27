@@ -14,6 +14,17 @@
 - `civmctl-metrics.timer` — a cada minuto, grava métricas Prometheus no
   textfile collector do node_exporter.
 
+Além dos timers, há um **service oneshot** que não é dirigido por timer:
+
+- `civmctl-registry-cache.service` — sobe o registry pull-through cache
+  (`:5000` mirror do docker.io) via `setup-registry-cache.sh`. Roda uma vez
+  por boot (`Type=oneshot` + `RemainAfterExit=yes`); o container do registry
+  usa `restart=always`, então a unit só reconcilia o estado no boot. Como é
+  service e não timer, o `civmctl bootstrap` **não** o habilita
+  automaticamente — exige `systemctl enable` manual (ver abaixo). Sem o cache
+  ligado, os pulls anônimos do Docker Hub batem no rate limit (100/6h/IP) e o
+  `compose up --build` da CI morre com "No such image de largada".
+
 Instalação manual após `civmctl bootstrap` ter colocado o binário em
 `/usr/local/bin/civmctl`.
 
@@ -27,6 +38,32 @@ sudo cp civmctl-*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer civmctl-metrics.timer
 ```
+
+### Registry pull-through cache (service oneshot)
+
+`civmctl-registry-cache.service` é copiado pelo `civmctl bootstrap` junto com as
+demais `civmctl-*.service`, mas como é service (não timer) o bootstrap NÃO o
+habilita. Habilite manualmente uma vez:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now civmctl-registry-cache.service
+```
+
+`--now` dispara o `setup-registry-cache.sh` imediatamente (idempotente) e o
+`enable` garante o reconcile a cada boot. Verificar:
+
+```bash
+systemctl status civmctl-registry-cache.service
+docker ps --filter name=registry-cache         # registry:2 up, restart=always
+curl -s http://127.0.0.1:5000/v2/_catalog       # cache respondendo
+journalctl -u civmctl-registry-cache.service -b  # log do boot atual
+```
+
+Para warm inicial autenticado (levanta o limite anônimo do pull de largada),
+rode o script à mão uma vez com as credenciais antes do enable, ou crie um
+drop-in com as env vars `DOCKERHUB_USER`/`DOCKERHUB_TOKEN`. O daemon.json
+apontando `:5000` como `registry-mirror` é configurado pelo próprio script.
 
 `civmctl-runner-watchdog.service` roda como root porque pode reparar hooks
 e reiniciar services. Para chamadas `gh api`, ele carrega opcionalmente
@@ -73,9 +110,15 @@ civmctl disk-audit --json
 
 ```bash
 sudo systemctl disable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer civmctl-metrics.timer
+sudo systemctl disable --now civmctl-registry-cache.service
 sudo rm /etc/systemd/system/civmctl-*.service /etc/systemd/system/civmctl-*.timer
 sudo systemctl daemon-reload
 ```
+
+Desabilitar o `civmctl-registry-cache.service` para a unit, mas NÃO derruba o
+container `registry-cache` (ele tem `restart=always`). Para remover o cache de
+vez: `docker rm -f registry-cache` e tire o `:5000` do `registry-mirror` em
+`/etc/docker/daemon.json`.
 
 ## Personalizar horário
 

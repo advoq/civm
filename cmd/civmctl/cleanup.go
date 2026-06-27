@@ -19,6 +19,7 @@ func runCleanup(args []string) int {
 	dryRun := fs.Bool("dry-run", false, "explicito dry-run (default ja e dry-run)")
 	workDir := fs.String("work-dir", civm.DefaultWorkDir, "diretorio do runner")
 	tmpDir := fs.String("tmp-dir", civm.DefaultTmpDir, "diretorio /tmp")
+	codespaceDir := fs.String("codespace-dir", civm.DefaultCodespaceDir, "diretorio de clones manuais (sentinel: glob /home/*/codespace)")
 	noDocker := fs.Bool("no-docker", false, "nao rodar docker prune")
 	noApt := fs.Bool("no-apt", false, "nao rodar apt clean")
 	timeoutMin := fs.Int("timeout", civm.DefaultCleanupTimeoutMinutes, "timeout em minutos")
@@ -40,6 +41,7 @@ func runCleanup(args []string) int {
 	opts.Execute = *execute
 	opts.WorkDir = *workDir
 	opts.TmpDir = *tmpDir
+	opts.CodespaceDir = *codespaceDir
 	opts.DockerPrune = !*noDocker
 	opts.AptClean = !*noApt
 	actions := cleanup.Run(ctx, opts)

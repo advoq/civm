@@ -182,7 +182,7 @@ func TestCollectAndRenderJSON(t *testing.T) {
 	if len(parsed.GitHubRepos) != 2 || parsed.GitHubRepos[1].Runners[0].Classification != "legacy_stale" {
 		t.Fatalf("parsed = %+v", parsed)
 	}
-	if len(parsed.HookChecks) != 6 {
+	if len(parsed.HookChecks) != 7 {
 		t.Fatalf("hook checks not rendered in JSON: %+v", parsed.HookChecks)
 	}
 }
@@ -210,7 +210,13 @@ func TestCollectReportsHookContractFailures(t *testing.T) {
 	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
 		return nil, nil
 	}
-	opts.GlobFn = func(string) ([]string, error) {
+	// GlobFn isolado neste teste: só o glob de runner dirs retorna algo; o glob
+	// de units-fonte (UNIT_SCRIPTS_INSTALLED) volta vazio para não introduzir um
+	// achado fora do escopo das falhas de contrato de hook aqui exercidas.
+	opts.GlobFn = func(pattern string) ([]string, error) {
+		if strings.Contains(pattern, "civmctl-") {
+			return nil, nil
+		}
 		return []string{"/home/emdev/actions-runner"}, nil
 	}
 	opts.ReadFileFn = func(path string) ([]byte, error) {
@@ -531,6 +537,92 @@ func TestCollectIncludesAdmitHostChecks(t *testing.T) {
 	}
 }
 
+// TestExtractUnitScriptsPicksOnlyShTargets prova que a extração pega o token
+// /usr/local/bin/*.sh tanto em ExecStart (envolto por flock) quanto em
+// ConditionPathExists, deduplica, e ignora units que apontam só para o binário
+// civmctl (sem .sh).
+func TestExtractUnitScriptsPicksOnlyShTargets(t *testing.T) {
+	t.Parallel()
+	withScript := "[Unit]\nConditionPathExists=/usr/local/bin/civm-ci-artifact-prune.sh\n" +
+		"[Service]\nExecStart=/usr/bin/flock -n /run/x.lock /usr/local/bin/civm-ci-artifact-prune.sh\n"
+	got := extractUnitScripts(withScript)
+	if len(got) != 1 || got[0] != "/usr/local/bin/civm-ci-artifact-prune.sh" {
+		t.Fatalf("extractUnitScripts = %v, want one civm-ci-artifact-prune.sh", got)
+	}
+
+	binaryOnly := "[Unit]\nConditionPathExists=/usr/local/bin/civmctl\n" +
+		"[Service]\nExecStart=/usr/local/bin/civmctl cleanup --execute\n"
+	if got := extractUnitScripts(binaryOnly); len(got) != 0 {
+		t.Fatalf("binary-only unit should yield no .sh scripts, got %v", got)
+	}
+}
+
+// TestCheckUnitScriptsInstalled é o par positivo+negativo (Kahneman #13): uma
+// unit cujo script /usr/local/bin/*.sh está ausente vira finding CRÍTICO; a
+// mesma unit com o script presente fica OK. Isso prova o EFEITO — o doctor
+// pega de fato o gap que faz o systemd pular a unit em silêncio, não só que o
+// check existe.
+func TestCheckUnitScriptsInstalled(t *testing.T) {
+	t.Parallel()
+	const (
+		unitPath   = "/opt/civm/deploy/systemd/civmctl-registry-cache.service"
+		scriptPath = "/usr/local/bin/setup-registry-cache.sh"
+	)
+	unitContent := []byte("[Unit]\nConditionPathExists=" + scriptPath +
+		"\n[Service]\nExecStart=" + scriptPath + "\n")
+
+	baseOpts := func() Options {
+		o := DefaultOptions()
+		o.UnitsSourceDir = "/opt/civm/deploy/systemd"
+		o.GlobFn = func(pattern string) ([]string, error) {
+			if !strings.Contains(pattern, "civmctl-") {
+				t.Fatalf("unexpected glob pattern %q", pattern)
+			}
+			return []string{unitPath}, nil
+		}
+		o.ReadFileFn = func(path string) ([]byte, error) {
+			if path == unitPath {
+				return unitContent, nil
+			}
+			return nil, errors.New("unexpected read: " + path)
+		}
+		return o
+	}
+
+	// Negativo: script ausente -> CRÍTICO, com o caminho e a unit na mensagem.
+	missing := baseOpts()
+	missing.StatFn = func(path string) (os.FileInfo, error) {
+		if path == scriptPath {
+			return nil, os.ErrNotExist
+		}
+		t.Fatalf("unexpected stat: %s", path)
+		return nil, nil
+	}
+	gotMissing := checkUnitScriptsInstalled(missing)
+	if gotMissing.Severity != SeverityCritical {
+		t.Fatalf("missing script should be Critical, got %+v", gotMissing)
+	}
+	for _, want := range []string{scriptPath, "civmctl-registry-cache.service"} {
+		if !strings.Contains(gotMissing.Detail, want) {
+			t.Fatalf("missing-script detail %q omits %q", gotMissing.Detail, want)
+		}
+	}
+
+	// Positivo: mesmo unit, script presente -> OK (sem finding).
+	present := baseOpts()
+	present.StatFn = func(path string) (os.FileInfo, error) {
+		if path == scriptPath {
+			return nil, nil
+		}
+		t.Fatalf("unexpected stat: %s", path)
+		return nil, nil
+	}
+	gotPresent := checkUnitScriptsInstalled(present)
+	if gotPresent.Severity != SeverityOK {
+		t.Fatalf("present script should be OK, got %+v", gotPresent)
+	}
+}
+
 func assertHookCheck(t *testing.T, report Report, name string, severity Severity, detailContains string) {
 	t.Helper()
 	for _, check := range report.HookChecks {
@@ -544,6 +636,14 @@ func assertHookCheck(t *testing.T, report Report, name string, severity Severity
 	t.Fatalf("missing hook check %s in %+v", name, report.HookChecks)
 }
 
+// stubUnitPath é a unit-fonte sintética que stubHookContractOK serve para o
+// check UNIT_SCRIPTS_INSTALLED, e stubUnitScript é o script .sh que ela
+// referencia. StatFn reporta esse script como presente para manter o check OK.
+const (
+	stubUnitPath   = "/opt/civm/deploy/systemd/civmctl-buildcache-prune.service"
+	stubUnitScript = "/usr/local/bin/civm-ci-artifact-prune.sh"
+)
+
 func stubHookContractOK(opts *Options) {
 	// The SCOPED_SUDOERS check and the ADMIT_RUN_AS_USER probe both run via RunFn.
 	// "emdev\n" keeps both green: safedelete --check exits 0 (output ignored) and
@@ -551,8 +651,20 @@ func stubHookContractOK(opts *Options) {
 	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("emdev\n"), nil
 	}
-	opts.GlobFn = func(string) ([]string, error) {
+	// GlobFn agora atende dois padrões: o glob de runner dirs (HOOK_RUNNER_ENVS)
+	// e o glob de units-fonte (UNIT_SCRIPTS_INSTALLED). Dispatch pelo padrão.
+	opts.GlobFn = func(pattern string) ([]string, error) {
+		if strings.Contains(pattern, "civmctl-") {
+			return []string{stubUnitPath}, nil
+		}
 		return []string{"/home/emdev/actions-runner"}, nil
+	}
+	// StatFn reporta o script da unit sintética como instalado (check verde).
+	opts.StatFn = func(path string) (os.FileInfo, error) {
+		if path == stubUnitScript {
+			return nil, nil
+		}
+		return nil, os.ErrNotExist
 	}
 	opts.ReadFileFn = func(path string) ([]byte, error) {
 		switch path {
@@ -566,6 +678,9 @@ func stubHookContractOK(opts *Options) {
 				"ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/opt/civm/hooks/job-completed.sh",
 				"",
 			}, "\n")), nil
+		case stubUnitPath:
+			return []byte("[Unit]\nConditionPathExists=" + stubUnitScript +
+				"\n[Service]\nExecStart=/usr/bin/flock -n /run/x.lock " + stubUnitScript + "\n"), nil
 		case cgroupControllersPath:
 			return []byte("cpu memory pids\n"), nil
 		case meminfoPath:

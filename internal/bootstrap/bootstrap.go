@@ -260,6 +260,9 @@ func buildSteps(opts Options) []Step {
 					if err := copySystemdUnits(ctx, opts); err != nil {
 						return err
 					}
+					if err := copyDeployScripts(ctx, opts); err != nil {
+						return err
+					}
 				}
 				if _, err := opts.RunFn(ctx, "systemctl", "daemon-reload"); err != nil {
 					return err
@@ -325,6 +328,33 @@ func copySystemdUnits(ctx context.Context, opts Options) error {
 		dst := filepath.Join(civm.DefaultSystemdDir, filepath.Base(unit))
 		if _, err := opts.RunFn(ctx, "cp", unit, dst); err != nil {
 			return fmt.Errorf("cp %s %s: %w", unit, dst, err)
+		}
+	}
+	return nil
+}
+
+// copyDeployScripts instala os scripts de deploy/bin (irmao de deploy/systemd)
+// em /usr/local/bin com +x. As units systemd referenciam esses scripts por
+// caminho absoluto (ExecStart=/usr/local/bin/X.sh) e tem ConditionPathExists no
+// mesmo path; sem instala-los, o systemd PULA a unit silenciosamente — foi o que
+// deixou o civmctl-buildcache-prune virar no-op (cache nunca podado). Idempotente
+// (`install -m 0755`); tolerante quando o dir bin nao acompanha as units (glob
+// vazio -> nada a copiar). Ver deploy/systemd/README.md.
+func copyDeployScripts(ctx context.Context, opts Options) error {
+	source, err := civm.CleanDir(opts.InstallUnitsFrom, "--install-units-from")
+	if err != nil {
+		return err
+	}
+	binSource := filepath.Join(filepath.Dir(source), "bin")
+	scripts, err := filepath.Glob(filepath.Join(binSource, "*.sh"))
+	if err != nil {
+		return fmt.Errorf("glob deploy scripts from %s: %w", binSource, err)
+	}
+	localBin := filepath.Dir(civm.DefaultCivmctlPath) // /usr/local/bin
+	for _, script := range scripts {
+		dst := filepath.Join(localBin, filepath.Base(script))
+		if _, err := opts.RunFn(ctx, "install", "-m", "0755", script, dst); err != nil {
+			return fmt.Errorf("install %s %s: %w", script, dst, err)
 		}
 	}
 	return nil

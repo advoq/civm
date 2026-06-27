@@ -179,3 +179,51 @@ func TestDetectCollisions_FromListSnapshot(t *testing.T) {
 		t.Fatalf("DetectCollisions sobre snapshot real = %+v, want 1 colisão advoq/advoq", got)
 	}
 }
+
+// unitGateAdvoq representa um runner do pool civm-gate registrado para o advoq.
+// Nomeado "civm-advoq-gate" (convenção: civm-<owner>-gate), label `civm-gate`.
+// Unit: actions.runner.advoq-advoq.civm-advoq-gate.service — mesmo owner/repo
+// que o runner por-repo padrão, mas sufixo "-gate" no nome.
+const unitGateAdvoq = "actions.runner.advoq-advoq.civm-advoq-gate.service"
+
+func TestDetectCollisions_GateRunnerPlusOrg_NoCollision(t *testing.T) {
+	t.Parallel()
+	// Um runner civm-gate coexistindo com o runner org NÃO deve ser reportado
+	// como colisão: ele atende somente jobs `[self-hosted, civm-gate]` e não
+	// realiza Docker/disco, portanto não viola o invariante de serialização
+	// (incidente #1184).
+	units := []Status{
+		mkStatus(unitOrgAdvoq, "active", "running"),
+		mkStatus(unitGateAdvoq, "active", "running"),
+		mkStatus(unitVitae, "active", "running"),
+	}
+	if got := DetectCollisions(units); len(got) != 0 {
+		t.Fatalf("len = %d, want 0 (gate runner não é colisão) (%+v)", len(got), got)
+	}
+}
+
+func TestDetectCollisions_GateRunnerDoesNotSuppressPlainRepoCollision(t *testing.T) {
+	t.Parallel()
+	// A exclusão do runner gate NÃO deve suprimir a colisão do runner por-repo
+	// padrão: quando org + gate + repo-plain coexistem, só o repo-plain colide.
+	units := []Status{
+		mkStatus(unitOrgAdvoq, "active", "running"),
+		mkStatus(unitGateAdvoq, "active", "running"),
+		mkStatus(unitRepoAdvoq, "active", "running"),
+		mkStatus(unitVitae, "active", "running"),
+	}
+	got := DetectCollisions(units)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 (só o runner por-repo padrão colide) (%+v)", len(got), got)
+	}
+	c := got[0]
+	if c.RepoUnit != unitRepoAdvoq {
+		t.Errorf("RepoUnit = %q, want %q (runner gate não deve aparecer)", c.RepoUnit, unitRepoAdvoq)
+	}
+	if c.RepoName != "civm-advoq" {
+		t.Errorf("RepoName = %q, want civm-advoq", c.RepoName)
+	}
+	if c.Owner != "advoq" {
+		t.Errorf("Owner = %q, want advoq", c.Owner)
+	}
+}

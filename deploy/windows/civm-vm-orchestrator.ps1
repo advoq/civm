@@ -58,16 +58,23 @@ param(
     # mas o disco NUNCA enche). Ver Get-OrchestratorDecision.
     [int]$WarnFloorGB = 28,
     [int]$PanicFloorGB = 18,
-    # Piso do boundary_compact (V: livre em GB): no GAP entre sequencias de PR
-    # (Running==0 + Queued>0) compacta de graca quando o disco caiu abaixo disto.
-    # 40 fica folgado sobre o warn (28)/panic (18) e abaixo do admit (51). Ver
-    # Get-OrchestratorDecision (BoundaryCompactFloorGB) pro raciocinio do numero.
-    [int]$BoundaryCompactFloorGB = 40,
     [string]$StatePath = 'V:\civm-orchestrator-state.json',
     [string]$LogPath = 'V:\civm-orchestrator.log',
     # Lock canonico de reclaim (SPECv3 DT-v3-3): exclusao mutua com qualquer outro
     # reclaimer do mesmo VHDX. Mesmo path do civm-vhdx-autoreclaim/optimize.
     [string]$ReclaimLockPath = 'V:\civm-reclaim.lock',
+    # Estado da fila FIFO por-PR (Phase 1b, observe-mode): contextos em ordem de chegada
+    # + o slot simulado. Por enquanto so LOGA (would_grant/would_advance), nao impoe.
+    [string]$PrQueuePath = 'V:\civm-pr-queue.json',
+    # Caminho HOST do contexto concedido. O gate job (runner Windows do HOST, label
+    # civm-gate) le isto e segura os jobs reais Linux ate ser a vez do PR. Fica no HOST
+    # de proposito: sobrevive ao Stop-VM do guest no compact de boundary (um gate dentro
+    # do guest seria cancelado pelo compact). So e escrito com -EnforceQueue.
+    [string]$CurrentContextPath = 'V:\civm-current-context',
+    # Liga o ENFORCE da fila por-PR: publica o currentPr no host + limpa+compacta no
+    # boundary do contexto. Default OFF (so observe). Ligar SO depois do canario provar
+    # o gate (gate-no-host) num PR throwaway — nunca direto nos 7 workflows.
+    [switch]$EnforceQueue,
     # Modo observe: loga "would_start"/"would_stop" em vez de agir. Valida a
     # logica contra a box real sem mexer na VM — mais limpo que -WhatIf (que
     # suprime ate o Add-Content do log e os New-Alias do modulo Hyper-V).
@@ -121,12 +128,43 @@ function Get-RunCount {
         $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
         foreach ($run in $resp.workflow_runs) {
             if ($run.status -ne $Status) { continue }
-            $created = [datetime]::Parse([string]$run.created_at).ToUniversalTime()
-            if ($created -lt $cutoff) { continue }
+            # Idade pela ATIVIDADE recente (updated_at), nao created_at: um re-run reusa o
+            # created_at original (pode ser >12h) e seria descartado, cegando o orchestrator
+            # p/ re-runs (queued e in_progress). updated_at e fresco no re-run; fallback p/
+            # created_at se ausente. Mantem a guarda de staleness (run parado >12h = filtrado).
+            $tsRaw = if ($run.updated_at) { $run.updated_at } else { $run.created_at }
+            $ts = [datetime]::Parse([string]$tsRaw).ToUniversalTime()
+            if ($ts -lt $cutoff) { continue }
             $total++
         }
     }
     return $total
+}
+
+# Get-PrActivity: agrupa os runs de box ATIVOS (queued+in_progress) do advoq/advoq por
+# CONTEXTO — um PR (pr-<num>) ou um push de branch (branch-<ref>). Retorna um hashtable
+# id -> contagem de runs ativos. E o que a fila FIFO agrupa (todos os checks de um
+# contexto antes do proximo). Falha de API -> pula o status (fail-safe; o tick observe so
+# loga). per_page=100 + os 2 status; idade pela atividade (updated_at), igual Get-RunCount.
+function Get-PrActivity {
+    param([int]$MaxAgeHours = 12)
+    $cutoff = (Get-Date).ToUniversalTime().AddHours(-$MaxAgeHours)
+    $counts = @{}
+    $token = Get-GhTokenForOwner -Owner 'advoq'
+    $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'civm-orchestrator'; Accept = 'application/vnd.github+json' }
+    foreach ($status in @('queued', 'in_progress')) {
+        $uri = "https://api.github.com/repos/advoq/advoq/actions/runs?status=$status&per_page=100"
+        try { $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20 } catch { continue }
+        foreach ($run in $resp.workflow_runs) {
+            if ($run.status -ne $status) { continue }
+            $tsRaw = if ($run.updated_at) { $run.updated_at } else { $run.created_at }
+            if ([datetime]::Parse([string]$tsRaw).ToUniversalTime() -lt $cutoff) { continue }
+            $ctx = if ($run.pull_requests -and @($run.pull_requests).Count -gt 0) { 'pr-' + [int]$run.pull_requests[0].number } else { 'branch-' + [string]$run.head_branch }
+            if (-not $counts.ContainsKey($ctx)) { $counts[$ctx] = 0 }
+            $counts[$ctx]++
+        }
+    }
+    return $counts
 }
 
 function Get-State {
@@ -139,10 +177,14 @@ function Get-State {
     if (-not ($s.PSObject.Properties.Name -contains 'lastPanicUtc')) {
         $s | Add-Member -NotePropertyName lastPanicUtc -NotePropertyValue '' -Force
     }
-    # Garante admitReclaimAttempts — a barreira de admissao (51GB) conta compacts
-    # que nao chegaram em 51 pra evitar deadlock da fila (>=2 admite mesmo assim).
+    # Garante admitReclaimAttempts — a barreira de admissao (host 55 / guest 40) conta
+    # compacts que nao chegaram no floor pra evitar deadlock da fila (>=2 admite mesmo assim).
     if (-not ($s.PSObject.Properties.Name -contains 'admitReclaimAttempts')) {
         $s | Add-Member -NotePropertyName admitReclaimAttempts -NotePropertyValue 0 -Force
+    }
+    # Garante prevRunning — o gate por-evento (transicao running >0->0) le daqui.
+    if (-not ($s.PSObject.Properties.Name -contains 'prevRunning')) {
+        $s | Add-Member -NotePropertyName prevRunning -NotePropertyValue 0 -Force
     }
     return $s
 }
@@ -152,40 +194,96 @@ function Save-State {
     try { ($State | ConvertTo-Json -Compress) | Set-Content -LiteralPath $StatePath -Encoding UTF8 } catch { }
 }
 
+# Monta os args de SSH (batch, timeout, chave) para um alvo. Centralizado: as 3
+# funcoes que falam com o guest reusam a mesma config em vez de duplicar.
+function Get-GuestSshArgs {
+    param([Parameter(Mandatory)][string]$Target)
+    $a = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new')
+    if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) { $a += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath) }
+    $a += $Target
+    return $a
+}
+
+# Descobre o IPv4 do guest direto do Hyper-V (sem DNS). Usado como fallback
+# quando o NOME gha-ubuntu-2404 nao resolve no boot. Exige integration services
+# reportando IP (poucos segundos pos-Start-VM). Falha -> $null (o caller so usa
+# se nao for nulo).
+function Get-GuestIPAddress {
+    try {
+        $ips = (Get-VMNetworkAdapter -VMName $VMName -ErrorAction Stop).IPAddresses
+        return ($ips | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } | Select-Object -First 1)
+    }
+    catch { return $null }
+}
+
+# SSH ao guest com retry/backoff. Pos-reboot (ex.: queda de energia) o nome
+# gha-ubuntu-2404 demora a resolver pelo switch Hyper-V -> "Could not resolve
+# hostname"/"Connection refused" transitorios faziam o clean+fstrim e o
+# stop-guard pularem (a limpeza nao rodava -> o Optimize nao recuperava nada).
+# Tenta ate $Retries vezes; se o NOME nao resolve, acrescenta o IP da VM como
+# alvo e tenta por IP (remove a dependencia de DNS). $ErrorActionPreference local
+# = Continue para o stderr do ssh nao virar throw -> decidimos sucesso pelo
+# $LASTEXITCODE. Retorna a ultima linha do stdout; $script:LastGuestSshOk diz se
+# algum alvo respondeu com exit 0.
+function Invoke-GuestSsh {
+    param(
+        [Parameter(Mandatory)][string]$Command,
+        [int]$Retries = 3,
+        [int]$BackoffSeconds = 5
+    )
+    $ErrorActionPreference = 'Continue'
+    $script:LastGuestSshOk = $false
+    $user = ($GuestSshTarget -split '@')[0]
+    $targets = [System.Collections.Generic.List[string]]::new()
+    $targets.Add($GuestSshTarget)
+    $lastLine = $null
+    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+        for ($i = 0; $i -lt $targets.Count; $i++) {
+            $out = (& ssh @(Get-GuestSshArgs $targets[$i]) $Command 2>&1)
+            if ($LASTEXITCODE -eq 0) { $script:LastGuestSshOk = $true; return ($out | Select-Object -Last 1) }
+            $lastLine = ($out | Select-Object -Last 1)
+            if (($out | Out-String) -match 'resolve hostname' -and $targets.Count -eq 1) {
+                $ip = Get-GuestIPAddress
+                if ($ip) { $targets.Add("$user@$ip") }
+            }
+        }
+        if ($attempt -lt $Retries) { Start-Sleep -Seconds $BackoffSeconds }
+    }
+    return $lastLine
+}
+
 # Limpeza total do guest antes de desligar: zera os caches dos 7 repos e as
 # imagens de service de runs finalizadas, devolvendo a VM ao estado limpo
 # (~51GB livres) para o proximo PR. Best-effort: falha de SSH nao bloqueia o
 # stop (o disco ja sera compactado offline de qualquer forma).
 function Invoke-GuestFullClean {
-    $sshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new')
-    if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) { $sshArgs += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath) }
-    $sshArgs += $GuestSshTarget
     # Deep clean (#137): alem dos caches dos 7 repos, remove o que so crescia e
     # nunca era limpo — _diag (logs do runner), o conteudo de _work exceto _tool
     # (hosted node/go cache, caro de re-baixar), journal e /tmp. Sem isso o piso
     # "limpo" caia de ~51 pra ~47 ao longo das runs, e a E2E (builda ~35GB de
     # imagens num job) batia no panic floor. df --output=avail evita o awk e o
     # tr -dc 0-9 evita o arg de espaco: os escapes via PowerShell -> SSH -> bash
-    # corrompiam o campo, deixando o ssh sair non-zero (guest_full_clean_warn
-    # cosmetico — a limpeza ja rodava, so o log do free_after falhava).
-    $remote = 'rm -rf ~/.cache/* 2>/dev/null; rm -rf ~/actions-runner*/_diag/* 2>/dev/null; for w in ~/actions-runner*/_work; do find "$w" -maxdepth 1 -mindepth 1 ! -name _tool -exec rm -rf {} + 2>/dev/null; done; sudo journalctl --vacuum-size=50M >/dev/null 2>&1; sudo rm -rf /tmp/* /var/tmp/* 2>/dev/null; sudo docker system prune -af --volumes >/dev/null 2>&1; sudo docker builder prune -af >/dev/null 2>&1; df -BG --output=avail / | tail -1 | tr -dc 0-9'
-    try { $free = (& ssh @sshArgs $remote 2>&1 | Select-Object -Last 1); Write-OrcLog 'guest_full_clean' @{ free_after = "$free" } }
-    catch { Write-OrcLog 'guest_full_clean_warn' @{ error = $_.Exception.Message } 'WARN' }
+    # corrompiam o campo, deixando o ssh sair non-zero.
+    # fstrim -av no FIM (pos-prune, ainda com a VM Running, antes do Stop-VM): o
+    # rm/docker-prune libera dezenas de GB mas, sem o UNMAP/TRIM, o VHDX dinamico
+    # nao ve esses blocos como livres -> o Optimize-VHD offline recuperava ~0
+    # (reclaim_no_progress) e o piso "limpo" caia abaixo de 58. O trim marca os
+    # blocos pra o Optimize compactar de verdade (mesma razao do warn_clean).
+    $remote = 'rm -rf ~/.cache/* 2>/dev/null; rm -rf ~/actions-runner*/_diag/* 2>/dev/null; for w in ~/actions-runner*/_work; do find "$w" -maxdepth 1 -mindepth 1 ! -name _tool -exec rm -rf {} + 2>/dev/null; done; sudo journalctl --vacuum-size=50M >/dev/null 2>&1; sudo rm -rf /tmp/* /var/tmp/* 2>/dev/null; sudo docker system prune -af --volumes >/dev/null 2>&1; sudo docker builder prune -af >/dev/null 2>&1; sudo fstrim -av >/dev/null 2>&1; df -BG --output=avail / | tail -1 | tr -dc 0-9'
+    $free = Invoke-GuestSsh -Command $remote
+    if ($script:LastGuestSshOk) { Write-OrcLog 'guest_full_clean' @{ free_after = "$free" } }
+    else { Write-OrcLog 'guest_full_clean_warn' @{ error = "$free" } 'WARN' }
 }
 
 # Stop-guard independente do token: pergunta ao proprio guest se ha algum
 # Runner.Worker ativo (qualquer repo, qualquer dono). E a salvaguarda real contra
 # desligar a VM com um job rodando que o PAT (escopado a 1 dono) nao ve via API.
-# Fail-safe: SSH falhou -> assume "ha job" -> nao desliga (Kahneman #15).
+# Fail-safe: SSH falhou (mesmo apos retries) -> assume "ha job" -> nao desliga
+# (Kahneman #15).
 function Get-GuestHasActiveJob {
-    $sshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new')
-    if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) { $sshArgs += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath) }
-    $sshArgs += $GuestSshTarget
-    try {
-        $n = (& ssh @sshArgs 'pgrep -c "[R]unner.Worker" 2>/dev/null || echo 0' 2>&1 | Select-Object -Last 1)
-        return ([int]$n -gt 0)
-    }
-    catch { Write-OrcLog 'guest_active_probe_failed' @{ error = $_.Exception.Message } 'WARN'; return $true }
+    $n = Invoke-GuestSsh -Command 'pgrep -c "[R]unner.Worker" 2>/dev/null || echo 0'
+    if (-not $script:LastGuestSshOk) { Write-OrcLog 'guest_active_probe_failed' @{ error = "$n" } 'WARN'; return $true }
+    return ([int]$n -gt 0)
 }
 
 # Mede o V: livre em GB. 0 = medida falhou -> a decisao trata como fail-safe (nao
@@ -200,12 +298,10 @@ function Get-VFreeGB {
 # eviction que o age-guard consertou) + fstrim (marca os blocos liberados pra a
 # VHDX dinamica reusa-los em vez de crescer). Best-effort.
 function Invoke-GuestWarnClean {
-    $sshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new')
-    if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) { $sshArgs += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath) }
-    $sshArgs += $GuestSshTarget
     $remote = 'sudo docker builder prune -af >/dev/null 2>&1; sudo fstrim / >/dev/null 2>&1; df -BG --output=avail / | tail -1 | tr -dc 0-9'
-    try { $free = (& ssh @sshArgs $remote 2>&1 | Select-Object -Last 1); Write-OrcLog 'disk_warn_clean' @{ free_after = "$free" } }
-    catch { Write-OrcLog 'disk_warn_clean_warn' @{ error = $_.Exception.Message } 'WARN' }
+    $free = Invoke-GuestSsh -Command $remote
+    if ($script:LastGuestSshOk) { Write-OrcLog 'disk_warn_clean' @{ free_after = "$free" } }
+    else { Write-OrcLog 'disk_warn_clean_warn' @{ error = "$free" } 'WARN' }
 }
 
 # Desliga a VM e compacta o VHDX offline com o gate de 2 fases provado do #106
@@ -262,10 +358,16 @@ function Invoke-StopAndCompact {
         $vAfterGB = [int]((Get-PSDrive V).Free / 1GB)
         $recoveredGB = $vAfterGB - $vBeforeGB
         Write-OrcLog 'reclaim_done' @{ reason = $Reason; vhdx_gb = [int]($vhd.FileSize / 1GB); v_free_gb = $vAfterGB; recovered_gb = $recoveredGB }
-        if ($recoveredGB -lt $MinRecoverGB) {
-            # O Optimize "passou" mas nao recuperou nada util -> disco apertado que
-            # o compact nao resolve (precisa de humano), nao um falso-verde.
-            Write-OrcLog 'reclaim_no_progress' @{ reason = $Reason; recovered_gb = $recoveredGB; min_recover_gb = $MinRecoverGB } 'ERROR'
+        if (Test-ReclaimStuck -RecoveredGB $recoveredGB -VFreeAfterGB $vAfterGB -AdmitFloorGB $AdmitFloorGB) {
+            # Recuperou < min E o V: SEGUE abaixo do piso -> disco apertado que o
+            # compact nao resolve (precisa de humano), nao um falso-verde.
+            Write-OrcLog 'reclaim_no_progress' @{ reason = $Reason; recovered_gb = $recoveredGB; v_free_gb = $vAfterGB; min_recover_gb = $MinRecoverGB; floor = $AdmitFloorGB } 'ERROR'
+        }
+        elseif ($recoveredGB -lt $MinRecoverGB) {
+            # Recuperou pouco MAS o V: ja esta >= piso: o VHDX ja esta compacto
+            # (footprint do guest estavel), nao ha o que devolver. Steady-state
+            # saudavel — INFO, nao ERROR (evita o falso-vermelho perpetuo).
+            Write-OrcLog 'reclaim_already_compact' @{ reason = $Reason; recovered_gb = $recoveredGB; v_free_gb = $vAfterGB; floor = $AdmitFloorGB } 'INFO'
         }
     }
     finally {
@@ -279,6 +381,7 @@ function Invoke-StopAndCompact {
 # codigo testado).
 . "$PSScriptRoot\civm-orchestrator-decision.ps1"
 . "$PSScriptRoot\civm-reclaim-gate.ps1"
+. "$PSScriptRoot\civm-pr-queue.ps1"
 
 # ---- decisao principal ----
 try {
@@ -290,9 +393,14 @@ try {
     $last = [datetime]::Parse($state.lastBusyUtc).ToUniversalTime()
     $idleMin = ((Get-Date).ToUniversalTime() - $last).TotalMinutes
     $vfree = Get-VFreeGB
-    # Barreira de admissao (51GB nos 2 lados): o guest free vem do snapshot de
-    # host-metrics; 999 = snapshot ausente/ilegivel -> desconhecido, nao bloqueia.
-    $AdmitFloorGB = 51
+    # Barreira de admissao (backstop): host V: >= 55GB (alcancavel; o compact chega a
+    # ~67 sob CI) E guest >= 40GB (o guest so alcanca ~45-63, nunca 70 -> floor proprio
+    # menor). O compact entre PRs e INCONDICIONAL (boundary_compact a cada PR; ver
+    # decision) e libera o MAXIMO dos 2 lados; 55 e o piso alcancavel pra admitir logo
+    # apos compactar (mirar 70 spiralava com reclaim_no_progress falso). O guest free vem
+    # do snapshot de host-metrics; 999 = ausente/ilegivel -> desconhecido, nao bloqueia.
+    $AdmitFloorGB = 55
+    $GuestFloorGB = 40
     $guestFree = 999
     try {
         $snap = Get-Content -LiteralPath 'V:\civm-host-metrics.json' -Raw -ErrorAction Stop | ConvertFrom-Json
@@ -302,40 +410,54 @@ try {
     # Cooldown do panic: fora da janela -> pode panicar; dentro -> a decisao
     # rebaixa para warn_clean (nao re-mata jobs em loop). Medida de tempo VIVA.
     $canPanic = Test-ReclaimCooldown -LastReclaimUtc $state.lastPanicUtc -NowUtc $nowUtc
-    Write-OrcLog 'tick' @{ vm = "$($vm.State)"; queued = $queued; running = $running; idle_min = [math]::Round($idleMin, 1); v_free_gb = $vfree; can_panic = $canPanic }
+    # Gate por-EVENTO: prevRunning (running do tick anterior) detecta a transicao >0->0
+    # (PR/onda de runs acabou) -> compacta 1x por PR; sem timer.
+    $prevRunning = [int]$state.prevRunning
+    Write-OrcLog 'tick' @{ vm = "$($vm.State)"; queued = $queued; running = $running; idle_min = [math]::Round($idleMin, 1); v_free_gb = $vfree; can_panic = $canPanic; prev_running = $prevRunning }
 
     # Decide no modulo puro testado (civm-orchestrator-decision.test.ps1); o
     # switch abaixo so EXECUTA a acao. A probe SSH e lazy: Get-OrchestratorDecision
     # so a chama no gate de stop. VFreeGB + CanPanic armam a seguranca de disco.
-    $decision = Get-OrchestratorDecision -VmState "$($vm.State)" -Queued $queued -Running $running -IdleMinutes $idleMin -IdleStopMinutes $IdleStopMinutes -HasActiveJobProbe { Get-GuestHasActiveJob } -VFreeGB $vfree -WarnFloorGB $WarnFloorGB -PanicFloorGB $PanicFloorGB -BoundaryCompactFloorGB $BoundaryCompactFloorGB -CanPanic $canPanic -AdmitFloorGB $AdmitFloorGB -GuestFreeGB $guestFree -AdmitReclaimAttempts ([int]$state.admitReclaimAttempts)
+    $decision = Get-OrchestratorDecision -VmState "$($vm.State)" -Queued $queued -Running $running -IdleMinutes $idleMin -IdleStopMinutes $IdleStopMinutes -HasActiveJobProbe { Get-GuestHasActiveJob } -VFreeGB $vfree -WarnFloorGB $WarnFloorGB -PanicFloorGB $PanicFloorGB -CanPanic $canPanic -AdmitFloorGB $AdmitFloorGB -GuestFloorGB $GuestFloorGB -GuestFreeGB $guestFree -AdmitReclaimAttempts ([int]$state.admitReclaimAttempts) -PrevRunning $prevRunning
 
     switch ($decision) {
         'noop_off' { }
         'start' {
+            # Admite: se ainda <55 (so ocorre com attempts>=2 -> anti-deadlock), emite o
+            # evento rastreavel (rollback/abort dependem dele). O reset do contador e do
+            # Resolve-AdmitTransition pos-switch (SPECv4 ITEM-2).
+            if ($vfree -gt 0 -and $vfree -lt $AdmitFloorGB) {
+                $evt = if ($Observe) { 'would_disk_below_floor_admitted' } else { 'disk_below_floor_admitted' }
+                Write-OrcLog $evt @{ v_free_gb = $vfree; guest_free_gb = $guestFree; floor = $AdmitFloorGB; attempts = [int]$state.admitReclaimAttempts; path = 'cold' }
+            }
             if ($Observe) { Write-OrcLog 'would_start' @{ queued = $queued; running = $running } }
             else {
                 Start-VM -Name $VMName -ErrorAction Stop
                 Write-OrcLog 'vm_started' @{ queued = $queued; running = $running }
-                # Admitiu -> zera o contador da barreira (proximo batch comeca limpo).
-                $state.admitReclaimAttempts = 0; Save-State $state
             }
         }
         'reclaim_before_admit' {
-            # BARREIRA DE ADMISSAO: VM Off + fila, mas disco < 51GB. Compacta ANTES
-            # de admitir (nao starta sujo, evita o caso #1182 a V:18). Conta a
-            # tentativa; se o compact maxar sem chegar em 51, a 2a tentativa admite
-            # mesmo assim (anti-deadlock da fila, decidido no modulo puro).
+            # BARREIRA DE ADMISSAO: VM Off + fila, mas disco < floor (host 55 ou
+            # guest 40). Compacta ANTES de admitir (nao starta sujo, evita o caso
+            # #1182 a V:18). Conta a tentativa; se o compact maxar sem chegar no
+            # floor, a 2a tentativa admite mesmo assim (anti-deadlock, modulo puro).
             if ($Observe) { Write-OrcLog 'would_reclaim_before_admit' @{ v_free_gb = $vfree; guest_free_gb = $guestFree; floor = $AdmitFloorGB; attempts = [int]$state.admitReclaimAttempts } }
             else {
                 Write-OrcLog 'reclaim_before_admit' @{ v_free_gb = $vfree; guest_free_gb = $guestFree; floor = $AdmitFloorGB; attempts = [int]$state.admitReclaimAttempts }
                 Invoke-StopAndCompact -Reason 'admit_barrier'
-                $vAfter = Get-VFreeGB
-                if ($vAfter -gt 0 -and $vAfter -lt $AdmitFloorGB) { $state.admitReclaimAttempts = [int]$state.admitReclaimAttempts + 1 }
-                else { $state.admitReclaimAttempts = 0 }
-                Save-State $state
+                # O incremento do contador (se vAfter ainda <55) e do Resolve-AdmitTransition
+                # pos-switch (SPECv4 ITEM-2; era inline aqui).
             }
         }
-        'mark_busy' { if (-not $Observe) { $state.lastBusyUtc = $nowUtc; Save-State $state } }
+        'mark_busy' {
+            # Admissao warm (Running==0 + Queued>0): se admite sujo (<55, via attempts>=2),
+            # emite o evento. O reset do contador e do Resolve-AdmitTransition pos-switch.
+            if ($running -eq 0 -and $queued -gt 0 -and $vfree -gt 0 -and $vfree -lt $AdmitFloorGB) {
+                $evt = if ($Observe) { 'would_disk_below_floor_admitted' } else { 'disk_below_floor_admitted' }
+                Write-OrcLog $evt @{ v_free_gb = $vfree; guest_free_gb = $guestFree; floor = $AdmitFloorGB; attempts = [int]$state.admitReclaimAttempts; path = 'warm' }
+            }
+            if (-not $Observe) { $state.lastBusyUtc = $nowUtc; Save-State $state }
+        }
         'idle_debounce' { Write-OrcLog 'idle_debounce' @{ idle_min = [math]::Round($idleMin, 1); need = $IdleStopMinutes } }
         'stop_aborted_active_job' {
             Write-OrcLog 'stop_aborted_active_job' @{ note = 'Runner.Worker ativo no guest (repo fora do escopo do token?)' }
@@ -350,20 +472,28 @@ try {
             else { Write-OrcLog 'disk_warn' @{ v_free_gb = $vfree; floor = $WarnFloorGB }; Invoke-GuestWarnClean }
         }
         'boundary_compact' {
-            # FRONTEIRA entre sequencias de PR (Running==0 + Queued>0 + V baixo):
-            # compacta no GAP. Mesmo mecanismo do panic (Stop-VM + Optimize offline),
-            # mas aqui NAO mata job — nenhum esta in_progress. Por isso NAO precisa de
-            # cooldown (o cooldown do panic existe so pra nao re-matar jobs em loop). O
-            # lock canonico V:\civm-reclaim.lock + o gate pos-Off Test-OptimizeSlack
-            # do Invoke-StopAndCompact valem aqui tambem. Apos compactar (VM Off), o
-            # proximo tick religa pela logica 'start' porque Queued>0 (cold start). Se
-            # a folga pos-Off nao cobrir o scratch, o proprio Invoke-StopAndCompact
-            # pula (reclaim_skip_insufficient_slack) — nao empurra o V: abaixo do piso.
-            if ($Observe) { Write-OrcLog 'would_boundary_compact' @{ v_free_gb = $vfree; floor = $BoundaryCompactFloorGB; queued = $queued } }
+            # COMPACT ANTES DE CADA PR (Running==0 + Queued>0 na transicao >0->0): compacta
+            # incondicional no V, mas a decision so chega aqui depois da probe SSH confirmar
+            # o guest OCIOSO — sem esse gate o running count laggado do GitHub fazia o
+            # Stop-VM matar um job em checkout (incidente 2026-06-24 22:13). O lock
+            # V:\civm-reclaim.lock + o gate Test-OptimizeSlack do Invoke-StopAndCompact
+            # valem aqui. Apos compactar (VM Off), o proximo tick cai no ramo Off e religa
+            # via 'start'. Se a folga pos-Off nao cobrir o scratch, o Invoke-StopAndCompact
+            # pula (reclaim_skip_insufficient_slack). O incremento do contador (anti-deadlock)
+            # e do Resolve-AdmitTransition pos-switch (SPECv4 ITEM-2).
+            if ($Observe) { Write-OrcLog 'would_boundary_compact' @{ v_free_gb = $vfree; floor = $AdmitFloorGB; queued = $queued } }
             else {
-                Write-OrcLog 'disk_boundary_compact' @{ v_free_gb = $vfree; floor = $BoundaryCompactFloorGB; queued = $queued; note = 'gap entre PRs -> compacta sem matar job (Running==0)' }
+                Write-OrcLog 'disk_boundary_compact' @{ v_free_gb = $vfree; floor = $AdmitFloorGB; queued = $queued; note = 'fim do PR (running >0->0) -> compacta ate ~67 (probe SSH confirmou guest ocioso, nao mata job em voo)' }
                 Invoke-StopAndCompact -Reason 'boundary_compact'
             }
+        }
+        'boundary_aborted_active_job' {
+            # A probe SSH viu Runner.Worker ativo no guest (o running count do GitHub ainda
+            # nao tinha pego o job recem-despachado): NAO para a VM, senao mataria o job em
+            # voo. Reseta o idle timer porque a box esta de fato ocupada. Espelha o gate do
+            # stop ocioso (stop_aborted_active_job).
+            Write-OrcLog 'boundary_aborted_active_job' @{ note = 'job ativo no guest (running count do GitHub laggou) -> NAO compacta, preserva o job em voo' }
+            if (-not $Observe) { $state.lastBusyUtc = $nowUtc; Save-State $state }
         }
         'panic_compact' {
             # Disco CRITICO (V < PanicFloor): compacta MESMO ocupado. Mata os jobs
@@ -386,6 +516,79 @@ try {
             else { Invoke-StopAndCompact -Reason 'idle_pr_boundary' }
         }
     }
+    # TRANSICAO DO CONTADOR DA BARREIRA (uma chamada pos-switch; vAfter medido APOS o
+    # efeito). A funcao pura Resolve-AdmitTransition decide quem conta/reseta (incl. DT-9:
+    # panic so conta com Running==0); o teste exercita a MESMA funcao (Kahneman #13). Para
+    # decisoes sem compact/admissao e no-op no contador. (SPECv4 ITEM-2)
+    if (-not $Observe) {
+        $vAfter = Get-VFreeGB
+        $state = Resolve-AdmitTransition -State $state -Decision $decision -Running $running -Queued $queued -VAfter $vAfter -Floor $AdmitFloorGB
+        # Rastreia o running deste tick p/ a transicao >0->0 do proximo (gate por-evento).
+        $state.prevRunning = $running
+        Save-State $state
+    }
+
+    # ---- OBSERVE da fila FIFO por-PR (Phase 1b: so LOGA, nunca impoe) ----
+    # Agrupa a atividade de box por contexto (PR/branch), mantem a ordem FIFO em
+    # $PrQueuePath, e loga o que a fila FARIA (grant/advance) sem mexer no power/compact.
+    # Valida o cerebro (Resolve-PrSlot) contra a box real antes de ligar o enforce.
+    try {
+        $act = Get-PrActivity
+        $pq = $null
+        if (Test-Path -LiteralPath $PrQueuePath) { try { $pq = Get-Content -LiteralPath $PrQueuePath -Raw | ConvertFrom-Json } catch {} }
+        if ($null -eq $pq) { $pq = [pscustomobject]@{ contexts = @(); currentPr = ''; currentIdleSinceUtc = '' } }
+        $seen = @{}; foreach ($c in @($pq.contexts)) { if ($null -ne $c) { $seen["$($c.id)"] = $c.firstSeenUtc } }
+        $ordered = @()
+        foreach ($c in @($pq.contexts)) { if ($null -ne $c -and $act.ContainsKey("$($c.id)")) { $ordered += [pscustomobject]@{ id = "$($c.id)"; firstSeenUtc = $c.firstSeenUtc } } }
+        foreach ($id in ($act.Keys | Sort-Object)) { if (-not $seen.ContainsKey("$id")) { $ordered += [pscustomobject]@{ id = "$id"; firstSeenUtc = $nowUtc } } }
+        $prs = @(); foreach ($c in $ordered) { $prs += [pscustomobject]@{ number = $c.id; realJobs = [int]$act["$($c.id)"] } }
+        $slot = Resolve-PrSlot -Prs $prs -CurrentPr "$($pq.currentPr)" -CurrentIdleSinceUtc "$($pq.currentIdleSinceUtc)" -NowUtc $nowUtc
+        if ($slot.action -ne 'hold' -or "$($pq.currentPr)" -ne "$($slot.currentPr)") {
+            $ctxStr = (@($ordered | ForEach-Object { $cid = "$($_.id)"; "${cid}:$([int]$act[$cid])" }) -join ' ')
+            Write-OrcLog "would_$($slot.action)" @{ current = "$($slot.currentPr)"; ctxs = $ctxStr; reason = $slot.reason }
+        }
+        # ENFORCE (so com -EnforceQueue, fora de -Observe): publica o ctx concedido no
+        # HOST (o gate Windows le; sobrevive ao Stop-VM) e, no boundary do contexto,
+        # limpa+compacta antes de liberar o proximo PR. O probe-gate evita compactar com
+        # job real ativo no guest (mesma seguranca do stop ocioso).
+        if ($EnforceQueue -and -not $Observe) {
+            $prevCtx = "$($pq.currentPr)"
+            if ($slot.action -eq 'boundary_advance') {
+                # No boundary o proximo PR so e liberado quando a box esta apta. Tres casos:
+                # (a) box JA fresca (V>=floor) -> nao compacta, avanca direto — sem desperdicio
+                #     entre PRs leves que nao sujaram a box;
+                # (b) box suja + guest com job (da main/PR terminando) -> NAO avanca, segura no
+                #     atual e espera esvaziar p/ compactar antes de liberar (senao o proximo
+                #     rodaria numa box suja); preserva o grace e re-tenta no proximo tick;
+                # (c) box suja + guest idle -> compacta e SO entao libera (box fresca).
+                $vNow = Get-VFreeGB
+                if ($vNow -ge $AdmitFloorGB) {
+                    Write-OrcLog 'pr_boundary_skip_clean' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow }
+                    "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                }
+                elseif (Get-GuestHasActiveJob) {
+                    Write-OrcLog 'pr_boundary_deferred' @{ done = $prevCtx; reason = 'guest com job ativo -> espera esvaziar p/ compactar antes de liberar' } 'WARN'
+                    "$prevCtx" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                    $slot.currentPr = $prevCtx
+                    $slot.idleSinceUtc = "$($pq.currentIdleSinceUtc)"
+                }
+                else {
+                    Write-OrcLog 'pr_boundary_compact' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow } 'WARN'
+                    Invoke-StopAndCompact -Reason 'pr_boundary'
+                    "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                }
+            }
+            else {
+                try { "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii }
+                catch { Write-OrcLog 'pr_publish_error' @{ error = "$($_.Exception.Message)" } 'WARN' }
+            }
+        }
+        $pq.contexts = $ordered
+        $pq.currentPr = "$($slot.currentPr)"
+        $pq.currentIdleSinceUtc = "$($slot.idleSinceUtc)"
+        try { ($pq | ConvertTo-Json -Depth 5 -Compress) | Set-Content -LiteralPath $PrQueuePath -Encoding UTF8 } catch {}
+    }
+    catch { Write-OrcLog 'pr_queue_observe_error' @{ error = "$($_.Exception.Message)" } 'WARN' }
 }
 catch {
     # Fail-safe: na duvida NUNCA desliga (so o caminho de Start e seguro). Um

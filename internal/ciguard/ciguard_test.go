@@ -197,6 +197,60 @@ func TestScanRuleR4BareFlockDoesNotSuppress(t *testing.T) {
 	}
 }
 
+func TestScanRuleR4DevctlCiUpIsHeavy(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// O e2e-tenant-isolation.yml sobe o stack via `devctl ci up core` (que por
+	// dentro roda make up-local-smoke) — docker-heavy real. Sem civmctl lock o R4
+	// deve acusar; antes do ADR-107 esse padrao era invisivel ao guard.
+	writeWorkflow(t, root, "env:\n  COMPOSE_PROJECT_NAME: civm\njobs:\n  e2e:\n    steps:\n      - run: go run ./tools/devctl/cmd/devctl ci up core\n")
+
+	result, err := Scan(DefaultOptions(root))
+	if err != nil {
+		t.Fatalf("Scan err = %v", err)
+	}
+	f, ok := findingForRule(result.Findings, RuleUnlockedHeavy)
+	if !ok {
+		t.Fatalf("devctl ci up deve disparar R4, got %+v", result.Findings)
+	}
+	if f.Severity != SeverityWarn {
+		t.Fatalf("R4 severity = %q, want warn", f.Severity)
+	}
+}
+
+func TestScanRuleR4MakeUpdateIsNotHeavy(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// `make update`/`make upstream` NAO sao docker-heavy: o `\b` apos `up` em
+	// dockerHeavyUpRe impede o falso-positivo (regressao do branch make, que
+	// antes casava qualquer token comecando com "up").
+	writeWorkflow(t, root, "env:\n  COMPOSE_PROJECT_NAME: civm\njobs:\n  m:\n    steps:\n      - run: make update-schemas\n")
+
+	result, err := Scan(DefaultOptions(root))
+	if err != nil {
+		t.Fatalf("Scan err = %v", err)
+	}
+	if _, ok := findingForRule(result.Findings, RuleUnlockedHeavy); ok {
+		t.Fatalf("make update NAO deve disparar R4, got %+v", result.Findings)
+	}
+}
+
+func TestScanRuleR4DevctlCiUpSuppressedByLock(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// Par positivo do teste acima: com civmctl lock envolvendo o `devctl ci up`,
+	// o R4 nao deve disparar (a protecao legitima passa).
+	writeWorkflow(t, root, "env:\n  COMPOSE_PROJECT_NAME: civm\njobs:\n  e2e:\n    steps:\n      - run: civmctl lock --exec -- go run ./tools/devctl/cmd/devctl ci up core\n")
+
+	result, err := Scan(DefaultOptions(root))
+	if err != nil {
+		t.Fatalf("Scan err = %v", err)
+	}
+	if _, ok := findingForRule(result.Findings, RuleUnlockedHeavy); ok {
+		t.Fatalf("civmctl lock deve suprimir R4 para devctl ci up, got %+v", result.Findings)
+	}
+}
+
 func TestScanWaiverSuppressesFinding(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

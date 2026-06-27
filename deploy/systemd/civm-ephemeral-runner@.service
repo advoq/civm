@@ -1,0 +1,28 @@
+[Unit]
+# Loop de runner ephemeral por SLOT (%i). Clean-slate por job (paridade-pago #1):
+# registra um runner JIT novo, roda 1 job, deep-clean, repete. Substitui o servico
+# persistente do GitHub (actions.runner.*.service) para este runner especifico.
+Description=civm ephemeral runner loop (clean-slate por job) — slot %i
+Wants=network-online.target
+After=network-online.target docker.service
+ConditionPathExists=/usr/local/bin/civm-ephemeral-runner.sh
+ConditionPathExists=/etc/civm/ephemeral-%i.env
+
+[Service]
+Type=simple
+# Roda como o usuario dono do runner (o run.sh do GitHub nao pode rodar como root);
+# o deep-clean usa sudo NOPASSWD escopado (docker/fstrim), igual aos hooks.
+User=emdev
+WorkingDirectory=/home/emdev
+ExecStart=/usr/local/bin/civm-ephemeral-runner.sh %i
+# O runner sai a cada job (ephemeral); Restart=always re-entra o loop (novo registro).
+Restart=always
+RestartSec=5
+# Um job pode ser longo (E2E ~50min); sem timeout de start.
+TimeoutStartSec=0
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

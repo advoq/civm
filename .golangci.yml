@@ -43,6 +43,8 @@ linters:
         - independente
         - independentes
         - inferir
+        - metricas
         - operacional
+        - reinstale
         - variante
         - variantes

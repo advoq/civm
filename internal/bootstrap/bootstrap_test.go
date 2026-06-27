@@ -543,6 +543,68 @@ func TestCopySystemdUnitsErrorsWhenNoUnits(t *testing.T) {
 	}
 }
 
+func TestCopyDeployScriptsInstallsBinScripts(t *testing.T) {
+	t.Parallel()
+	// Estrutura real: deploy/systemd (units) + deploy/bin (scripts irmaos). O
+	// copyDeployScripts deve instalar os .sh de ../bin em /usr/local/bin com +x,
+	// senao a unit do prune fica com ConditionPathExists faltante (no-op).
+	root := t.TempDir()
+	sysDir := filepath.Join(root, "systemd")
+	binDir := filepath.Join(root, "bin")
+	for _, d := range []string{sysDir, binDir} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "civm-ci-artifact-prune.sh"), []byte("#!/usr/bin/env bash\n"), 0o755); err != nil { //nolint:gosec // script em t.TempDir, replica perm real de /usr/local/bin
+		t.Fatal(err)
+	}
+	opts := okOpts(t)
+	opts.InstallUnitsFrom = sysDir
+	var calls []string
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	if err := copyDeployScripts(context.Background(), opts); err != nil {
+		t.Fatalf("copyDeployScripts err = %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls = %d, want 1: %v", len(calls), calls)
+	}
+	call := calls[0]
+	if strings.HasPrefix(call, "sh ") {
+		t.Fatalf("copyDeployScripts usou shell: %s", call)
+	}
+	if !strings.Contains(call, "install -m 0755") || !strings.Contains(call, "/usr/local/bin/civm-ci-artifact-prune.sh") {
+		t.Fatalf("call inesperada: %s", call)
+	}
+}
+
+func TestCopyDeployScriptsTolerantWhenNoBinDir(t *testing.T) {
+	t.Parallel()
+	// InstallUnitsFrom sem um ../bin irmao: nada a instalar, sem erro (o bootstrap
+	// nao deve falhar so porque um deploy custom nao traz scripts).
+	root := t.TempDir()
+	sysDir := filepath.Join(root, "systemd")
+	if err := os.MkdirAll(sysDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	opts := okOpts(t)
+	opts.InstallUnitsFrom = sysDir
+	var calls int
+	opts.RunFn = func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		calls++
+		return nil, nil
+	}
+	if err := copyDeployScripts(context.Background(), opts); err != nil {
+		t.Fatalf("copyDeployScripts err = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("calls = %d, want 0 (nada a instalar)", calls)
+	}
+}
+
 func TestInstallDockerCEWritesSourceWithoutShell(t *testing.T) {
 	t.Parallel()
 	opts := okOpts(t)

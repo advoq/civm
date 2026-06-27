@@ -25,6 +25,31 @@ mesmas versões de Go/Node/Python/Docker/gh) com mais hardware (4+ cores,
 - ❌ Não armazena credenciais de VM (ver `runbooks/VM-CREDENTIALS.md`).
 - ❌ Não cria PRs nem faz auto-merge.
 
+## A box é uma SIMULAÇÃO SERIALIZADA do CI pago — NÃO a acesse "da forma antiga"
+
+A VM `gha-ubuntu-2404` simula o CI **pago** (GitHub-hosted): cada job começa **limpo, single-repo**,
+como numa VM efêmera nova. Hardware definitivo: `docs/HARDWARE.md`. Modelo de fidelidade: `PAID-CI-PARITY.md`.
+
+**Regras invioláveis para QUALQUER agente (IA ou humano):**
+
+- ❌ **NUNCA clone repos manualmente na VM** (`/home/emdev/codespace`, `$HOME`, etc.) nem deixe estado
+  persistente. Sessões antigas faziam isso e acumularam **~8 GB de clones stale** que nenhuma rotina limpava
+  (removidos no pente-fino de 2026-06-23). O CI **não precisa** de repo clonado: o runner faz checkout
+  **transitório em `_work`** por job e a box **se auto-limpa** (clean-slate).
+- ✅ **Para rodar/testar CI: lance um PR.** É assim que o pago funciona e é assim que a box funciona —
+  o PR dispara o workflow, o runner clona só aquele repo num `_work` limpo, lê o `yaml` e roda. Serial:
+  se já há um PR rodando no self-hosted, o próximo **espera na fila**; entre PRs a box **compacta** (Optimize-VHD).
+- ✅ **Control plane acessível fora de PR (só ops):** `civmctl` (`/usr/local/bin`), o orquestrador (host
+  Windows), hooks (`/opt/civm`) e os timers systemd rodam 24/7 — use-os para diagnóstico/manutenção.
+- ✅ **Dev de civm é no HOST + deploy**, nunca "na VM": edite o worktree no host, rode `go build/test`,
+  e propague via `civmctl self-upgrade` / `deploy/windows/activate-orchestrator.ps1`. A VM roda os **artefatos
+  deployados**, não um checkout de código.
+
+> Por quê: a box é **1 VM compartilhada por 8 runners** (não VM-por-job como o pago). A fidelidade vem de
+> **tratar cada job como efêmero** + **serializar + compactar**. Clonar repo na VM ou deixar estado quebra
+> essa simulação e enche o disco. Os 🧱 estruturais (daemon/disco/dwell compartilhados) estão documentados
+> e aceitos em `PAID-CI-PARITY.md` §5.
+
 ## Para agentes externos (Jules, Codex, aider)
 
 ### Antes de planejar, editar ou abrir PR
