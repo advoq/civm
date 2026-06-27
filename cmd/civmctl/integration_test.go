@@ -68,6 +68,7 @@ func TestIntegration_JobStartedSymlinkDispatch(t *testing.T) {
 	cmd := exec.Command(link,
 		"--pre-cleanup-pct=99",
 		"--hard-fail-pct=100",
+		"--min-free-gb=0",
 		"--host-metrics-path="+writeHealthyHostMetrics(t, dir),
 		"--json",
 	)
@@ -105,6 +106,7 @@ func TestIntegration_LegacyShSymlinkDispatch(t *testing.T) {
 	cmd := exec.Command(link,
 		"--pre-cleanup-pct=99",
 		"--hard-fail-pct=100",
+		"--min-free-gb=0",
 		"--json",
 	)
 	cmd.Env = []string{
@@ -134,6 +136,7 @@ func TestIntegration_ManagedHookScriptDispatchViaBash(t *testing.T) {
 	cmd := exec.Command("bash", script,
 		"--pre-cleanup-pct=99",
 		"--hard-fail-pct=100",
+		"--min-free-gb=0",
 		"--host-metrics-path="+writeHealthyHostMetrics(t, dir),
 		"--json",
 	)
