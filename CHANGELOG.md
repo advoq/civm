@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.22.1](https://github.com/advoq/civm/compare/v1.22.0...v1.22.1) (2026-06-27)
+
+
+### Documentation
+
+* **specs:** land SSDV3 spec for resilient guest access (serial console OOB) ([#148](https://github.com/advoq/civm/issues/148)) ([6f49fd6](https://github.com/advoq/civm/commit/6f49fd6bacfad345f8691fe850e1c1a2f0ad7406))
+* **specs:** land SSDV3 specs for ephemeral clean-slate CI + V: disk budget ([#147](https://github.com/advoq/civm/issues/147)) ([27cde85](https://github.com/advoq/civm/commit/27cde85024939921c37e3a3f6a43d29c0f309604))
+
 ## [1.22.0](https://github.com/advoq/civm/compare/v1.21.0...v1.22.0) (2026-06-27)
 
 
