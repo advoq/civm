@@ -7,6 +7,8 @@ issues: []
 
 # SPECv3 — Disco limpo (≥51 GB) por batch: PR e re-run
 
+> ⚠️ **SUPERSEDED por [`SPECv5.md`](SPECv5.md)** (gate por-evento `running>0→0`; piso vivo `AdmitFloorGB`=55). Mantido como histórico de design.
+
 > Versão melhorada após a **2ª** auditoria do Passo 2.5.
 > Baselines preservados: `SPEC.md` e `SPECv2.md` (histórico; não alterados).
 > **Auditado:** `SPECv2.md` → veredito **no-go** (1 blocker + 9 high + 6 med + 6 low).

@@ -5,6 +5,8 @@ Status: implementado e ativo na box (2026-06-17)
 Precedente: `docs/specs/host-volume-reclamation/SPEC.md` (gate de 2 fases, issue #106),
 `docs/specs/host-volume-reclaim-liveness/SPEC.md`, `docs/specs/civm-disk-watchdog-busy-cleanup/SPEC.md`
 
+> **Nota de reconciliação (implementação atual).** O piso `AdmitFloorGB` foi elevado de **51→55** no código vivo (`decision.ps1`/`reclaim-gate.ps1`/`vm-orchestrator.ps1`); onde este doc cita "51" como piso de admissão, o valor vivo é **55** (guest floor 40; host warn/panic 28/18; `MinFreeGB`=58 por job). O **RF-10** (disco limpo por batch) foi **fechado** por [`civm-disk-gate-per-batch/SPECv5.md`](../civm-disk-gate-per-batch/SPECv5.md) — gate POR-EVENTO (`running>0→0`).
+
 > **Por que este SPEC existe.** Uma scheduled task SYSTEM (`civm-vm-orchestrator`,
 > a cada 2 min) tem poder de **desligar a VM com `Stop-VM -Force` e compactar o
 > VHDX offline MESMO com jobs de CI rodando** (caminho `panic_compact`). É uma
@@ -280,7 +282,7 @@ Um floor de um plano **nunca** deve ser comparado a um floor do outro.
 
 | Gate | Valor | Onde vive (constante) | Onde é aplicado | Ação ao cruzar |
 | --- | --- | --- | --- | --- |
-| `AdmitFloorGB` | **51** | `orchestrator.ps1:286`, `decision.ps1:27` | `Get-OrchestratorDecision` (VM Off + fila) | `reclaim_before_admit`: compacta ANTES de admitir o batch |
+| `AdmitFloorGB` | **55** | `orchestrator.ps1:286`, `decision.ps1:27` | `Get-OrchestratorDecision` (VM Off + fila) | `reclaim_before_admit`: compacta ANTES de admitir o batch |
 | `WarnFloorGB` | **28** | `orchestrator.ps1:59`, `decision.ps1:16` | `Get-OrchestratorDecision` (Running + work) | `warn_clean`: poda online, **não** mata job |
 | `PanicFloorGB` | **18** | `orchestrator.ps1:60`, `decision.ps1:17` | `Get-OrchestratorDecision` (Running + work) | `panic_compact`: compacta offline **mata job** |
 | `CritFreeGB` | **10** | `civm.DefaultHostVolumeCritFreeGB` (`civm.go:105`) | `hostdisk.levelByFree` (`hostdisk.go:193-201`); gate host-aware do hook `job-started` (`hook.go:246-249`) | rejeita o job (`Blocks()`) se o snapshot for FRESCO |

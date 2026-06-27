@@ -7,6 +7,8 @@ issues: []
 
 # SPECv4 (FINAL e DEFINITIVA) — Disco limpo (≥51 GB) por batch: PR e re-run
 
+> ⚠️ **SUPERSEDED por [`SPECv5.md`](SPECv5.md)** — apesar do "FINAL" no título, a SPECv5 mudou o trigger para POR-EVENTO (`running>0→0`) e o piso vivo é `AdmitFloorGB`=55. Mantido como histórico de design.
+
 > Versão **final** após a 3ª auditoria do Passo 2.5. Auto-contida: é **o contrato
 > de implementação** (Passo 3). Substitui as anteriores como candidata ativa.
 > Baselines preservados (histórico, não alterados): `SPEC.md`, `SPECv2.md`, `SPECv3.md`.
