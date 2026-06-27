@@ -92,9 +92,31 @@ if echo "$COMMAND" | grep -qE 'rm\s+-rf\s+/'; then
   exit 2
 fi
 
-# Block chmod 777
-if echo "$COMMAND" | grep -qE 'chmod\s+777'; then
+# Block chmod 777 (any flags / octal variants: chmod -R 777, chmod 0777)
+if echo "$COMMAND" | grep -qE 'chmod\s+(-[a-zA-Z]+\s+)*0?777'; then
   echo "BLOCKED: chmod 777 not allowed" >&2
+  exit 2
+fi
+
+# Block writes to raw block devices (dd / mkfs / shell redirect). Destructive and
+# never a legit Claude command in civm — civmctl does its own device ops itself.
+# (scan the whole command, so a sudo prefix does not get past these)
+if echo "$COMMAND" | grep -qE '\bdd\b[^|]*\bof=/dev/'; then
+  echo "BLOCKED: refusing dd to a block device" >&2
+  exit 2
+fi
+if echo "$COMMAND" | grep -qE '\bmkfs(\.[a-z0-9]+)?\b'; then
+  echo "BLOCKED: refusing to format a filesystem (mkfs)" >&2
+  exit 2
+fi
+if echo "$COMMAND" | grep -qE '>\s*/dev/(sd|nvme|vd|mapper)'; then
+  echo "BLOCKED: refusing to overwrite a block device" >&2
+  exit 2
+fi
+
+# Block fork bomb (:(){ :|:& };:)
+if echo "$COMMAND" | grep -qE ':\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:'; then
+  echo "BLOCKED: fork bomb pattern" >&2
   exit 2
 fi
 

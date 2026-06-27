@@ -51,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/lint-on-write.sh"
+            "command": "bash \"$(git rev-parse --show-toplevel 2>/dev/null)/.claude/hooks/lint-on-write.sh\""
           }
         ]
       }
