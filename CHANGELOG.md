@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.0](https://github.com/advoq/civm/compare/v1.21.0...v1.22.0) (2026-06-27)
+
+
+### Features
+
+* **civm:** PR-queue FIFO gate + disk-gate boundary hardening ([#145](https://github.com/advoq/civm/issues/145)) ([cb19f97](https://github.com/advoq/civm/commit/cb19f9772596d893c50b7516c369f573818af2f6))
+
 ## [1.21.0](https://github.com/advoq/civm/compare/v1.20.0...v1.21.0) (2026-06-19)
 
 
