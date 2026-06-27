@@ -21,7 +21,7 @@ Antes de planejar, editar ou abrir PR:
 
 ## Metodologias Core
 
-- **Kahneman Disciplines**: decisões de arquitetura/power-state/disk-safety seguem as disciplinas de Kahneman (`docs/methodology/` se houver). Evite "Sistema 1"; registre counterfactuals e triggers de rollback.
+- **Kahneman Disciplines**: decisões de arquitetura/power-state/disk-safety seguem as disciplinas de Kahneman ([`disciplines/KAHNEMAN-DISCIPLINES.md`](disciplines/KAHNEMAN-DISCIPLINES.md)). Evite "Sistema 1"; registre counterfactuals e triggers de rollback.
 - **SSDV3**: Spec-Driven Development. Pipeline PRD → SPEC → IMPL. Veja [`rules/ssdv3.md`](rules/ssdv3.md).
 
 ## Commits & PRs
@@ -33,7 +33,7 @@ Antes de planejar, editar ou abrir PR:
 ## Visão geral da stack
 
 - **CLI**: Go 1.26 — `civmctl` (`github.com/advoq/civm`), provisiona e mantém a VM self-hosted (GitHub Actions runner, label `civm`).
-- **VM**: Ubuntu 24.04 LTS em paridade com `ubuntu-latest`, gerenciada via Hyper-V no host; **scale-to-zero** (liga sob demanda, gate de disco ~51GB).
+- **VM**: Ubuntu 24.04 LTS em paridade com `ubuntu-latest`, gerenciada via Hyper-V no host; **scale-to-zero** (liga sob demanda, gate de disco ~55GB — `AdmitFloorGB`; guest floor 40, clean-slate por job `MinFreeGB`=58).
 - **Operação privilegiada é esperada**: `sudo civmctl bootstrap`, `systemctl`, units systemd e timers fazem parte do fluxo normal — diferente de repos de aplicação, aqui `sudo` é legítimo.
 
 Consulte [`rules/*.md`](rules/) para as diretrizes profundas de cada tópico.

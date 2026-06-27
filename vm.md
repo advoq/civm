@@ -65,7 +65,7 @@ Cada um com seu `~/actions-runner-{repo}/` e cache yarn escopado
 
 ## Disco — modelo de limpeza
 
-- **Estado limpo alvo (por PR):** **~51 GB livres** no guest (full clean: zera
+- **Estado limpo alvo (por PR):** **~58 GB livres** no guest (`MinFreeGB`; full clean: zera
   `~/.cache/*` + `docker system prune -af --volumes`).
 - **VHDX:** dinâmico; só encolhe com `Optimize-VHD -Mode Full` **com a VM off +
   `Mount-VHD -ReadOnly`** (sem o mount, o Optimize vira no-op — confirmado

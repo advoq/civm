@@ -35,7 +35,7 @@ The operation was canceled
 Foi exatamente o que derrubou `ms-billing` e `ms-core` no PR #1184
 (validation.md 2026-06-18 20:35). O `govulncheck` dos dois passou — o codigo
 compila; **nao era bug de codigo, era contencao de runner**. O deep-clean de
-disco (~51 GB livres) nao resolve: o problema e **concorrencia**, nao espaco.
+disco (~58 GB livres) nao resolve: o problema e **concorrencia**, nao espaco.
 
 Mantendo so o runner org, advoq nunca roda 2 jobs simultaneos: a fila daquele
 unico runner serializa tudo. Medido: `runner busy peak = 1` durante o re-run do

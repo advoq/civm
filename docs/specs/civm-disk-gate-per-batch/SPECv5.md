@@ -7,6 +7,8 @@ issues: []
 
 # SPECv5 — 1 compactação por PR, por EVENTO (não por timer)
 
+> **Nota de reconciliação (implementação):** o piso `AdmitFloorGB` foi elevado de **51→55** no código vivo (`deploy/windows/civm-orchestrator-decision.ps1`). Onde este doc cita "51", o valor vivo é **AdmitFloorGB=55** (guest floor 40; clean-slate por job `MinFreeGB`=58).
+
 > Revisão de SPECv4 após feedback do usuário + **medição** na box. SPECv4 mirava
 > "≥51 por batch" e a 1ª implementação compactava por **gap** (`running==0`), o que
 > **thrashou** sob carga. A v4.1 (cooldown por-TEMPO, 20min) matou o thrash mas era a
