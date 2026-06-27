@@ -552,7 +552,7 @@ func TestCopyDeployScriptsInstallsBinScripts(t *testing.T) {
 	sysDir := filepath.Join(root, "systemd")
 	binDir := filepath.Join(root, "bin")
 	for _, d := range []string{sysDir, binDir} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
+		if err := os.MkdirAll(d, 0o750); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -587,7 +587,7 @@ func TestCopyDeployScriptsTolerantWhenNoBinDir(t *testing.T) {
 	// nao deve falhar so porque um deploy custom nao traz scripts).
 	root := t.TempDir()
 	sysDir := filepath.Join(root, "systemd")
-	if err := os.MkdirAll(sysDir, 0o755); err != nil {
+	if err := os.MkdirAll(sysDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	opts := okOpts(t)
