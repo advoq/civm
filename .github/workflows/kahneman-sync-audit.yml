@@ -105,4 +105,4 @@ jobs:
           gh issue create \
             --title "$TITLE" \
             --body "$BODY" \
-            --label "audit,governance"
+            --label "audit,area:governance"
