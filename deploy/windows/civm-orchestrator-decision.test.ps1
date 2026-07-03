@@ -2,14 +2,18 @@
 # positivo (Kahneman #13). Sem Pester. Dot-source o MESMO modulo que producao usa.
 . "$PSScriptRoot\civm-orchestrator-decision.ps1"
 $F = $false; $T = $true
-# Politica vigente (2026-06-25): NAO se compacta no MEIO de um batch. Com a VM Running
-# e job na FILA (Running==0 + Queued>0), a box MANTEM a VM up (mark_busy) pra o runner
-# pegar os jobs — o boundary_compact "incondicional" thrashava (compactava em todo gap
-# entre as ondas de jobs do mesmo push, parando a VM ~6min com a fila cheia; incidente
-# main-push 699eb1d 02:17). Compact so quando a fila ZERA (idle stop_and_compact) ou na
-# barreira do Off (reclaim_before_admit antes de admitir). O compact ENTRE PRs de
-# verdade vem da fila FIFO por-PR (civm-pr-queue.ps1). Floors: host AdmitFloorGB=55
-# (alcancavel; compact chega a ~67), guest GuestFloorGB=40 (Ubuntu ~45-63, nunca 70).
+# Politica vigente (2026-06-25, refinada por civm#154 em 2026-07-03): NAO se PARA/
+# COMPACTA OFFLINE no MEIO de um batch. Com a VM Running e job na FILA (Running==0 +
+# Queued>0), a box MANTEM a VM up pra o runner pegar os jobs — o boundary_compact
+# "incondicional" thrashava (compactava em todo gap entre as ondas de jobs do mesmo
+# push, parando a VM ~6min com a fila cheia; incidente main-push 699eb1d 02:17).
+# Compact OFFLINE so quando a fila ZERA (idle stop_and_compact) ou na barreira do Off
+# (reclaim_before_admit antes de admitir). O compact OFFLINE entre PRs de verdade vem
+# da fila FIFO por-PR (civm-pr-queue.ps1). civm#154: abaixo de AdmitFloorGB (55) o
+# caminho quente agora tenta reclaim ONLINE (reclaim_online_before_admit — mesma
+# limpeza segura do warn_clean, nunca para a VM) antes de so marcar busy; isso NAO
+# reintroduz o thrash porque nunca faz Stop-VM. Floors: host AdmitFloorGB=55
+# (alcancavel; compact OFFLINE chega a ~67), guest GuestFloorGB=40 (Ubuntu ~45-63, nunca 70).
 # Chaves por-caso: cp=CanPanic (def T), gf=GuestFreeGB (def 999), gfl=GuestFloorGB (40),
 # afl=AdmitFloorGB (55), ra=AdmitReclaimAttempts (0), pr=PrevRunning (1). vfree=999=folgado.
 $cases = @(
@@ -49,20 +53,24 @@ $cases = @(
     @{ vm = 'Running'; q = 0; r = 0; idle = 5; stop = 10; job = $F; vfree = 15; exp = 'idle_debounce'; d = 'idle<10 -> debounce (ocioso nao consome disco)' },
     @{ vm = 'Running'; q = 0; r = 0; idle = 30; stop = 10; job = $T; vfree = 15; exp = 'stop_aborted_active_job'; d = 'idle + worker no guest -> ABORTA stop (safety)' },
     @{ vm = 'Running'; q = 0; r = 0; idle = 0; stop = 10; job = $F; vfree = 35; exp = 'idle_debounce'; d = 'Queued=0 (nada na fila) -> idle, nao compacta' },
-    # --- FILA QUENTE (VM Running, Running==0, Queued>0): mark_busy SEMPRE — NAO compacta ---
+    # --- FILA QUENTE (VM Running, Running==0, Queued>0): NUNCA para/compacta OFFLINE ---
     # --- no meio do batch (o fix do thrash main-push 699eb1d). Mantem a VM up pros jobs. ---
+    # --- Abaixo do AdmitFloorGB (55) tenta reclaim ONLINE primeiro (civm#154). ---
     @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 999; exp = 'mark_busy'; d = 'fila quente + disco folgado -> mantem up (sem compact mid-batch)' },
-    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 45; exp = 'mark_busy'; d = 'fila quente + V=45 -> mantem up (NAO compacta no gap)' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 56; exp = 'mark_busy'; d = 'fila quente + V=56 (>floor) -> mantem up' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 55; exp = 'mark_busy'; d = 'fila quente + V=55 (==floor) -> mantem up (borda, nao reclaim)' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 54; exp = 'reclaim_online_before_admit'; d = 'fila quente + V=54 (<floor, borda) -> reclaim ONLINE, NAO para a VM' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 45; exp = 'reclaim_online_before_admit'; d = 'fila quente + V=45 (<55) -> reclaim ONLINE antes de so marcar busy (civm#154)' },
     @{ vm = 'Running'; q = 3; r = 0; idle = 0; stop = 10; job = $F; vfree = 67; exp = 'mark_busy'; d = 'fila quente + V=67 -> mantem up' },
-    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 0; exp = 'mark_busy'; d = 'fila quente + V=0 -> mantem up (fail-safe)' },
-    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 45; pr = 5; exp = 'mark_busy'; d = 'transicao >0->0 NAO compacta mais (era boundary_compact) -> mark_busy' },
-    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 45; pr = 0; exp = 'mark_busy'; d = 'sem transicao -> mark_busy' },
-    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $T; vfree = 45; exp = 'mark_busy'; d = 'job ativo no guest tb -> mark_busy (sem boundary, probe-gate aposentado aqui)' },
-    @{ vm = 'Running'; q = 2; r = 0; idle = 0; stop = 10; job = $F; vfree = 45; ra = 2; exp = 'mark_busy'; d = 'fila quente + 2 tentativas -> mark_busy' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 0; exp = 'mark_busy'; d = 'fila quente + V=0 (nao medi) -> mantem up (fail-safe, nunca reclaim as cegas)' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 45; pr = 5; exp = 'reclaim_online_before_admit'; d = 'transicao >0->0 ainda NAO compacta OFFLINE (era boundary_compact) -> reclaim online' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 45; pr = 0; exp = 'reclaim_online_before_admit'; d = 'sem transicao -> mesmo reclaim online (PrevRunning nao importa aqui)' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $T; vfree = 45; exp = 'reclaim_online_before_admit'; d = 'job ativo no guest tb -> reclaim online (fstrim/prune ja e seguro com job ativo, ver caso Running>0+V<28)' },
+    @{ vm = 'Running'; q = 2; r = 0; idle = 0; stop = 10; job = $F; vfree = 45; ra = 2; exp = 'reclaim_online_before_admit'; d = 'fila quente + 2 tentativas -> reclaim online mesmo assim (nao bloqueia, sem anti-deadlock aqui)' },
     # --- PRECEDENCIA: panic (V<18) ainda precede a fila quente ---
     @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 15; cp = $T; exp = 'panic_compact'; d = 'fila quente + V<18 + cp=T -> panic precede (disco critico manda)' },
-    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 15; cp = $F; exp = 'mark_busy'; d = 'fila quente + V<18 + cooldown -> panic pulado -> mantem up' },
-    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 25; exp = 'mark_busy'; d = 'fila quente + V<28 -> mantem up (warn so com Running>0)' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 15; cp = $F; exp = 'reclaim_online_before_admit'; d = 'fila quente + V<18 + cooldown -> panic pulado -> tenta reclaim online (melhor que nada)' },
+    @{ vm = 'Running'; q = 1; r = 0; idle = 0; stop = 10; job = $F; vfree = 25; exp = 'reclaim_online_before_admit'; d = 'fila quente + V<28 -> reclaim online (mesma limpeza do warn_clean, sem Running>0)' },
     @{ vm = 'Running'; q = 0; r = 2; idle = 0; stop = 10; job = $F; vfree = 27; exp = 'warn_clean'; d = 'Running>0 + V<28 -> warn online' }
 )
 $pass = 0; $fail = 0
@@ -92,6 +100,8 @@ Test-Eq (Resolve-AdmitTransition -State (New-St 0) -Decision 'panic_compact' -Ru
 Test-Eq (Resolve-AdmitTransition -State (New-St 2) -Decision 'start' -Running 0 -Queued 1 -VAfter 67 -Floor 55).admitReclaimAttempts 0 'Resolve start -> reset'
 Test-Eq (Resolve-AdmitTransition -State (New-St 2) -Decision 'mark_busy' -Running 0 -Queued 1 -VAfter 67 -Floor 55).admitReclaimAttempts 0 'Resolve mark_busy + admissao -> reset'
 Test-Eq (Resolve-AdmitTransition -State (New-St 2) -Decision 'mark_busy' -Running 2 -Queued 1 -VAfter 45 -Floor 55).admitReclaimAttempts 2 'Resolve mark_busy + Running>0 (mid-batch) -> NAO reseta'
+Test-Eq (Resolve-AdmitTransition -State (New-St 2) -Decision 'reclaim_online_before_admit' -Running 0 -Queued 1 -VAfter 45 -Floor 55).admitReclaimAttempts 0 'Resolve reclaim_online_before_admit (civm#154) -> reseta como mark_busy, nao conta (nao bloqueia)'
+Test-Eq (Resolve-AdmitTransition -State (New-St 0) -Decision 'boundary_compact' -Running 0 -Queued 1 -VAfter 45 -Floor 55).admitReclaimAttempts 0 "Resolve boundary_compact (decision morta desde 2026-06-25, Get-OrchestratorDecision nunca retorna isso) -> cai no default, sem efeito"
 
 ''; "RESULTADO: $pass PASS / $fail FAIL"
 if ($fail -gt 0) { exit 1 }
