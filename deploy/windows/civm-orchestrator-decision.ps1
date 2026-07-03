@@ -27,12 +27,15 @@ function Resolve-AdmitTransition {
     param([Parameter(Mandatory)]$State, [Parameter(Mandatory)][string]$Decision,
           [int]$Running, [int]$Queued, [int]$VAfter, [int]$Floor = 55)
     switch ($Decision) {
-        'reclaim_before_admit' { return (Update-AdmitAttempts -State $State -VAfter $VAfter -Floor $Floor) }
-        'boundary_compact'     { return (Update-AdmitAttempts -State $State -VAfter $VAfter -Floor $Floor) }
-        'panic_compact'        { if ($Running -eq 0) { return (Update-AdmitAttempts -State $State -VAfter $VAfter -Floor $Floor) }; return $State }
-        'start'                { $State.admitReclaimAttempts = 0; return $State }
-        'mark_busy'            { if ($Running -eq 0 -and $Queued -gt 0) { $State.admitReclaimAttempts = 0 }; return $State }
-        default                { return $State }
+        'reclaim_before_admit'        { return (Update-AdmitAttempts -State $State -VAfter $VAfter -Floor $Floor) }
+        'panic_compact'               { if ($Running -eq 0) { return (Update-AdmitAttempts -State $State -VAfter $VAfter -Floor $Floor) }; return $State }
+        'start'                       { $State.admitReclaimAttempts = 0; return $State }
+        'mark_busy'                   { if ($Running -eq 0 -and $Queued -gt 0) { $State.admitReclaimAttempts = 0 }; return $State }
+        # Mesmo gate warm de 'mark_busy' (Running==0+Queued>0): o contador e da barreira
+        # BLOQUEANTE do Off, e este caminho ja passou por ela. Reclaim online e best-effort,
+        # nao alimenta o contador anti-deadlock (nada aqui bloqueia progresso).
+        'reclaim_online_before_admit' { $State.admitReclaimAttempts = 0; return $State }
+        default                       { return $State }
     }
 }
 
@@ -107,7 +110,7 @@ function Get-OrchestratorDecision {
     # (CanPanic); dentro, o panic rebaixa pra warn_clean (nao re-mata em loop).
     if ($hasWork -and $VFreeGB -gt 0 -and $VFreeGB -lt $PanicFloorGB -and $CanPanic) { return 'panic_compact' }
     # FILA QUENTE (VM Running, Running==0, Queued>0): ha job na FILA esperando o runner
-    # pegar. MANTEM a VM up (mark_busy) — NAO compacta no meio do batch.
+    # pegar. MANTEM a VM up — NAO para nem compacta OFFLINE no meio do batch.
     #
     # O boundary_compact "incondicional" (compactar em todo running>0->0 com fila cheia)
     # THRASHAVA: o running count do GitHub oscila entre as ONDAS de jobs do MESMO push
@@ -115,10 +118,23 @@ function Get-OrchestratorDecision {
     # e cada gap virava um Stop-VM de ~6min com a fila cheia e o runner OFFLINE (incidente
     # main-push 699eb1d 02:17: 8 jobs travados). A heuristica "running==0 + queued>0 ==
     # fim de PR" e furada — nao distingue gap-de-batch de boundary-de-PR. O probe-gate so
-    # cobria job ATIVO (Runner.Worker), nao job na FILA. O compact ENTRE PRs de verdade vem
-    # da fila FIFO por-PR (civm-pr-queue.ps1: grace + PR-grouping; so compacta quando o PR
-    # atual ACABOU). Sem ela, so se compacta quando a fila ZERA (o idle stop_and_compact
-    # abaixo, Queued==0) — seguro, nunca orfana a fila.
+    # cobria job ATIVO (Runner.Worker), nao job na FILA. O compact OFFLINE entre PRs de
+    # verdade vem da fila FIFO por-PR (civm-pr-queue.ps1: grace + PR-grouping; so compacta
+    # quando o PR atual ACABOU). Sem ela, o compact OFFLINE so acontece quando a fila ZERA
+    # (o idle stop_and_compact abaixo, Queued==0) — seguro, nunca orfana a fila.
+    #
+    # civm#154: ate aqui este caminho nao checava NENHUM piso de disco alem do panic (18,
+    # linha acima) — um re-run ou PR novo entrando com a VM ja quente e o V: entre 18 e 55
+    # (AdmitFloorGB) admitia "sujo", sem tentar reclaim, e um checkout grande podia falhar
+    # com index file corrompido por falta de espaco (run 28648932558, 2026-07-03). O piso
+    # de 55 continua so bloqueando no cold-start (branch Off acima) de proposito — bloquear
+    # aqui reintroduziria o mesmo risco do boundary_compact. Em vez disso, abaixo do floor
+    # de admissao o caminho quente tenta a MESMA limpeza online ja usada e provada segura
+    # em warn_clean (fstrim + docker builder prune via SSH, nunca Stop-VM, nunca mata job —
+    # ver o caso Running>0+V<28 alguns testes acima, que ja roda essa limpeza com job
+    # confirmado ativo). Reclaim best-effort, sem contador anti-deadlock (nao bloqueia
+    # nada — o proximo tick tenta de novo se nao foi suficiente).
+    if ($Running -eq 0 -and $Queued -gt 0 -and $VFreeGB -gt 0 -and $VFreeGB -lt $AdmitFloorGB) { return 'reclaim_online_before_admit' }
     if ($Running -eq 0 -and $Queued -gt 0) { return 'mark_busy' }
     # Disco baixo com JOB RODANDO (Running>0): poda online, sem stop/kill.
     if ($hasWork -and $VFreeGB -gt 0 -and $VFreeGB -lt $WarnFloorGB) { return 'warn_clean' }

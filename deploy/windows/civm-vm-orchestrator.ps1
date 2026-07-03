@@ -450,12 +450,25 @@ try {
             }
         }
         'mark_busy' {
-            # Admissao warm (Running==0 + Queued>0): se admite sujo (<55, via attempts>=2),
-            # emite o evento. O reset do contador e do Resolve-AdmitTransition pos-switch.
-            if ($running -eq 0 -and $queued -gt 0 -and $vfree -gt 0 -and $vfree -lt $AdmitFloorGB) {
-                $evt = if ($Observe) { 'would_disk_below_floor_admitted' } else { 'disk_below_floor_admitted' }
-                Write-OrcLog $evt @{ v_free_gb = $vfree; guest_free_gb = $guestFree; floor = $AdmitFloorGB; attempts = [int]$state.admitReclaimAttempts; path = 'warm' }
-            }
+            # Admissao warm (Running==0 + Queued>0), disco >= AdmitFloorGB ou nao medido
+            # (vfree<=0, fail-safe): mantem a VM up, sem reclaim (nada pra reclamar). O
+            # sub-caso "admite sujo" (vfree>0 e <floor) agora e o proprio decision
+            # 'reclaim_online_before_admit' abaixo -- este branch nunca mais o ve
+            # (civm#154; o reset do contador continua no Resolve-AdmitTransition pos-switch).
+            if (-not $Observe) { $state.lastBusyUtc = $nowUtc; Save-State $state }
+        }
+        'reclaim_online_before_admit' {
+            # civm#154: fila quente (Running==0 + Queued>0) com disco < AdmitFloorGB (55).
+            # NUNCA para a VM (evita reintroduzir o thrash de boundary_compact removido em
+            # 2026-06-25) -- so tenta a MESMA limpeza online ja provada segura no warn_clean
+            # (fstrim + docker builder prune via SSH). Best-effort: sem contador
+            # anti-deadlock, o proximo tick tenta de novo se nao foi suficiente. O evento
+            # disk_below_floor_admitted preserva o nome/shape ja usado por dashboards
+            # existentes; disk_warm_reclaim_online e o evento NOVO desta tentativa.
+            $evt = if ($Observe) { 'would_disk_below_floor_admitted' } else { 'disk_below_floor_admitted' }
+            Write-OrcLog $evt @{ v_free_gb = $vfree; guest_free_gb = $guestFree; floor = $AdmitFloorGB; attempts = [int]$state.admitReclaimAttempts; path = 'warm' }
+            if ($Observe) { Write-OrcLog 'would_warm_reclaim_online' @{ v_free_gb = $vfree; floor = $AdmitFloorGB } }
+            else { Write-OrcLog 'disk_warm_reclaim_online' @{ v_free_gb = $vfree; floor = $AdmitFloorGB }; Invoke-GuestWarnClean }
             if (-not $Observe) { $state.lastBusyUtc = $nowUtc; Save-State $state }
         }
         'idle_debounce' { Write-OrcLog 'idle_debounce' @{ idle_min = [math]::Round($idleMin, 1); need = $IdleStopMinutes } }
@@ -470,30 +483,6 @@ try {
             # online (cache de build + fstrim), SEM desligar, SEM matar job.
             if ($Observe) { Write-OrcLog 'would_warn_clean' @{ v_free_gb = $vfree; floor = $WarnFloorGB } }
             else { Write-OrcLog 'disk_warn' @{ v_free_gb = $vfree; floor = $WarnFloorGB }; Invoke-GuestWarnClean }
-        }
-        'boundary_compact' {
-            # COMPACT ANTES DE CADA PR (Running==0 + Queued>0 na transicao >0->0): compacta
-            # incondicional no V, mas a decision so chega aqui depois da probe SSH confirmar
-            # o guest OCIOSO — sem esse gate o running count laggado do GitHub fazia o
-            # Stop-VM matar um job em checkout (incidente 2026-06-24 22:13). O lock
-            # V:\civm-reclaim.lock + o gate Test-OptimizeSlack do Invoke-StopAndCompact
-            # valem aqui. Apos compactar (VM Off), o proximo tick cai no ramo Off e religa
-            # via 'start'. Se a folga pos-Off nao cobrir o scratch, o Invoke-StopAndCompact
-            # pula (reclaim_skip_insufficient_slack). O incremento do contador (anti-deadlock)
-            # e do Resolve-AdmitTransition pos-switch (SPECv4 ITEM-2).
-            if ($Observe) { Write-OrcLog 'would_boundary_compact' @{ v_free_gb = $vfree; floor = $AdmitFloorGB; queued = $queued } }
-            else {
-                Write-OrcLog 'disk_boundary_compact' @{ v_free_gb = $vfree; floor = $AdmitFloorGB; queued = $queued; note = 'fim do PR (running >0->0) -> compacta ate ~67 (probe SSH confirmou guest ocioso, nao mata job em voo)' }
-                Invoke-StopAndCompact -Reason 'boundary_compact'
-            }
-        }
-        'boundary_aborted_active_job' {
-            # A probe SSH viu Runner.Worker ativo no guest (o running count do GitHub ainda
-            # nao tinha pego o job recem-despachado): NAO para a VM, senao mataria o job em
-            # voo. Reseta o idle timer porque a box esta de fato ocupada. Espelha o gate do
-            # stop ocioso (stop_aborted_active_job).
-            Write-OrcLog 'boundary_aborted_active_job' @{ note = 'job ativo no guest (running count do GitHub laggou) -> NAO compacta, preserva o job em voo' }
-            if (-not $Observe) { $state.lastBusyUtc = $nowUtc; Save-State $state }
         }
         'panic_compact' {
             # Disco CRITICO (V < PanicFloor): compacta MESMO ocupado. Mata os jobs
@@ -554,28 +543,38 @@ try {
         if ($EnforceQueue -and -not $Observe) {
             $prevCtx = "$($pq.currentPr)"
             if ($slot.action -eq 'boundary_advance') {
-                # No boundary o proximo PR so e liberado quando a box esta apta. Tres casos:
-                # (a) box JA fresca (V>=floor) -> nao compacta, avanca direto — sem desperdicio
+                # No boundary o proximo PR so e liberado quando a box esta apta. A pergunta
+                # "o guest tem job ativo?" e checada SEMPRE primeiro, independente do disco —
+                # sao duas perguntas independentes (disco limpo nao prova guest ocioso). Antes
+                # desta correcao, o caso "box ja fresca" pulava a probe e avancava direto: se
+                # Resolve-PrSlot decidiu boundary_advance por um miss passageiro de
+                # Get-PrActivity (a contagem de atividade do GitHub e sujeita a lag/timeout,
+                # ver Invoke-RestMethod com try/catch silencioso ali), a box fresca não
+                # provava nada sobre o PR anterior de fato ter acabado — so que o compact
+                # anterior tinha ido bem. Tres casos, agora nesta ordem:
+                # (a) guest com job ativo (via SSH, ground-truth independente da contagem do
+                #     GitHub) -> NAO avanca de jeito nenhum, segura no atual e re-tenta no
+                #     proximo tick — preserva o grace, nunca orfana um PR com trabalho em voo;
+                # (b) guest idle + box JA fresca (V>=floor) -> avanca direto, sem desperdicio
                 #     entre PRs leves que nao sujaram a box;
-                # (b) box suja + guest com job (da main/PR terminando) -> NAO avanca, segura no
-                #     atual e espera esvaziar p/ compactar antes de liberar (senao o proximo
-                #     rodaria numa box suja); preserva o grace e re-tenta no proximo tick;
-                # (c) box suja + guest idle -> compacta e SO entao libera (box fresca).
-                $vNow = Get-VFreeGB
-                if ($vNow -ge $AdmitFloorGB) {
-                    Write-OrcLog 'pr_boundary_skip_clean' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow }
-                    "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
-                }
-                elseif (Get-GuestHasActiveJob) {
-                    Write-OrcLog 'pr_boundary_deferred' @{ done = $prevCtx; reason = 'guest com job ativo -> espera esvaziar p/ compactar antes de liberar' } 'WARN'
+                # (c) guest idle + box suja -> compacta e SO entao libera (box fresca).
+                if (Get-GuestHasActiveJob) {
+                    Write-OrcLog 'pr_boundary_deferred' @{ done = $prevCtx; reason = 'guest com job ativo -> espera esvaziar antes de avancar (independente do disco)' } 'WARN'
                     "$prevCtx" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
                     $slot.currentPr = $prevCtx
                     $slot.idleSinceUtc = "$($pq.currentIdleSinceUtc)"
                 }
                 else {
-                    Write-OrcLog 'pr_boundary_compact' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow } 'WARN'
-                    Invoke-StopAndCompact -Reason 'pr_boundary'
-                    "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                    $vNow = Get-VFreeGB
+                    if ($vNow -ge $AdmitFloorGB) {
+                        Write-OrcLog 'pr_boundary_skip_clean' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow }
+                        "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                    }
+                    else {
+                        Write-OrcLog 'pr_boundary_compact' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow } 'WARN'
+                        Invoke-StopAndCompact -Reason 'pr_boundary'
+                        "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                    }
                 }
             }
             else {

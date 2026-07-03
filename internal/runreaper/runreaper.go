@@ -19,6 +19,7 @@ package runreaper
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -29,6 +30,18 @@ import (
 
 	"github.com/advoq/civm/internal/civm"
 )
+
+// ErrRunAlreadyCompleted marks a cancel attempt against a run that GitHub's
+// own cancel/force-cancel endpoints already reject as completed, even though
+// the list API that surfaced it as a reap candidate still reports
+// status=queued/in_progress. This is a known GitHub-side staleness (a run
+// cancelled/finished weeks ago can outlive its "queued" listing indefinitely
+// — confirmed live against advoq/advoq run 26423751663/26423751642, created
+// 2026-05-25, still listed queued today though `gh run cancel` already
+// answered "Cannot cancel a run that is completed" on 2026-06-17). The
+// reaper's job here is already done — GitHub agrees the run isn't running —
+// so this is not a reaper failure and must not be reported as one.
+var ErrRunAlreadyCompleted = errors.New("run already completed per github (list api desync)")
 
 // DefaultMaxCancelPerRepo bounds how many runs a single tick may cancel per
 // repo. A real backlog of hundreds is handled across successive ticks; the cap
@@ -146,6 +159,19 @@ func reapRepo(ctx context.Context, opts Options, repo string, report *Report) {
 			continue
 		}
 		if err := opts.CancelFn(ctx, repo, run.ID); err != nil {
+			if errors.Is(err, ErrRunAlreadyCompleted) {
+				// GitHub already agrees the run is over -- there is nothing
+				// left for the reaper to do. Reporting this identically to a
+				// real cancel failure was the bug itself (validation.md
+				// 2026-06-17): the silent 5-min retry against the same ghost
+				// runs never looked different from a genuine problem, so a
+				// real cancel failure could hide behind it indefinitely.
+				ev.Severity = "info"
+				ev.Reason = "already-completed-ghost"
+				ev.Detail = err.Error()
+				report.add(ev)
+				continue
+			}
 			ev.Severity = "warning"
 			ev.Reason = "cancel-failed"
 			ev.Detail = err.Error()
@@ -195,8 +221,21 @@ func applyDefaults(opts *Options) {
 	}
 }
 
+// defaultRun shells out and folds stderr into the returned error. Plain
+// exec.ExitError.Error() is just "exit status N" -- Output() only captures
+// stderr into ExitError.Stderr, it never surfaces in the error text -- so
+// without this, cancelRun's already-completed detection would have nothing
+// to match against and every gh api rejection would look identical.
 func defaultRun(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).Output()
+	out, err := exec.CommandContext(ctx, name, args...).Output()
+	if err == nil {
+		return out, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+		return out, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
+	}
+	return out, err
 }
 
 func listOpenBranches(ctx context.Context, repo string, runFn func(context.Context, string, ...string) ([]byte, error)) (map[string]bool, error) {
@@ -284,14 +323,31 @@ func parseActiveRuns(out []byte, repo string) ([]Run, error) {
 func cancelRun(ctx context.Context, repo string, runID int64, runFn func(context.Context, string, ...string) ([]byte, error)) error {
 	id := strconv.FormatInt(runID, 10)
 	force := fmt.Sprintf("/repos/%s/actions/runs/%s/force-cancel", repo, id)
-	if _, err := runFn(ctx, "gh", "api", "-X", "POST", force, "--silent"); err == nil {
+	_, forceErr := runFn(ctx, "gh", "api", "-X", "POST", force, "--silent")
+	if forceErr == nil {
 		return nil
 	}
 	normal := fmt.Sprintf("/repos/%s/actions/runs/%s/cancel", repo, id)
-	if _, err := runFn(ctx, "gh", "api", "-X", "POST", normal, "--silent"); err != nil {
-		return fmt.Errorf("gh api cancel/force-cancel run %s: %w", id, err)
+	_, normalErr := runFn(ctx, "gh", "api", "-X", "POST", normal, "--silent")
+	if normalErr == nil {
+		return nil
 	}
-	return nil
+	if isAlreadyCompletedError(forceErr) || isAlreadyCompletedError(normalErr) {
+		return fmt.Errorf("%w (force-cancel: %s; cancel: %s)", ErrRunAlreadyCompleted, forceErr.Error(), normalErr.Error())
+	}
+	return fmt.Errorf("gh api cancel/force-cancel run %s: %w", id, normalErr)
+}
+
+// isAlreadyCompletedError matches GitHub's rejection text when a run's own
+// cancel/force-cancel endpoints already consider it finished, regardless of
+// what the list API that surfaced it as a candidate still reports. Matched
+// verbatim against a live `gh run cancel` rejection (validation.md
+// 2026-06-17): "Cannot cancel a run that is completed."
+func isAlreadyCompletedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "cannot cancel a run that is completed")
 }
 
 func maxInt(a, b int) int {
