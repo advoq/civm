@@ -543,28 +543,38 @@ try {
         if ($EnforceQueue -and -not $Observe) {
             $prevCtx = "$($pq.currentPr)"
             if ($slot.action -eq 'boundary_advance') {
-                # No boundary o proximo PR so e liberado quando a box esta apta. Tres casos:
-                # (a) box JA fresca (V>=floor) -> nao compacta, avanca direto — sem desperdicio
+                # No boundary o proximo PR so e liberado quando a box esta apta. A pergunta
+                # "o guest tem job ativo?" e checada SEMPRE primeiro, independente do disco —
+                # sao duas perguntas independentes (disco limpo nao prova guest ocioso). Antes
+                # desta correcao, o caso "box ja fresca" pulava a probe e avancava direto: se
+                # Resolve-PrSlot decidiu boundary_advance por um miss passageiro de
+                # Get-PrActivity (a contagem de atividade do GitHub e sujeita a lag/timeout,
+                # ver Invoke-RestMethod com try/catch silencioso ali), a box fresca não
+                # provava nada sobre o PR anterior de fato ter acabado — so que o compact
+                # anterior tinha ido bem. Tres casos, agora nesta ordem:
+                # (a) guest com job ativo (via SSH, ground-truth independente da contagem do
+                #     GitHub) -> NAO avanca de jeito nenhum, segura no atual e re-tenta no
+                #     proximo tick — preserva o grace, nunca orfana um PR com trabalho em voo;
+                # (b) guest idle + box JA fresca (V>=floor) -> avanca direto, sem desperdicio
                 #     entre PRs leves que nao sujaram a box;
-                # (b) box suja + guest com job (da main/PR terminando) -> NAO avanca, segura no
-                #     atual e espera esvaziar p/ compactar antes de liberar (senao o proximo
-                #     rodaria numa box suja); preserva o grace e re-tenta no proximo tick;
-                # (c) box suja + guest idle -> compacta e SO entao libera (box fresca).
-                $vNow = Get-VFreeGB
-                if ($vNow -ge $AdmitFloorGB) {
-                    Write-OrcLog 'pr_boundary_skip_clean' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow }
-                    "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
-                }
-                elseif (Get-GuestHasActiveJob) {
-                    Write-OrcLog 'pr_boundary_deferred' @{ done = $prevCtx; reason = 'guest com job ativo -> espera esvaziar p/ compactar antes de liberar' } 'WARN'
+                # (c) guest idle + box suja -> compacta e SO entao libera (box fresca).
+                if (Get-GuestHasActiveJob) {
+                    Write-OrcLog 'pr_boundary_deferred' @{ done = $prevCtx; reason = 'guest com job ativo -> espera esvaziar antes de avancar (independente do disco)' } 'WARN'
                     "$prevCtx" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
                     $slot.currentPr = $prevCtx
                     $slot.idleSinceUtc = "$($pq.currentIdleSinceUtc)"
                 }
                 else {
-                    Write-OrcLog 'pr_boundary_compact' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow } 'WARN'
-                    Invoke-StopAndCompact -Reason 'pr_boundary'
-                    "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                    $vNow = Get-VFreeGB
+                    if ($vNow -ge $AdmitFloorGB) {
+                        Write-OrcLog 'pr_boundary_skip_clean' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow }
+                        "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                    }
+                    else {
+                        Write-OrcLog 'pr_boundary_compact' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow } 'WARN'
+                        Invoke-StopAndCompact -Reason 'pr_boundary'
+                        "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                    }
                 }
             }
             else {
