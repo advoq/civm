@@ -2,6 +2,7 @@ package runreaper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -168,6 +169,20 @@ func TestReapCancelFailureSetsExit(t *testing.T) {
 	}
 }
 
+// TestDefaultRunFoldsStderrIntoError is the regression for the gap that made
+// isAlreadyCompletedError unreachable in production: exec.ExitError.Error()
+// alone is just "exit status N", the real gh api message lives in
+// ExitError.Stderr and previously never reached the returned error text.
+func TestDefaultRunFoldsStderrIntoError(t *testing.T) {
+	_, err := defaultRun(context.Background(), "sh", "-c", "echo 'Cannot cancel a run that is completed.' >&2; exit 1")
+	if err == nil {
+		t.Fatal("expected a non-nil error from a failing command")
+	}
+	if !strings.Contains(err.Error(), "Cannot cancel a run that is completed") {
+		t.Fatalf("error text lost stderr content: %v", err)
+	}
+}
+
 func TestParseActiveRunsMultiPage(t *testing.T) {
 	// Two concatenated pages as gh --paginate emits them.
 	page := `{"workflow_runs":[{"id":1,"head_branch":"a","event":"pull_request","status":"queued","name":"Go CI","created_at":"2026-06-04T10:00:00Z"}]}` +
@@ -307,5 +322,82 @@ func TestCancelRunBothFail(t *testing.T) {
 	}
 	if err := cancelRun(context.Background(), "advoq/advoq", 42, runFn); err == nil {
 		t.Fatal("expected error when both force-cancel and cancel fail")
+	}
+}
+
+// TestCancelRunAlreadyCompletedWrapsSentinel reproduces the live GitHub
+// rejection from validation.md (2026-06-17): both force-cancel and cancel
+// reject a run the list API still shows queued, because GitHub's own state
+// already considers it completed. cancelRun must surface this as
+// ErrRunAlreadyCompleted so the caller can tell it apart from a genuine
+// failure.
+func TestCancelRunAlreadyCompletedWrapsSentinel(t *testing.T) {
+	runFn := func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "force-cancel") {
+			return nil, fmt.Errorf("exit status 1: Cannot cancel a run that is completed.")
+		}
+		return nil, fmt.Errorf("exit status 1: Cannot cancel a run that is completed.")
+	}
+	err := cancelRun(context.Background(), "advoq/advoq", 26423751663, runFn)
+	if !errors.Is(err, ErrRunAlreadyCompleted) {
+		t.Fatalf("err = %v, want errors.Is(err, ErrRunAlreadyCompleted)", err)
+	}
+}
+
+// TestCancelRunGenuineFailureDoesNotMatchSentinel guards against
+// over-matching: a real, unrelated cancel failure (rate limit, auth, network)
+// must never be misclassified as the benign ghost-run case.
+func TestCancelRunGenuineFailureDoesNotMatchSentinel(t *testing.T) {
+	runFn := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, fmt.Errorf("exit status 1: API rate limit exceeded")
+	}
+	err := cancelRun(context.Background(), "advoq/advoq", 42, runFn)
+	if errors.Is(err, ErrRunAlreadyCompleted) {
+		t.Fatalf("a rate-limit error must not match ErrRunAlreadyCompleted, got %v", err)
+	}
+	if err == nil {
+		t.Fatal("expected a non-nil error")
+	}
+}
+
+// TestReapAlreadyCompletedGhostIsInfoNotFailure is the end-to-end regression
+// for the bug this fix closes: a candidate that GitHub already considers
+// completed must not bump report.Exit, must not count as report.Cancelled
+// (the reaper didn't cancel anything -- GitHub already had), and must be
+// reported as its own distinct, non-warning event so a real cancel-failed
+// never hides behind identical noise (see validation.md 2026-06-17).
+func TestReapAlreadyCompletedGhostIsInfoNotFailure(t *testing.T) {
+	runs := []Run{{ID: 26423751663, Event: "pull_request", Status: "queued", Branch: "feature/add-finance-module"}}
+	opts := Options{
+		Repos:          []string{"advoq/advoq"},
+		Execute:        true,
+		OpenBranchesFn: func(_ context.Context, _ string) (map[string]bool, error) { return nil, nil },
+		ActiveRunsFn:   func(_ context.Context, _ string) ([]Run, error) { return runs, nil },
+		CancelFn: func(_ context.Context, _ string, _ int64) error {
+			return fmt.Errorf("%w: force-cancel and cancel both rejected", ErrRunAlreadyCompleted)
+		},
+	}
+	report := Reap(context.Background(), opts)
+	if report.Exit != 0 {
+		t.Fatalf("exit = %d, want 0 -- an already-completed ghost is not a reaper failure", report.Exit)
+	}
+	if report.Cancelled != 0 {
+		t.Fatalf("cancelled = %d, want 0 -- the reaper did not cancel anything, github already had", report.Cancelled)
+	}
+	var found bool
+	for _, ev := range report.Events {
+		if ev.Event == "run-reaped" && ev.Reason == "already-completed-ghost" {
+			found = true
+			if ev.Severity != "info" {
+				t.Errorf("severity = %q, want %q", ev.Severity, "info")
+			}
+		}
+		if ev.Reason == "cancel-failed" {
+			t.Error("an already-completed ghost must never be reported under the generic cancel-failed reason")
+		}
+	}
+	if !found {
+		t.Fatalf("expected an already-completed-ghost event, got %+v", report.Events)
 	}
 }
