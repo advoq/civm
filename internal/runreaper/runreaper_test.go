@@ -10,7 +10,7 @@ import (
 )
 
 // mockGH dispatches a fake `gh` by inspecting the joined command line, so the
-// default OpenBranchesFn/ActiveRunsFn/CancelFn (and their parsing) run for real.
+// default OpenHeadsFn/ActiveRunsFn/CancelFn (and their parsing) run for real.
 func mockGH(openJSON, queuedJSON, inProgressJSON string, cancelErr error) func(context.Context, string, ...string) ([]byte, error) {
 	return func(_ context.Context, name string, args ...string) ([]byte, error) {
 		joined := name + " " + strings.Join(args, " ")
@@ -34,11 +34,12 @@ func ts(s string) time.Time {
 }
 
 // fixture builds an Options wired with in-memory fakes and records cancels.
-func fixture(open map[string]bool, runs []Run, cancelled *[]int64) Options {
+// open maps branch -> current open-PR head SHA (empty value still means open).
+func fixture(open map[string]string, runs []Run, cancelled *[]int64) Options {
 	return Options{
 		Repos:   []string{"advoq/advoq"},
 		Execute: true,
-		OpenBranchesFn: func(_ context.Context, _ string) (map[string]bool, error) {
+		OpenHeadsFn: func(_ context.Context, _ string) (map[string]string, error) {
 			return open, nil
 		},
 		ActiveRunsFn: func(_ context.Context, _ string) ([]Run, error) {
@@ -52,7 +53,7 @@ func fixture(open map[string]bool, runs []Run, cancelled *[]int64) Options {
 }
 
 func TestReapCancelsClosedPRRunsOnly(t *testing.T) {
-	open := map[string]bool{"feature/open-1": true}
+	open := map[string]string{"feature/open-1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	runs := []Run{
 		{ID: 1, Event: "pull_request", Status: "queued", Branch: "feature/open-1"},      // keep: open PR
 		{ID: 2, Event: "pull_request", Status: "queued", Branch: "fix/closed-pr"},        // reap
@@ -156,7 +157,7 @@ func TestReapCancelFailureSetsExit(t *testing.T) {
 	opts := Options{
 		Repos:          []string{"advoq/advoq"},
 		Execute:        true,
-		OpenBranchesFn: func(_ context.Context, _ string) (map[string]bool, error) { return nil, nil },
+		OpenHeadsFn: func(_ context.Context, _ string) (map[string]string, error) { return nil, nil },
 		ActiveRunsFn:   func(_ context.Context, _ string) ([]Run, error) { return runs, nil },
 		CancelFn:       func(_ context.Context, _ string, _ int64) error { return context.DeadlineExceeded },
 	}
@@ -217,9 +218,9 @@ func TestRenderJSONRoundTrips(t *testing.T) {
 // (only RunFn injected), exercising applyDefaults, listOpenBranches,
 // listActiveRuns, parseActiveRuns and cancelRun.
 func TestReapEndToEndViaRunFn(t *testing.T) {
-	open := `[{"headRefName":"feature/open-1"}]`
+	open := `[{"headRefName":"feature/open-1","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]`
 	queued := `{"workflow_runs":[` +
-		`{"id":1,"head_branch":"feature/open-1","event":"pull_request","status":"queued","name":"Go CI","created_at":"2026-06-04T10:00:00Z"},` +
+		`{"id":1,"head_branch":"feature/open-1","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","status":"queued","name":"Go CI","created_at":"2026-06-04T10:00:00Z"},` +
 		`{"id":2,"head_branch":"fix/closed","event":"pull_request","status":"queued","name":"Web CI","created_at":"2026-06-04T10:01:00Z"}]}`
 	inprog := `{"workflow_runs":[{"id":3,"head_branch":"old/gone","event":"pull_request","status":"in_progress","name":"Docs CI","created_at":"2026-06-04T09:00:00Z"}]}`
 
@@ -372,7 +373,7 @@ func TestReapAlreadyCompletedGhostIsInfoNotFailure(t *testing.T) {
 	opts := Options{
 		Repos:          []string{"advoq/advoq"},
 		Execute:        true,
-		OpenBranchesFn: func(_ context.Context, _ string) (map[string]bool, error) { return nil, nil },
+		OpenHeadsFn: func(_ context.Context, _ string) (map[string]string, error) { return nil, nil },
 		ActiveRunsFn:   func(_ context.Context, _ string) ([]Run, error) { return runs, nil },
 		CancelFn: func(_ context.Context, _ string, _ int64) error {
 			return fmt.Errorf("%w: force-cancel and cancel both rejected", ErrRunAlreadyCompleted)
@@ -399,5 +400,78 @@ func TestReapAlreadyCompletedGhostIsInfoNotFailure(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected an already-completed-ghost event, got %+v", report.Events)
+	}
+}
+
+func TestReapCancelsSupersededSHAOnOpenPR(t *testing.T) {
+	// Branch still open at tip "bbbb..."; older run on "aaaa..." must reap.
+	open := map[string]string{"feature/open-1": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	runs := []Run{
+		{ID: 1, Event: "pull_request", Status: "queued", Branch: "feature/open-1", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, // current tip — keep
+		{ID: 2, Event: "pull_request", Status: "queued", Branch: "feature/open-1", HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, // superseded
+		{ID: 3, Event: "pull_request", Status: "in_progress", Branch: "feature/open-1", HeadSHA: "cccccccccccccccccccccccccccccccccccccccc"}, // superseded
+		{ID: 4, Event: "push", Status: "queued", Branch: "feature/open-1", HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},     // not a PR event — keep
+		{ID: 5, Event: "pull_request", Status: "queued", Branch: "feature/open-1", HeadSHA: ""},                                      // empty sha — keep fail-safe
+	}
+	var cancelled []int64
+	report := Reap(context.Background(), fixture(open, runs, &cancelled))
+	if report.Exit != 0 {
+		t.Fatalf("exit = %d, want 0 (events %+v)", report.Exit, report.Events)
+	}
+	if got, want := report.Cancelled, 2; got != want {
+		t.Fatalf("cancelled = %d, want %d; got ids %v events %+v", got, want, cancelled, report.Events)
+	}
+	gotIDs := map[int64]bool{}
+	for _, id := range cancelled {
+		gotIDs[id] = true
+	}
+	if !gotIDs[2] || !gotIDs[3] {
+		t.Errorf("expected runs 2 and 3 cancelled, got %v", cancelled)
+	}
+	for _, keep := range []int64{1, 4, 5} {
+		if gotIDs[keep] {
+			t.Errorf("run %d should not have been cancelled", keep)
+		}
+	}
+	// reasons must be superseded-sha
+	for _, ev := range report.Events {
+		if ev.RunID == 2 || ev.RunID == 3 {
+			if ev.Reason != "superseded-sha" {
+				t.Errorf("run %d reason=%q want superseded-sha", ev.RunID, ev.Reason)
+			}
+		}
+	}
+}
+
+func TestReapKeepsCurrentHeadCaseInsensitive(t *testing.T) {
+	open := map[string]string{"feature/open-1": "ABCDEF0123456789ABCDEF0123456789ABCDEF01"}
+	runs := []Run{
+		{ID: 1, Event: "pull_request", Status: "queued", Branch: "feature/open-1", HeadSHA: "abcdef0123456789abcdef0123456789abcdef01"},
+	}
+	var cancelled []int64
+	report := Reap(context.Background(), fixture(open, runs, &cancelled))
+	if report.Cancelled != 0 {
+		t.Fatalf("cancelled = %d, want 0 (case-insensitive match)", report.Cancelled)
+	}
+	if len(cancelled) != 0 {
+		t.Fatalf("cancelled ids %v", cancelled)
+	}
+}
+
+func TestParseActiveRunsCapturesHeadSHA(t *testing.T) {
+	page := `{"workflow_runs":[{"id":1,"head_branch":"a","head_sha":"deadbeef","event":"pull_request","status":"queued","name":"Go CI","created_at":"2026-06-04T10:00:00Z"}]}`
+	runs, err := parseActiveRuns([]byte(page), "advoq/advoq")
+	if err != nil {
+		t.Fatalf("parse err: %v", err)
+	}
+	if len(runs) != 1 || runs[0].HeadSHA != "deadbeef" {
+		t.Fatalf("got %+v, want HeadSHA=deadbeef", runs)
+	}
+}
+
+func TestIsAlreadyCompletedErrorReRunNotQueued(t *testing.T) {
+	err := fmt.Errorf("exit status 1: gh: Cannot cancel a workflow re-run that has not yet queued. (HTTP 409)")
+	if !isAlreadyCompletedError(err) {
+		t.Fatal("expected 409 re-run-not-queued to count as already-completed ghost")
 	}
 }

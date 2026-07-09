@@ -1102,3 +1102,25 @@ de 170min permanece como ultimo backstop contra qualquer outage da gate-infra.
 
 **Proxima acao:** converter o `runner-1` pra task watchdog quando a box idlar;
 live-test do reboot-survival na proxima janela de manutencao do host.
+
+## 2026-07-09 18:30 -03 — reaper supersedido + cancel-stale-on-push (advoq#1423)
+
+**O que:** Fila civm ociosa com ~23 runs M30 "queued" (vários SHAs). Root
+cause: concurrency `run_id` na box + só cancel-on-close. Reaper só reaps PR
+fechado. Fix: reaper também reaps `superseded-sha`; template + peer workflow
+`cancel-stale-on-push`; drain manual 14 runs non-head.
+
+**Categoria:** runner-health + queue
+
+**Dados medidos:**
+- force-cancel manual non-head M30: **14 cancelled**
+- `go test ./internal/runreaper` PASS (incl. TestReapCancelsSupersededSHAOnOpenPR)
+- dry-run reap-runs advoq/advoq: candidates=2 (May ghosts feature/add-finance-module, pr-not-open)
+- runner civm-advoq-org online; in_progress=0 antes do drain
+
+**Veredito:** ✅ causa e fix unit-tested; peer workflow advoq no M30; deploy do
+reaper no host (timer) ainda precisa do binario atualizado.
+
+**Proxima acao:** commit/push civm + advoq; deploy civmctl no host quando box
+idlar; acompanhar head 52ef120b.
+

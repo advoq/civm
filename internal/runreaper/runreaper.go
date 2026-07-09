@@ -1,14 +1,21 @@
 // Package runreaper cancels GitHub Actions workflow runs that are still
-// queued / in_progress for pull requests that are no longer open. On a shared
-// self-hosted fleet a closed or merged PR leaves its runs waiting for the
-// runner forever (GitHub does not auto-cancel them), starving the runs of the
-// PRs that are still open. The reaper is the durable, periodic answer: it keeps
-// the runner queue scoped to work that still matters.
+// queued / in_progress when they no longer matter for an open PR on a shared
+// self-hosted fleet.
+//
+// GitHub does not auto-cancel runs when a PR closes or when a newer push
+// supersedes an older head SHA. Without reaping, those runs sit in the runner
+// queue forever and starve live work.
+//
+// A run is a reap candidate when it is a pull_request / pull_request_target
+// event and either:
+//  1. its head branch has no open PR in that repo (PR closed/merged/deleted), or
+//  2. its head branch still has an open PR, but the run's head_sha is not the
+//     open PR's current head (superseded by a newer push).
 //
 // Safety rails:
 //   - Only event=pull_request / pull_request_target runs are ever cancelled —
 //     push (main CI), schedule (crons) and workflow_dispatch are never touched.
-//   - A run is reaped only when its head branch has NO open PR in that repo.
+//   - Current-head runs of open PRs are always kept.
 //   - Dry-run by default (Execute=false only reports candidates).
 //   - Per-repo cancel cap (anti-runaway); the excess is logged, never silent.
 //
@@ -53,6 +60,7 @@ type Run struct {
 	ID        int64     `json:"id"`
 	Repo      string    `json:"repo"`
 	Branch    string    `json:"branch"`
+	HeadSHA   string    `json:"head_sha,omitempty"`
 	Event     string    `json:"event"`
 	Status    string    `json:"status"`
 	Workflow  string    `json:"workflow"`
@@ -66,10 +74,13 @@ type Options struct {
 	Execute           bool
 	MaxCancelPerRepo  int
 	RunFn             func(ctx context.Context, name string, args ...string) ([]byte, error)
-	OpenBranchesFn    func(ctx context.Context, repo string) (map[string]bool, error)
-	ActiveRunsFn      func(ctx context.Context, repo string) ([]Run, error)
-	CancelFn          func(ctx context.Context, repo string, runID int64) error
-	NowFn             func() time.Time
+	// OpenHeadsFn returns headRefName → headRefOid for every open PR in the
+	// repo. Presence of a key means the branch still has an open PR; the value
+	// is the PR's current tip and is used to detect superseded pushes.
+	OpenHeadsFn  func(ctx context.Context, repo string) (map[string]string, error)
+	ActiveRunsFn func(ctx context.Context, repo string) ([]Run, error)
+	CancelFn     func(ctx context.Context, repo string, runID int64) error
+	NowFn        func() time.Time
 }
 
 // Event is one structured line in the report.
@@ -97,7 +108,8 @@ type Report struct {
 }
 
 // Reap scans the configured repos and cancels (or, in dry-run, reports) every
-// queued/in_progress pull_request run whose head branch has no open PR.
+// queued/in_progress pull_request run that is either on a closed branch or
+// supersedido by a newer open-PR head SHA.
 func Reap(ctx context.Context, opts Options) Report {
 	applyDefaults(&opts)
 	report := Report{Executed: opts.Execute}
@@ -119,7 +131,7 @@ func Reap(ctx context.Context, opts Options) Report {
 }
 
 func reapRepo(ctx context.Context, opts Options, repo string, report *Report) {
-	open, err := opts.OpenBranchesFn(ctx, repo)
+	openHeads, err := opts.OpenHeadsFn(ctx, repo)
 	if err != nil {
 		report.add(Event{Event: "reap-skipped", Severity: "warning", Repo: repo, Reason: "open-prs-failed", Detail: err.Error()})
 		report.Exit = maxInt(report.Exit, 1)
@@ -133,23 +145,50 @@ func reapRepo(ctx context.Context, opts Options, repo string, report *Report) {
 	}
 	report.Scanned += len(runs)
 
-	candidates := make([]Run, 0, len(runs))
+	type candidate struct {
+		run    Run
+		reason string
+	}
+	candidates := make([]candidate, 0, len(runs))
 	for _, run := range runs {
 		if !isPullRequestEvent(run.Event) {
 			continue // never touch push / schedule / workflow_dispatch
 		}
-		if run.Branch == "" || open[run.Branch] {
-			continue // branch still has an open PR (or unknown) → keep
+		if run.Branch == "" {
+			continue // unknown branch → keep (fail-safe)
 		}
-		candidates = append(candidates, run)
+		currentHead, open := openHeads[run.Branch]
+		if !open {
+			candidates = append(candidates, candidate{run: run, reason: "pr-not-open"})
+			continue
+		}
+		// Superseded: open PR still exists, but this run was built on an older tip.
+		// Empty HeadSHA on either side → keep (fail-safe: cannot prove supersession).
+		if run.HeadSHA != "" && currentHead != "" && !shaEqual(run.HeadSHA, currentHead) {
+			candidates = append(candidates, candidate{run: run, reason: "superseded-sha"})
+		}
 	}
 	// Oldest first: those are the ones GitHub hands the runner next, so
 	// cancelling them first frees the queue head soonest.
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].CreatedAt.Before(candidates[j].CreatedAt) })
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].run.CreatedAt.Before(candidates[j].run.CreatedAt)
+	})
 
-	for i, run := range candidates {
+	for i, c := range candidates {
 		report.Candidates++
-		ev := Event{Event: "run-reaped", Severity: "info", Repo: repo, RunID: run.ID, Branch: run.Branch, Workflow: run.Workflow, Reason: "pr-not-open", Executed: opts.Execute}
+		ev := Event{
+			Event:    "run-reaped",
+			Severity: "info",
+			Repo:     repo,
+			RunID:    c.run.ID,
+			Branch:   c.run.Branch,
+			Workflow: c.run.Workflow,
+			Reason:   c.reason,
+			Executed: opts.Execute,
+		}
+		if c.reason == "superseded-sha" {
+			ev.Detail = fmt.Sprintf("run=%s open=%s", shortSHA(c.run.HeadSHA), shortSHA(openHeads[c.run.Branch]))
+		}
 		if i >= opts.MaxCancelPerRepo {
 			report.add(Event{Event: "reap-capped", Severity: "warning", Repo: repo, Reason: "max-cancel-reached", Detail: fmt.Sprintf("%d candidates, cap %d — remainder deferred to next tick", len(candidates), opts.MaxCancelPerRepo)})
 			break
@@ -158,7 +197,7 @@ func reapRepo(ctx context.Context, opts Options, repo string, report *Report) {
 			report.add(ev)
 			continue
 		}
-		if err := opts.CancelFn(ctx, repo, run.ID); err != nil {
+		if err := opts.CancelFn(ctx, repo, c.run.ID); err != nil {
 			if errors.Is(err, ErrRunAlreadyCompleted) {
 				// GitHub already agrees the run is over -- there is nothing
 				// left for the reaper to do. Reporting this identically to a
@@ -194,6 +233,18 @@ func isPullRequestEvent(event string) bool {
 	}
 }
 
+func shaEqual(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+func shortSHA(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
+}
+
 func applyDefaults(opts *Options) {
 	if opts.MaxCancelPerRepo <= 0 {
 		opts.MaxCancelPerRepo = DefaultMaxCancelPerRepo
@@ -204,9 +255,9 @@ func applyDefaults(opts *Options) {
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
 	}
-	if opts.OpenBranchesFn == nil {
-		opts.OpenBranchesFn = func(ctx context.Context, repo string) (map[string]bool, error) {
-			return listOpenBranches(ctx, repo, opts.RunFn)
+	if opts.OpenHeadsFn == nil {
+		opts.OpenHeadsFn = func(ctx context.Context, repo string) (map[string]string, error) {
+			return listOpenHeads(ctx, repo, opts.RunFn)
 		}
 	}
 	if opts.ActiveRunsFn == nil {
@@ -238,21 +289,27 @@ func defaultRun(ctx context.Context, name string, args ...string) ([]byte, error
 	return out, err
 }
 
-func listOpenBranches(ctx context.Context, repo string, runFn func(context.Context, string, ...string) ([]byte, error)) (map[string]bool, error) {
-	out, err := runFn(ctx, "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json", "headRefName")
+func listOpenHeads(ctx context.Context, repo string, runFn func(context.Context, string, ...string) ([]byte, error)) (map[string]string, error) {
+	out, err := runFn(ctx, "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json", "headRefName,headRefOid")
 	if err != nil {
 		return nil, fmt.Errorf("gh pr list: %w", err)
 	}
 	var prs []struct {
 		HeadRefName string `json:"headRefName"`
+		HeadRefOid  string `json:"headRefOid"`
 	}
 	if err := json.Unmarshal(out, &prs); err != nil {
 		return nil, fmt.Errorf("parse gh pr list: %w", err)
 	}
-	open := make(map[string]bool, len(prs))
+	open := make(map[string]string, len(prs))
 	for _, pr := range prs {
 		if pr.HeadRefName != "" {
-			open[pr.HeadRefName] = true
+			// First open PR wins if two PRs share a branch (rare); last write
+			// would flip supersession. Prefer the first listed (most recent
+			// by gh default sort) is fine for fail-safe keep-current.
+			if _, exists := open[pr.HeadRefName]; !exists {
+				open[pr.HeadRefName] = pr.HeadRefOid
+			}
 		}
 	}
 	return open, nil
@@ -285,6 +342,7 @@ func parseActiveRuns(out []byte, repo string) ([]Run, error) {
 			WorkflowRuns []struct {
 				ID         int64     `json:"id"`
 				HeadBranch string    `json:"head_branch"`
+				HeadSHA    string    `json:"head_sha"`
 				Event      string    `json:"event"`
 				Status     string    `json:"status"`
 				Name       string    `json:"name"`
@@ -302,6 +360,7 @@ func parseActiveRuns(out []byte, repo string) ([]Run, error) {
 				ID:        r.ID,
 				Repo:      repo,
 				Branch:    r.HeadBranch,
+				HeadSHA:   r.HeadSHA,
 				Event:     r.Event,
 				Status:    r.Status,
 				Workflow:  r.Name,
@@ -339,15 +398,21 @@ func cancelRun(ctx context.Context, repo string, runID int64, runFn func(context
 }
 
 // isAlreadyCompletedError matches GitHub's rejection text when a run's own
-// cancel/force-cancel endpoints already consider it finished, regardless of
-// what the list API that surfaced it as a candidate still reports. Matched
-// verbatim against a live `gh run cancel` rejection (validation.md
-// 2026-06-17): "Cannot cancel a run that is completed."
+// cancel/force-cancel endpoints already consider it finished (or otherwise
+// non-cancellable because it is not a live work item), regardless of what the
+// list API that surfaced it as a candidate still reports.
+//
+// Known live strings (validation.md 2026-06-17 + 2026-07-09):
+//   - "Cannot cancel a run that is completed."
+//   - "Cannot cancel a workflow re-run that has not yet queued." (HTTP 409;
+//     May-2026 ghosts still listed as status=queued for months)
 func isAlreadyCompletedError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "cannot cancel a run that is completed")
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "cannot cancel a run that is completed") ||
+		strings.Contains(msg, "cannot cancel a workflow re-run that has not yet queued")
 }
 
 func maxInt(a, b int) int {

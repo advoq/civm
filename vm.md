@@ -29,7 +29,7 @@
 
 | Ferramenta | Versão |
 | --- | --- |
-| Go | go1.26.4 (última; em /usr/local/go) |
+| Go | go1.26.5 (última; em /usr/local/go) |
 | Node (default via nvm) | v24.15.0 |
 | npm | 11.13.0 (global: 11.12.1) |
 | yarn | 1.22.22 (Classic / v1) |

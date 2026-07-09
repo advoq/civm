@@ -65,6 +65,7 @@ Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
 | `civmctl billing-status` | detector heuristico de billing-block (zero-PAT, GITHUB_TOKEN suficiente) |
 | `civmctl peer-status` | status read-only de adoção/saúde por peer ou fleet: billing, runners online e último run; `--repos=owner/a,owner/b` retorna exit `0=ok`, `1=warn`, `2=critical` |
 | `civmctl active-runs [--repos=auto\|owner/a,owner/b\|none] [--include-eta] [--json]` | lista workflow runs in_progress + queued cross-repo com ETA por workflow (avg das últimas N runs success); concorrente via worker pool. Cobre cockpits dashboard sem precisar invocar `gh run list` por repo |
+| `civmctl reap-runs --repos=owner/a[,owner/b] [--execute]` | **dono da higiene de fila shared**: force-cancela runs de PR fechado (`pr-not-open`) e SHAs supersedidos em PR aberto (`superseded-sha`). Timer guest 5 min; peers **não** são o dono |
 | `civmctl actions-metrics --org=ORG [--period=month\|last-month\|week\|day\|YYYY-MM-DD..YYYY-MM-DD] [--repos=auto\|owner/a,...\|none] [--json]` | agrega minutos billable (API `/organizations/{org}/settings/billing/usage`) + run counts cross-repo num período; espelha a tela "Actions Usage Metrics" do GitHub. Self-hosted minutos NÃO entram (API pública não expõe) |
 | `civmctl runner list` | lista runners systemd na VM (parsed; suporta `--json`) |
 | `civmctl runner restart` | systemctl restart por --short ou --unit; verifica is-active após delay |
@@ -123,7 +124,8 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 |---|---|
 | `templates/ci-optimistic.yml.template` | `cp ... .github/workflows/ci.yml` no peer; substituir placeholders |
 | `templates/ci-router.yml.template` | idem, versão Tier 1 com router |
-| `templates/cancel-on-pr-close.yml.template` | `cp ... .github/workflows/cancel-on-pr-close.yml` no peer; cancela runs de PR fechado na hora (complementa o reaper) |
+| `templates/cancel-on-pr-close.yml.template` | **opcional** no peer (latência 0); cancela runs de PR fechado. **Dono da fila = reaper** (`civmctl reap-runs`) |
+| `templates/cancel-stale-on-push.yml.template` | **opcional** no peer (latência 0); cancela SHAs supersedidos no push. **Dono da fila = reaper** (`superseded-sha`) |
 | `templates/CIVM-USAGE.md` | copiar para `docs/CIVM.md` no peer; ajustar gate local do projeto |
 | `templates/COMMUNICATION-STYLE.md` | copiar bloco entre marcadores BEGIN/END pra CLAUDE/AGENTS/CODEX do peer |
 | `runbooks/CI-BILLING-FALLBACK.md` | leia para entender as 3 camadas de fallback (referência, não copy) |

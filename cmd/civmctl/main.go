@@ -149,7 +149,7 @@ COMANDOS
   actions-metrics Agrega minutos billable + run counts cross-repo (espelha Actions Usage Metrics)
   self-upgrade    Rebuilda civmctl do /opt/civm e substitui /usr/local/bin/civmctl
   ci-guard        Lint de compose/workflow do peer contra invariantes de isolamento
-  reap-runs       Cancela runs queued/in_progress de PRs ja fechados (libera o runner compartilhado)
+  reap-runs       Cancela runs queued/in_progress de PRs fechados OU SHAs supersedidos (libera o runner)
   lock            Serializa trabalho docker-heavy (acquire/release/--exec com heartbeat + budget)
   admit           Admite job memory-heavy em slot (cgroup MemoryMax via systemd-run; max 2 heavy, light flui)
   help            Esta mensagem
@@ -178,7 +178,7 @@ EXEMPLOS
   civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml
   civmctl health --json | jq '.exit'
   civmctl reverse-watchdog --max-age-hours=4
-  civmctl reap-runs --repos=owner/repo            # dry-run: lista runs de PRs fechados
+  civmctl reap-runs --repos=owner/repo            # dry-run: PRs fechados + SHAs supersedidos
   civmctl reap-runs --repos=owner/a,owner/b --execute
   civmctl idle-check --json
   sudo civmctl bootstrap-everything --units-source=/opt/civm/deploy/systemd --execute

@@ -1,5 +1,5 @@
 [Unit]
-Description=civmctl run-reaper (cancela runs de PRs ja fechados que entopem o runner)
+Description=civmctl run-reaper (fila shared: PRs fechados + SHAs supersedidos)
 Documentation=https://github.com/advoq/civm/blob/main/internal/runreaper/
 Wants=network-online.target
 After=network-online.target
