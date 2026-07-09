@@ -63,8 +63,9 @@ jobs:
           # 'run_status' (nao 'status'): 'status' colide com special var
           # read-only em alguns shells (zsh). O nome intencional evita o foot-gun.
           for run_status in queued in_progress; do
-            ids="$(gh api --paginate \
-              "/repos/${REPO}/actions/runs?branch=${BRANCH}&status=${run_status}&per_page=100" \
+            # -f/-F viram query params no GET (sem interpolar $BRANCH na URL).
+            ids="$(gh api --paginate "/repos/${REPO}/actions/runs" -X GET \
+              -f branch="${BRANCH}" -f status="${run_status}" -F per_page=100 \
               --jq ".workflow_runs[] | select(.id != ${SELF}) | .id")"
             for id in ${ids}; do
               # force-cancel desaloja runs presos na fila do runner self-hosted

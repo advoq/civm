@@ -124,6 +124,7 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 | `templates/ci-optimistic.yml.template` | `cp ... .github/workflows/ci.yml` no peer; substituir placeholders |
 | `templates/ci-router.yml.template` | idem, versão Tier 1 com router |
 | `templates/cancel-on-pr-close.yml.template` | `cp ... .github/workflows/cancel-on-pr-close.yml` no peer; cancela runs de PR fechado na hora (complementa o reaper) |
+| `templates/cancel-stale-on-push.yml.template` | `cp ... .github/workflows/cancel-stale-on-push.yml` no peer; cancela runs de SHAs supersedidos a cada push do PR (complementa o reaper) |
 | `templates/CIVM-USAGE.md` | copiar para `docs/CIVM.md` no peer; ajustar gate local do projeto |
 | `templates/COMMUNICATION-STYLE.md` | copiar bloco entre marcadores BEGIN/END pra CLAUDE/AGENTS/CODEX do peer |
 | `runbooks/CI-BILLING-FALLBACK.md` | leia para entender as 3 camadas de fallback (referência, não copy) |
