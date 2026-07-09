@@ -1124,3 +1124,23 @@ reaper no host (timer) ainda precisa do binario atualizado.
 **Proxima acao:** commit/push civm + advoq; deploy civmctl no host quando box
 idlar; acompanhar head 52ef120b.
 
+
+## 2026-07-09 18:50 -03 — reaper superseded-sha LIVE na guest + #156 merged
+
+**O que:** Deploy do civmctl com superseded-sha na guest gha-ubuntu-2404;
+merge PR #156 no main; timer reaper ativo.
+
+**Categoria:** runner-health + queue
+
+**Dados medidos:**
+- guest dry-run: candidates=12 (10 superseded-sha M30 + 2 ghosts maio)
+- guest execute: **cancelled=10**, exit=0; ghosts=already-completed-ghost (info)
+- timer: active; unit "PRs fechados + SHAs supersedidos"
+- help: "PRs fechados OU SHAs supersedidos"
+- CI #156: Build+test pass (go1.26.5), smoke pass, CI pass → squash merge `9ac05be`
+- pos-cancel dry-run: candidates=2 (so ghosts maio)
+
+**Veredito:** ✅ reaper superseded-sha em produção na guest; main = #156.
+
+**Proxima acao:** monitorar journal a cada 5min; self-upgrade path se /opt/civm divergir.
+
