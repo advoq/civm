@@ -537,6 +537,145 @@ func TestCleanWorkRootEscalationFailureStaysFatal(t *testing.T) {
 	}
 }
 
+func TestEnsureWorkspaceStubFromRepository(t *testing.T) {
+	// Apos cleanWorkRoot o runner exige WorkingDirectory=_work/owner/repo
+	// no Process.Start do hook. Stub vazio restaura o cwd sem checkout.
+	var made []string
+	opts := Options{
+		Execute:    true,
+		Repository: "advoq/advoq",
+		MkdirAllFn: func(path string, _ os.FileMode) error {
+			made = append(made, path)
+			return nil
+		},
+	}
+	a := ensureWorkspaceStub(opts, "/home/x/actions-runner/_work")
+	if a.Error != "" {
+		t.Fatalf("unexpected error: %q", a.Error)
+	}
+	if a.Name != "workspace_stub" {
+		t.Fatalf("name=%q want workspace_stub", a.Name)
+	}
+	want := "/home/x/actions-runner/_work/advoq/advoq"
+	if a.Path != want {
+		t.Fatalf("path=%q want %q", a.Path, want)
+	}
+	if len(made) != 1 || made[0] != want {
+		t.Fatalf("MkdirAll calls=%v want [%s]", made, want)
+	}
+}
+
+func TestEnsureWorkspaceStubFromGitHubWorkspace(t *testing.T) {
+	var made []string
+	opts := Options{
+		Execute:         true,
+		GitHubWorkspace: "/home/x/actions-runner/_work/other/repo",
+		MkdirAllFn: func(path string, _ os.FileMode) error {
+			made = append(made, path)
+			return nil
+		},
+	}
+	a := ensureWorkspaceStub(opts, "/home/x/actions-runner/_work")
+	if a.Error != "" {
+		t.Fatalf("unexpected error: %q", a.Error)
+	}
+	want := "/home/x/actions-runner/_work/other/repo"
+	if a.Path != want || len(made) != 1 || made[0] != want {
+		t.Fatalf("path=%q made=%v want %s", a.Path, made, want)
+	}
+}
+
+func TestEnsureWorkspaceStubDefaultsToAdvoq(t *testing.T) {
+	// Full clean no guest nao deixa env de repo; fallback advoq/advoq
+	// cobre o org runner (CI Router fail 2026-07-09).
+	var made []string
+	opts := Options{
+		Execute: true,
+		MkdirAllFn: func(path string, _ os.FileMode) error {
+			made = append(made, path)
+			return nil
+		},
+	}
+	a := ensureWorkspaceStub(opts, "/home/x/actions-runner/_work")
+	want := "/home/x/actions-runner/_work/advoq/advoq"
+	if a.Path != want || len(made) != 1 || made[0] != want {
+		t.Fatalf("path=%q made=%v want %s", a.Path, made, want)
+	}
+}
+
+func TestEnsureWorkspaceStubDryRunSkipsMkdir(t *testing.T) {
+	called := false
+	opts := Options{
+		Execute:    false,
+		Repository: "advoq/advoq",
+		MkdirAllFn: func(string, os.FileMode) error {
+			called = true
+			return nil
+		},
+	}
+	a := ensureWorkspaceStub(opts, "/home/x/actions-runner/_work")
+	if called {
+		t.Fatal("dry-run must not call MkdirAll")
+	}
+	if a.Executed {
+		t.Fatal("Executed must be false in dry-run")
+	}
+}
+
+func TestEnsureWorkspaceStubRejectsUnsafeRoot(t *testing.T) {
+	a := ensureWorkspaceStub(Options{Execute: true, Repository: "a/b"}, "/etc")
+	if a.Error == "" {
+		t.Fatalf("expected unsafe root error, got %+v", a)
+	}
+}
+
+func TestEnsureWorkspaceStubPropagatesMkdirError(t *testing.T) {
+	opts := Options{
+		Execute:    true,
+		Repository: "advoq/advoq",
+		MkdirAllFn: func(string, os.FileMode) error { return fmt.Errorf("EACCES") },
+	}
+	a := ensureWorkspaceStub(opts, "/home/x/actions-runner/_work")
+	if a.Error == "" {
+		t.Fatalf("expected mkdir error, got %+v", a)
+	}
+}
+
+func TestCleanupIncludesWorkspaceStubAfterClean(t *testing.T) {
+	// cleanup() deve recriar o stub DEPOIS do wipe, senao o proximo job
+	// falha no Process.Start do hook (cwd ausente).
+	opts := Options{
+		Execute:    true,
+		Repository: "advoq/advoq",
+		WorkRoot:   "/home/x/actions-runner/_work",
+		ReadDirFn:  func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist },
+		MkdirAllFn: func(string, os.FileMode) error { return nil },
+		SafeWorkDeleteFn: func(context.Context, string) safedelete.Result {
+			return safedelete.Result{}
+		},
+		RunFn: func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		// Disco folgado: so exercita o path de cleanup de rotina (sem emergency).
+		StatfsFn:   func(string) (uint64, uint64, error) { return 100 << 30, 80 << 30, nil },
+		ActivityFn: func(context.Context) ([]idle.Activity, error) { return nil, nil },
+		HostDiskFn: func() (hostdisk.Report, error) { return hostdisk.Report{}, nil },
+	}
+	actions := cleanup(opts, context.Background(), true)
+	var stub *Action
+	names := make([]string, 0, len(actions))
+	for i := range actions {
+		names = append(names, actions[i].Name)
+		if actions[i].Name == "workspace_stub" {
+			stub = &actions[i]
+		}
+	}
+	if stub == nil {
+		t.Fatalf("cleanup missing workspace_stub; got names: %v", names)
+	}
+	if stub.Path != "/home/x/actions-runner/_work/advoq/advoq" {
+		t.Fatalf("stub path=%q", stub.Path)
+	}
+}
+
 func TestWorkChildGuardScopesEscalation(t *testing.T) {
 	cases := []struct {
 		name    string
