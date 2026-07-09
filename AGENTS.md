@@ -45,6 +45,33 @@ como numa VM efêmera nova. Hardware definitivo: `docs/HARDWARE.md`. Modelo de f
   e propague via `civmctl self-upgrade` / `deploy/windows/activate-orchestrator.ps1`. A VM roda os **artefatos
   deployados**, não um checkout de código.
 
+### Fila do runner shared — dono = civm (não o peer)
+
+A box é **1 runner `civm` compartilhado** por vários peers. Higiene da fila
+(`queued`/`in_progress` que nunca vão completar) é **contrato do civm**, não
+do workflow do peer:
+
+| Camada | Onde | O que limpa |
+| ------ | ---- | ----------- |
+| **Canônica** | `civmctl reap-runs` + timer `civmctl-run-reaper` (guest, 5 min) | PR fechado (`pr-not-open`) **e** SHA antigo em PR aberto (`superseded-sha`) |
+| **Opcional (latência 0)** | templates `cancel-on-pr-close` / `cancel-stale-on-push` no peer | mesmo escopo, event-driven no GitHub-hosted |
+
+Peers com `concurrency.group=run_id` (serialização por-PR na box) **não**
+cancelam cross-push sozinhos — isso é intencional (evita o bug "1 pending
+cancela 3+"). O reaper/timer é o mecanismo de cura. Se a fila entope com
+SHA velho, o bug é **deploy do reaper desatualizado ou timer morto**, não
+"falta de workflow no peer".
+
+Deploy do binário no guest (obrigatório após mudança no reaper):
+
+```bash
+# na guest, worktree deployado / self-upgrade:
+sudo civmctl self-upgrade --execute
+# conferir timer:
+systemctl is-active civmctl-run-reaper.timer
+journalctl -u civmctl-run-reaper.service -n 20 --no-pager
+```
+
 > Por quê: a box é **1 VM compartilhada por 8 runners** (não VM-por-job como o pago). A fidelidade vem de
 > **tratar cada job como efêmero** + **serializar + compactar**. Clonar repo na VM ou deixar estado quebra
 > essa simulação e enche o disco. Os 🧱 estruturais (daemon/disco/dwell compartilhados) estão documentados
