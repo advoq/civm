@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.22.2](https://github.com/advoq/civm/compare/v1.22.1...v1.22.2) (2026-07-09)
+
+
+### Bug Fixes
+
+* **hooks:** restore workspace stub after clean + push-wave cancel ([20a4ccb](https://github.com/advoq/civm/commit/20a4ccbc2e2ac26e8700b3e248b2a329025c4a1e))
+* **hooks:** restore workspace stub after clean + push-wave cancel ([36bff16](https://github.com/advoq/civm/commit/36bff16bfea919fa45f9e835bf4e8ca0240a21ec))
+* **hooks:** restore workspace stub after clean + push-wave cancel ([#158](https://github.com/advoq/civm/issues/158)) ([20a4ccb](https://github.com/advoq/civm/commit/20a4ccbc2e2ac26e8700b3e248b2a329025c4a1e))
+* **orchestrator:** compact VHDX between pushes of the same PR ([#157](https://github.com/advoq/civm/issues/157)) ([360dd7a](https://github.com/advoq/civm/commit/360dd7a7934bbfd1f40dfff19c9b671d69956c10))
+* **queue:** close disk-admission and guest-liveness reconciliation gaps ([#155](https://github.com/advoq/civm/issues/155)) ([3ffa617](https://github.com/advoq/civm/commit/3ffa617d786f806c1a0657a8c37c2ce39c002ec1))
+* **reaper:** reap superseded SHA runs on open PRs ([#156](https://github.com/advoq/civm/issues/156)) ([9ac05be](https://github.com/advoq/civm/commit/9ac05be65d8a6beb19cdb9256ff072902601bafd))
+
+
+### Documentation
+
+* reconcile disk-floor refs (AdmitFloorGB 51-&gt;55) + Kahneman path + supersede banners ([#151](https://github.com/advoq/civm/issues/151)) ([68dc758](https://github.com/advoq/civm/commit/68dc758197555028c14973269425d3cbffa9565f))
+* record workspace stub fix and live deploy evidence ([014b6d1](https://github.com/advoq/civm/commit/014b6d190113d21dcc3fb79ad66d5a1206c8a8be))
+* **validation:** record superseded-sha reaper live on guest ([3b6aefc](https://github.com/advoq/civm/commit/3b6aefc9d0f6b8f9165186998abb150ece26ab4d))
+
+
+### CI
+
+* fix kahneman-sync-audit issue label (governance -&gt; area:governance) ([3a29592](https://github.com/advoq/civm/commit/3a295921016027e12e60f01b09b818b609a2bb91))
+* fix kahneman-sync-audit issue label (governance -&gt; area:governance) ([1f53a21](https://github.com/advoq/civm/commit/1f53a2175596b7c7a408674acfe4564fafabaea8))
+* fix kahneman-sync-audit issue label (governance -&gt; area:governance) ([#153](https://github.com/advoq/civm/issues/153)) ([3a29592](https://github.com/advoq/civm/commit/3a295921016027e12e60f01b09b818b609a2bb91))
+
 ## [1.22.1](https://github.com/advoq/civm/compare/v1.22.0...v1.22.1) (2026-06-27)
 
 
