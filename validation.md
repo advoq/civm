@@ -1144,3 +1144,23 @@ merge PR #156 no main; timer reaper ativo.
 
 **Proxima acao:** monitorar journal a cada 5min; self-upgrade path se /opt/civm divergir.
 
+
+## 2026-07-09 19:10 -03 — push-wave compact entre pushes do mesmo PR
+
+**O que:** Gap: compact so no boundary cross-PR; pr-1423 ficou semanas
+sem Optimize-VHD (lastBoundaryCompactUtc 2026-06-21) com V:~25. Fix:
+Resolve-PushWaveCompact (tip head_sha mudou + guest idle + V<55 ->
+Stop+Optimize; mesmo tip = none anti-thrash mid-batch).
+
+**Categoria:** host-ops + disk-safety
+
+**Dados medidos:**
+- civm-pr-queue.test: **32 PASS / 0 FAIL** (12 novos wave)
+- decision.test: 60 PASS (sem regressao)
+- deploy: C:\civm-deploy\{civm-pr-queue,civm-vm-orchestrator}.ps1 copiados 2026-07-09 19:05-06
+
+**Veredito:** ✅ logica pura + deploy no host; 1o tick seed o tip; proximo
+push com V<55 deve logar push_wave_compact.
+
+**Proxima acao:** merge PR; observar log `push_wave_*` apos synchronize.
+

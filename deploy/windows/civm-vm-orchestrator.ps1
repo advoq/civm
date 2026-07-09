@@ -167,6 +167,30 @@ function Get-PrActivity {
     return $counts
 }
 
+# Tip head_sha do contexto (PR ou branch). Sinal de "push novo" para o
+# push-wave compact (Resolve-PushWaveCompact). Falha de API -> '' (caller seed/none).
+function Get-ContextHeadSha {
+    param([Parameter(Mandatory)][string]$ContextId)
+    if ([string]::IsNullOrWhiteSpace($ContextId)) { return '' }
+    try {
+        $token = Get-GhTokenForOwner -Owner 'advoq'
+        $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'civm-orchestrator'; Accept = 'application/vnd.github+json' }
+        if ($ContextId -match '^pr-(\d+)$') {
+            $uri = "https://api.github.com/repos/advoq/advoq/pulls/$($Matches[1])"
+            $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
+            return [string]$resp.head.sha
+        }
+        if ($ContextId -match '^branch-(.+)$') {
+            $branch = [uri]::EscapeDataString($Matches[1])
+            $uri = "https://api.github.com/repos/advoq/advoq/commits?sha=$branch&per_page=1"
+            $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
+            if ($resp -and @($resp).Count -gt 0) { return [string]$resp[0].sha }
+        }
+    }
+    catch { return '' }
+    return ''
+}
+
 function Get-State {
     $s = $null
     if (Test-Path -LiteralPath $StatePath) {
@@ -525,7 +549,14 @@ try {
         $act = Get-PrActivity
         $pq = $null
         if (Test-Path -LiteralPath $PrQueuePath) { try { $pq = Get-Content -LiteralPath $PrQueuePath -Raw | ConvertFrom-Json } catch {} }
-        if ($null -eq $pq) { $pq = [pscustomobject]@{ contexts = @(); currentPr = ''; currentIdleSinceUtc = '' } }
+        if ($null -eq $pq) { $pq = [pscustomobject]@{ contexts = @(); currentPr = ''; currentIdleSinceUtc = ''; lastCompactHeadSha = ''; lastCompactContext = '' } }
+        # States antigos da fila nao tem os campos do push-wave — garante.
+        if (-not ($pq.PSObject.Properties.Name -contains 'lastCompactHeadSha')) {
+            $pq | Add-Member -NotePropertyName lastCompactHeadSha -NotePropertyValue '' -Force
+        }
+        if (-not ($pq.PSObject.Properties.Name -contains 'lastCompactContext')) {
+            $pq | Add-Member -NotePropertyName lastCompactContext -NotePropertyValue '' -Force
+        }
         $seen = @{}; foreach ($c in @($pq.contexts)) { if ($null -ne $c) { $seen["$($c.id)"] = $c.firstSeenUtc } }
         $ordered = @()
         foreach ($c in @($pq.contexts)) { if ($null -ne $c -and $act.ContainsKey("$($c.id)")) { $ordered += [pscustomobject]@{ id = "$($c.id)"; firstSeenUtc = $c.firstSeenUtc } } }
@@ -542,6 +573,48 @@ try {
         # job real ativo no guest (mesma seguranca do stop ocioso).
         if ($EnforceQueue -and -not $Observe) {
             $prevCtx = "$($pq.currentPr)"
+            # ---- PUSH-WAVE: compact entre PUSHES do MESMO PR (tip head_sha mudou) ----
+            # So quando o slot esta em hold no mesmo ctx (PR ainda "vivo"). Nao thrash
+            # mid-batch: Resolve-PushWaveCompact exige tip != lastCompactHeadSha.
+            if ("$($slot.currentPr)" -ne '' -and ("$($slot.action)" -eq 'hold' -or "$($slot.action)" -eq 'grant')) {
+                $tipSha = Get-ContextHeadSha -ContextId "$($slot.currentPr)"
+                $guestBusy = Get-GuestHasActiveJob
+                $vWave = Get-VFreeGB
+                $wave = Resolve-PushWaveCompact -CurrentPr "$($slot.currentPr)" -TipHeadSha $tipSha `
+                    -LastCompactHeadSha "$($pq.lastCompactHeadSha)" -LastCompactContext "$($pq.lastCompactContext)" `
+                    -GuestHasActiveJob $guestBusy -VFreeGB $vWave -AdmitFloorGB $AdmitFloorGB
+                switch ("$($wave.action)") {
+                    'seed' {
+                        Write-OrcLog 'push_wave_seed' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; reason = $wave.reason }
+                        $pq.lastCompactHeadSha = $tipSha
+                        $pq.lastCompactContext = "$($slot.currentPr)"
+                    }
+                    'skip_clean' {
+                        Write-OrcLog 'push_wave_skip_clean' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; v_free_gb = $vWave; reason = $wave.reason }
+                        $pq.lastCompactHeadSha = $tipSha
+                        $pq.lastCompactContext = "$($slot.currentPr)"
+                    }
+                    'compact' {
+                        Write-OrcLog 'push_wave_compact' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; from = "$($pq.lastCompactHeadSha)"; v_free_gb = $vWave; reason = $wave.reason } 'WARN'
+                        Invoke-StopAndCompact -Reason 'push_wave_boundary'
+                        $pq.lastCompactHeadSha = $tipSha
+                        $pq.lastCompactContext = "$($slot.currentPr)"
+                        try {
+                            if (-not ($state.PSObject.Properties.Name -contains 'lastBoundaryCompactUtc')) {
+                                $state | Add-Member -NotePropertyName lastBoundaryCompactUtc -NotePropertyValue '' -Force
+                            }
+                            $state.lastBoundaryCompactUtc = $nowUtc
+                            Save-State $state
+                        }
+                        catch { }
+                    }
+                    default {
+                        if ($guestBusy -and $tipSha -and "$($pq.lastCompactHeadSha)" -and ("$tipSha".ToLowerInvariant() -ne "$($pq.lastCompactHeadSha)".ToLowerInvariant())) {
+                            Write-OrcLog 'push_wave_deferred' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; reason = $wave.reason } 'WARN'
+                        }
+                    }
+                }
+            }
             if ($slot.action -eq 'boundary_advance') {
                 # No boundary o proximo PR so e liberado quando a box esta apta. A pergunta
                 # "o guest tem job ativo?" e checada SEMPRE primeiro, independente do disco —
@@ -575,6 +648,11 @@ try {
                         Invoke-StopAndCompact -Reason 'pr_boundary'
                         "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
                     }
+                    # Cross-PR: reseta o tip de push-wave pro proximo ctx (seed no
+                    # 1o hold) — evita compact falso se o tip do PR novo bate o
+                    # last do PR antigo por coincidencia.
+                    $pq.lastCompactHeadSha = ''
+                    $pq.lastCompactContext = ''
                 }
             }
             else {

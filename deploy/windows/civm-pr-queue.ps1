@@ -79,3 +79,67 @@ function Resolve-PrSlot {
     # Nada na fila e nada concedido -> ocioso.
     return [pscustomobject]@{ action = 'idle'; currentPr = ''; idleSinceUtc = ''; reason = 'fila vazia' }
 }
+
+# Resolve-PushWaveCompact: compact OFFLINE entre PUSHES do MESMO PR (mudanca de
+# head_sha), sem thrash no meio do MESMO push.
+#
+# Por que existe: o boundary_compact cross-PR so roda quando o contexto ACABA
+# (grace + avanco). Um PR longo (ex.: pr-1423) com dezenas de synchronize mantem
+# o slot por dias; o VHDX incha e o V: fica em ~25GB so com warn_clean online.
+# O pago nao tem esse gap (VM efemera por job). Aqui o sinal de "push novo" e a
+# mudanca do tip head_sha do contexto — NAO o gap running>0->0 (esse thrashava
+# no meio do batch do mesmo push: incidente main-push 699eb1d).
+#
+# Retorna action:
+#   none       — nao faz nada (sem tip, guest ocupado, mesmo tip)
+#   seed       — 1a vez vendo o tip (grava sha, sem compact)
+#   skip_clean — tip mudou e V: ja >= floor (so atualiza sha)
+#   compact    — tip mudou, guest ocioso, V: sujo -> Stop+Optimize
+#
+# PURA: zero I/O. Caller busca tip/V/guest e executa.
+function Resolve-PushWaveCompact {
+    [CmdletBinding()]
+    param(
+        [string]$CurrentPr = '',
+        [string]$TipHeadSha = '',
+        [string]$LastCompactHeadSha = '',
+        [string]$LastCompactContext = '',
+        [bool]$GuestHasActiveJob = $false,
+        [int]$VFreeGB = 999,
+        [int]$AdmitFloorGB = 55
+    )
+    if ([string]::IsNullOrWhiteSpace($CurrentPr)) {
+        return [pscustomobject]@{ action = 'none'; reason = 'sem currentPr' }
+    }
+    if ([string]::IsNullOrWhiteSpace($TipHeadSha)) {
+        return [pscustomobject]@{ action = 'none'; reason = 'tip head_sha ausente' }
+    }
+    # Nunca compacta com Runner.Worker no guest (mata job mid-wave).
+    if ($GuestHasActiveJob) {
+        return [pscustomobject]@{ action = 'none'; reason = 'guest com job ativo -> defere push-wave' }
+    }
+
+    $tip = "$TipHeadSha".ToLowerInvariant()
+    $last = "$LastCompactHeadSha".ToLowerInvariant()
+    $sameCtx = ("$LastCompactContext" -eq "$CurrentPr")
+
+    # 1a observacao do tip neste contexto: grava sem compact (cold start ja
+    # compactou no boundary anterior ou e o 1o PR do dia).
+    if (-not $sameCtx -or [string]::IsNullOrWhiteSpace($last)) {
+        return [pscustomobject]@{ action = 'seed'; reason = "seed tip $tip no ctx $CurrentPr" }
+    }
+    # Mesmo push: NAO compacta (anti-thrash mid-batch do mesmo head_sha).
+    if ($tip -eq $last) {
+        return [pscustomobject]@{ action = 'none'; reason = "mesmo tip $tip (intra-push)" }
+    }
+
+    # Tip mudou = novo push no mesmo PR (ou rebased tip).
+    # V<=0 = telemetria ausente: so seed o tip (nao Stop-VM as cegas).
+    if ($VFreeGB -le 0) {
+        return [pscustomobject]@{ action = 'seed'; reason = "tip mudou $last->$tip mas V nao medido -> seed fail-safe" }
+    }
+    if ($VFreeGB -ge $AdmitFloorGB) {
+        return [pscustomobject]@{ action = 'skip_clean'; reason = "tip mudou $last->$tip V=$VFreeGB>=$AdmitFloorGB -> so atualiza tip" }
+    }
+    return [pscustomobject]@{ action = 'compact'; reason = "tip mudou $last->$tip V=$VFreeGB<$AdmitFloorGB -> compact push-wave" }
+}
