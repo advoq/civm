@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.22.2](https://github.com/advoq/civm/compare/v1.22.1...v1.22.2) (2026-07-09)
+
+
+### Bug Fixes
+
+* **orchestrator:** compact VHDX between pushes of the same PR ([#157](https://github.com/advoq/civm/issues/157)) ([360dd7a](https://github.com/advoq/civm/commit/360dd7a7934bbfd1f40dfff19c9b671d69956c10))
+* **queue:** close disk-admission and guest-liveness reconciliation gaps ([#155](https://github.com/advoq/civm/issues/155)) ([3ffa617](https://github.com/advoq/civm/commit/3ffa617d786f806c1a0657a8c37c2ce39c002ec1))
+* **reaper:** reap superseded SHA runs on open PRs ([#156](https://github.com/advoq/civm/issues/156)) ([9ac05be](https://github.com/advoq/civm/commit/9ac05be65d8a6beb19cdb9256ff072902601bafd))
+
+
+### Documentation
+
+* reconcile disk-floor refs (AdmitFloorGB 51-&gt;55) + Kahneman path + supersede banners ([#151](https://github.com/advoq/civm/issues/151)) ([68dc758](https://github.com/advoq/civm/commit/68dc758197555028c14973269425d3cbffa9565f))
+* **validation:** record superseded-sha reaper live on guest ([3b6aefc](https://github.com/advoq/civm/commit/3b6aefc9d0f6b8f9165186998abb150ece26ab4d))
+
 ## [1.22.1](https://github.com/advoq/civm/compare/v1.22.0...v1.22.1) (2026-06-27)
 
 
