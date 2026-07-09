@@ -293,10 +293,59 @@ function Invoke-GuestFullClean {
     # nao ve esses blocos como livres -> o Optimize-VHD offline recuperava ~0
     # (reclaim_no_progress) e o piso "limpo" caia abaixo de 58. O trim marca os
     # blocos pra o Optimize compactar de verdade (mesma razao do warn_clean).
-    $remote = 'rm -rf ~/.cache/* 2>/dev/null; rm -rf ~/actions-runner*/_diag/* 2>/dev/null; for w in ~/actions-runner*/_work; do find "$w" -maxdepth 1 -mindepth 1 ! -name _tool -exec rm -rf {} + 2>/dev/null; done; sudo journalctl --vacuum-size=50M >/dev/null 2>&1; sudo rm -rf /tmp/* /var/tmp/* 2>/dev/null; sudo docker system prune -af --volumes >/dev/null 2>&1; sudo docker builder prune -af >/dev/null 2>&1; sudo fstrim -av >/dev/null 2>&1; df -BG --output=avail / | tail -1 | tr -dc 0-9'
+    #
+    # STUB _work/<owner>/<repo>: o runner invoca job-started/job-completed com
+    # WorkingDirectory=GITHUB_WORKSPACE. Se o dir nao existe (apos full clean),
+    # o Process.Start falha com "No such file or directory" ANTES do hook rodar
+    # (CI Router fail em 9s, advoq#1423 2026-07-09). Re-cria stubs vazios dos
+    # owners que a box serve (advoq org runner).
+    $remote = @'
+rm -rf ~/.cache/* 2>/dev/null
+rm -rf ~/actions-runner*/_diag/* 2>/dev/null
+for w in ~/actions-runner*/_work; do
+  [ -d "$w" ] || continue
+  find "$w" -maxdepth 1 -mindepth 1 ! -name _tool -exec rm -rf {} + 2>/dev/null
+  # stubs para hooks do runner (cwd deve existir antes do job-started)
+  mkdir -p "$w/advoq/advoq" 2>/dev/null || true
+done
+sudo journalctl --vacuum-size=50M >/dev/null 2>&1
+sudo rm -rf /tmp/* /var/tmp/* 2>/dev/null
+sudo docker system prune -af --volumes >/dev/null 2>&1
+sudo docker builder prune -af >/dev/null 2>&1
+sudo fstrim -av >/dev/null 2>&1
+df -BG --output=avail / | tail -1 | tr -dc 0-9
+'@
     $free = Invoke-GuestSsh -Command $remote
     if ($script:LastGuestSshOk) { Write-OrcLog 'guest_full_clean' @{ free_after = "$free" } }
     else { Write-OrcLog 'guest_full_clean_warn' @{ error = "$free" } 'WARN' }
+}
+
+# Cancela runs superseded/PR-fechado no guest (reaper). Usado no push-wave
+# ANTES do compact, para o guest esvaziar workers e a fila do tip antigo sumir
+# (paridade com cancel-in-progress do CI pago). Best-effort.
+function Invoke-GuestReapRuns {
+    $remote = @'
+set -a
+[ -f /etc/civm/run-reaper.env ] && . /etc/civm/run-reaper.env
+set +a
+repos="${CIVM_REAPER_REPOS:-advoq/advoq}"
+civmctl reap-runs --execute --repos="$repos" 2>&1 | tail -8
+'@
+    $out = Invoke-GuestSsh -Command $remote
+    if ($script:LastGuestSshOk) { Write-OrcLog 'guest_reap_runs' @{ out = "$out" } }
+    else { Write-OrcLog 'guest_reap_runs_warn' @{ error = "$out" } 'WARN' }
+}
+
+# Espera o guest ficar sem Runner.Worker (ate $TimeoutSec). Usado apos reaper
+# no push-wave para so entao compactar. Retorna $true se ocioso.
+function Wait-GuestIdle {
+    param([int]$TimeoutSec = 90, [int]$PollSec = 5)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Get-GuestHasActiveJob)) { return $true }
+        Start-Sleep -Seconds $PollSec
+    }
+    return (-not (Get-GuestHasActiveJob))
 }
 
 # Stop-guard independente do token: pergunta ao proprio guest se ha algum
@@ -573,16 +622,33 @@ try {
         # job real ativo no guest (mesma seguranca do stop ocioso).
         if ($EnforceQueue -and -not $Observe) {
             $prevCtx = "$($pq.currentPr)"
-            # ---- PUSH-WAVE: compact entre PUSHES do MESMO PR (tip head_sha mudou) ----
-            # So quando o slot esta em hold no mesmo ctx (PR ainda "vivo"). Nao thrash
-            # mid-batch: Resolve-PushWaveCompact exige tip != lastCompactHeadSha.
+            # ---- PUSH-WAVE (paridade com CI pago no push): ----
+            # tip head_sha mudou => 1) reaper cancela SHA velho  2) espera guest
+            # ocioso  3) compact se V sujo  4) jobs do tip novo pegam VM limpa.
+            # Mesmo tip => none (anti-thrash mid-batch do mesmo push).
             if ("$($slot.currentPr)" -ne '' -and ("$($slot.action)" -eq 'hold' -or "$($slot.action)" -eq 'grant')) {
                 $tipSha = Get-ContextHeadSha -ContextId "$($slot.currentPr)"
+                $lastTip = "$($pq.lastCompactHeadSha)"
+                $tipChanged = ($tipSha -ne '' -and $lastTip -ne '' -and ("$($pq.lastCompactContext)" -eq "$($slot.currentPr)") -and ("$tipSha".ToLowerInvariant() -ne "$lastTip".ToLowerInvariant()))
+                # Tip mudou: cancela runs do SHA antigo ANTES de decidir compact
+                # (sem isso o guest fica busy e o wave so deferia para sempre).
+                if ($tipChanged) {
+                    Write-OrcLog 'push_wave_reap' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; from = $lastTip }
+                    Invoke-GuestReapRuns
+                    $idleOk = Wait-GuestIdle -TimeoutSec 90 -PollSec 5
+                    Write-OrcLog 'push_wave_wait_idle' @{ ctx = "$($slot.currentPr)"; idle = $idleOk }
+                }
                 $guestBusy = Get-GuestHasActiveJob
                 $vWave = Get-VFreeGB
                 $wave = Resolve-PushWaveCompact -CurrentPr "$($slot.currentPr)" -TipHeadSha $tipSha `
                     -LastCompactHeadSha "$($pq.lastCompactHeadSha)" -LastCompactContext "$($pq.lastCompactContext)" `
                     -GuestHasActiveJob $guestBusy -VFreeGB $vWave -AdmitFloorGB $AdmitFloorGB
+                # Se ainda busy apos reap+wait e tip mudou + V sujo: compacta mesmo
+                # assim (Stop-VM mata workers residual — tip novo precisa da box).
+                if ($tipChanged -and "$($wave.action)" -eq 'none' -and $guestBusy -and $vWave -gt 0 -and $vWave -lt $AdmitFloorGB) {
+                    Write-OrcLog 'push_wave_force_compact' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; v_free_gb = $vWave; reason = 'guest ainda busy apos reap+wait; Stop-VM no compact' } 'WARN'
+                    $wave = [pscustomobject]@{ action = 'compact'; reason = 'force apos tip change + busy residual' }
+                }
                 switch ("$($wave.action)") {
                     'seed' {
                         Write-OrcLog 'push_wave_seed' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; reason = $wave.reason }

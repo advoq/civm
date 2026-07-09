@@ -1164,3 +1164,19 @@ push com V<55 deve logar push_wave_compact.
 
 **Proxima acao:** merge PR; observar log `push_wave_*` apos synchronize.
 
+
+## 2026-07-09 19:22 -03 — workspace stub + push-wave cancel live
+
+**O que:** Fix do CI Router fail em 9s (cwd ausente apos full clean) + push-wave cancel-first no tip change.
+**Categoria:** infra-ci / runner-hooks
+**Dados medidos:**
+- Falha original: run advoq 29052955302 — bash WorkingDirectory `/home/emdev/actions-runner-advoq-org/_work/advoq/advoq` missing.
+- Mitigacao live: `mkdir -p` no guest; binary civmctl 11371035 bytes em `/usr/local/bin` com action `workspace_stub` no dry-run job-completed.
+- Orchestrator deployado: SHA `7af75062...` em `C:\civm-deploy\civm-vm-orchestrator.ps1` (Invoke-GuestReapRuns + Wait-GuestIdle + force compact).
+- Testes: `go test ./internal/hook -count=1` ok (7 testes novos do stub).
+- PR: advoq/civm#158 commit `36bff16`.
+- Host V free no dry-run: 34 GB (abaixo do floor 55 — compact deve rodar no tip change sujo).
+**Veredito:** 🟡 stub + hook deployados e CI Router re-run enfileirado; consolidacao pendente do re-run verde + merge #158.
+**Proxima acao:** confirmar CI Router verde no advoq#1423; merge #158; monitorar push-wave_reap nos logs do orchestrator no proximo multi-push.
+**Como medir:** `ssh gha-ubuntu-2404 'ls -ld ~/actions-runner-advoq-org/_work/advoq/advoq'`; `gh run view 29052955302 --repo advoq/advoq`; dry-run `civmctl hook job-completed --json | jq '.actions[]|select(.name=="workspace_stub")'`.
+

@@ -786,3 +786,16 @@ brutos aqui.
   copia deploy/bin, registry-cache.service, mem metrics, ciguard devctl).
 - **Open items:** RF-10 (reclaim no admit com V<51 mesmo VM Running) segue pendente
   — e ortogonal a estes fixes.
+
+## 2026-07-09 — workspace stub after clean + push-wave cancel-first
+
+- **Branch/PR:** fix/workspace-stub-and-push-wave-cancel → advoq/civm#158 (`36bff16`).
+- **Root cause:** GuestFullClean / cleanWorkRoot apagavam `_work/advoq/advoq`; o Actions runner inicia job-started com WorkingDirectory=GITHUB_WORKSPACE → bash "No such file or directory" em 9s (CI Router advoq#1423).
+- **Fix:**
+  1. `ensureWorkspaceStub` no hook apos `cleanWorkRoot` (default advoq/advoq).
+  2. `mkdir -p "$w/advoq/advoq"` no `Invoke-GuestFullClean`.
+  3. Push-wave tip change: reap-runs → Wait-GuestIdle(90s) → Resolve-PushWaveCompact; force compact se residual busy + V sujo.
+- **Deploy live (antes do merge):** civmctl no guest via pipe+install; orchestrator em `C:\civm-deploy`; stub dirs recriados.
+- **Validacao:** go test hook ok; dry-run lista workspace_stub; re-run CI Router 29052955302 enfileirado.
+- **Open:** merge #158 apos CI; observar logs `push_wave_reap` / `push_wave_force_compact` no host.
+

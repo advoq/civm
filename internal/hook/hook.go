@@ -346,7 +346,8 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	caps := cacheCaps()
 	// Slack de 10: buildx + image_prune + 2 reap scopes + container/volume prune +
 	// apt + journal + fstrim + cache_trim_deferred.
-	estCap := 2*len(roots) + len(caps) + 10
+	// Por root: kill containers + cleanWorkRoot + workspace_stub.
+	estCap := 3*len(roots) + len(caps) + 10
 	actions := make([]Action, 0, estCap)
 	for _, root := range roots {
 		// Kill orphan containers BEFORE deleting the root: a cancelled job's
@@ -359,6 +360,11 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 		// runners mount their own roots.
 		actions = append(actions, killWorkRootContainers(ctx, opts, root))
 		actions = append(actions, cleanWorkRoot(ctx, opts, root, purgeCaches))
+		// Apos wipe do _work/<owner>, o runner tenta job-started com
+		// WorkingDirectory=_work/owner/repo. Se o dir nao existe, o Process.Start
+		// do bash falha ANTES do hook (CI Router 9s fail, 2026-07-09). Stub vazio
+		// restaura o cwd esperado sem reintroduzir conteudo de checkout.
+		actions = append(actions, ensureWorkspaceStub(opts, root))
 	}
 	// O cache trim NUNCA roda enquanto OUTRO runner tem build ativo. O hook roda
 	// sob o Runner.Worker do próprio job (ParseActiveProcesses só exclui o PID do
@@ -540,6 +546,39 @@ func cleanWorkRoot(ctx context.Context, opts Options, root string, preserveActiv
 				a.Error = res.Err.Error()
 				return a
 			}
+		}
+	}
+	return a
+}
+
+// ensureWorkspaceStub recreates an empty _work/<owner>/<repo> so the next
+// job's hooks can start. The Actions runner sets the hook process WorkingDirectory
+// to GITHUB_WORKSPACE; if that path is missing after cleanWorkRoot / guest full
+// clean, bash fails with "No such file or directory" before the hook script runs.
+func ensureWorkspaceStub(opts Options, root string) Action {
+	a := Action{Name: "workspace_stub", Path: root, Executed: opts.Execute}
+	if !safeWorkRoot(root) {
+		a.Error = "unsafe work root"
+		return a
+	}
+	repo := strings.TrimSpace(opts.Repository)
+	if repo == "" && strings.TrimSpace(opts.GitHubWorkspace) != "" {
+		// Fallback: last two segments of GITHUB_WORKSPACE (.../_work/owner/repo).
+		rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(opts.GitHubWorkspace))
+		if err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			repo = filepath.ToSlash(rel)
+		}
+	}
+	parts := strings.Split(filepath.ToSlash(repo), "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		// Known org runner default when env is empty after full clean.
+		parts = []string{"advoq", "advoq"}
+	}
+	path := filepath.Join(root, parts[0], parts[1])
+	a.Path = path
+	if opts.Execute {
+		if err := opts.MkdirAllFn(path, 0o755); err != nil {
+			a.Error = err.Error()
 		}
 	}
 	return a
