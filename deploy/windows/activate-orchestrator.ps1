@@ -25,7 +25,13 @@ $toCopy = @(
 foreach ($f in $toCopy) {
     $src = Join-Path $PSScriptRoot $f
     if (-not (Test-Path -LiteralPath $src)) { throw "missing source: $src" }
-    Copy-Item $src $dst -Force
+    $destFile = Join-Path $dst $f
+    # Skip no-op when ja estamos em C:\civm-deploy (re-run in-place).
+    if ((Resolve-Path -LiteralPath $src).Path -eq (Resolve-Path -LiteralPath (Split-Path $destFile -Parent)).Path + "\$f") {
+        if ((Test-Path -LiteralPath $destFile) -and ((Get-FileHash $src).Hash -eq (Get-FileHash $destFile).Hash)) { continue }
+    }
+    if ((Test-Path -LiteralPath $destFile) -and ((Resolve-Path $src).Path -eq (Resolve-Path $destFile).Path)) { continue }
+    Copy-Item $src $destFile -Force
 }
 $perr = $null
 [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $dst 'civm-vm-orchestrator.ps1'), [ref]$null, [ref]$perr) | Out-Null
