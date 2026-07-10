@@ -799,3 +799,12 @@ brutos aqui.
 - **Validacao:** go test hook ok; dry-run lista workspace_stub; re-run CI Router 29052955302 enfileirado.
 - **Open:** merge #158 apos CI; observar logs `push_wave_reap` / `push_wave_force_compact` no host.
 
+
+## 2026-07-10 — push-wave seed always (paid CI parity)
+
+- **Branch:** fix/push-wave-seed-always-paid-parity
+- **Bug:** Resolve-PushWaveCompact retornava none se guest busy ANTES do seed → lastCompact vazio forever → 0 push_wave em produção.
+- **Fix:** seed sempre; tip-change retorna compact/skip_clean mesmo busy; caller reap→wait→force Stop+compact; skip_clean faz GuestFullClean.
+- **Deploy:** C:\civm-deploy live; fila pr-1423 seedada com tip atual.
+- **Tests:** 35 PASS civm-pr-queue.test.ps1
+

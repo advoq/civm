@@ -622,32 +622,45 @@ try {
         # job real ativo no guest (mesma seguranca do stop ocioso).
         if ($EnforceQueue -and -not $Observe) {
             $prevCtx = "$($pq.currentPr)"
-            # ---- PUSH-WAVE (paridade com CI pago no push): ----
-            # tip head_sha mudou => 1) reaper cancela SHA velho  2) espera guest
-            # ocioso  3) compact se V sujo  4) jobs do tip novo pegam VM limpa.
+            # ---- PUSH-WAVE (paridade CI pago no push / re-run de tip novo): ----
+            # tip head_sha mudou => 1) seed tip SEMPRE (mesmo busy)  2) reaper
+            # cancela SHA velho  3) wait idle  4) compact se V sujo OU guest
+            # full-clean se V ok  5) checks do tip novo na box limpa.
             # Mesmo tip => none (anti-thrash mid-batch do mesmo push).
             if ("$($slot.currentPr)" -ne '' -and ("$($slot.action)" -eq 'hold' -or "$($slot.action)" -eq 'grant')) {
                 $tipSha = Get-ContextHeadSha -ContextId "$($slot.currentPr)"
                 $lastTip = "$($pq.lastCompactHeadSha)"
                 $tipChanged = ($tipSha -ne '' -and $lastTip -ne '' -and ("$($pq.lastCompactContext)" -eq "$($slot.currentPr)") -and ("$tipSha".ToLowerInvariant() -ne "$lastTip".ToLowerInvariant()))
-                # Tip mudou: cancela runs do SHA antigo ANTES de decidir compact
-                # (sem isso o guest fica busy e o wave so deferia para sempre).
-                if ($tipChanged) {
-                    Write-OrcLog 'push_wave_reap' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; from = $lastTip }
-                    Invoke-GuestReapRuns
-                    $idleOk = Wait-GuestIdle -TimeoutSec 90 -PollSec 5
-                    Write-OrcLog 'push_wave_wait_idle' @{ ctx = "$($slot.currentPr)"; idle = $idleOk }
-                }
-                $guestBusy = Get-GuestHasActiveJob
+                # Decide ANTES do reap (pure): seed grava tip mesmo com busy.
+                $guestBusyBefore = Get-GuestHasActiveJob
                 $vWave = Get-VFreeGB
                 $wave = Resolve-PushWaveCompact -CurrentPr "$($slot.currentPr)" -TipHeadSha $tipSha `
                     -LastCompactHeadSha "$($pq.lastCompactHeadSha)" -LastCompactContext "$($pq.lastCompactContext)" `
-                    -GuestHasActiveJob $guestBusy -VFreeGB $vWave -AdmitFloorGB $AdmitFloorGB
-                # Se ainda busy apos reap+wait e tip mudou + V sujo: compacta mesmo
-                # assim (Stop-VM mata workers residual — tip novo precisa da box).
-                if ($tipChanged -and "$($wave.action)" -eq 'none' -and $guestBusy -and $vWave -gt 0 -and $vWave -lt $AdmitFloorGB) {
-                    Write-OrcLog 'push_wave_force_compact' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; v_free_gb = $vWave; reason = 'guest ainda busy apos reap+wait; Stop-VM no compact' } 'WARN'
-                    $wave = [pscustomobject]@{ action = 'compact'; reason = 'force apos tip change + busy residual' }
+                    -GuestHasActiveJob $guestBusyBefore -VFreeGB $vWave -AdmitFloorGB $AdmitFloorGB
+                # Tip mudou (compact/skip_clean): reap+wait ANTES de limpar —
+                # senao workers do SHA velho seguram o guest e o V: (CI pago =
+                # cancel + fresh). Seed nao precisa reap.
+                if ("$($wave.action)" -eq 'compact' -or "$($wave.action)" -eq 'skip_clean') {
+                    if ($tipChanged) {
+                        Write-OrcLog 'push_wave_reap' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; from = $lastTip }
+                        Invoke-GuestReapRuns
+                    }
+                    $idleOk = Wait-GuestIdle -TimeoutSec 90 -PollSec 5
+                    Write-OrcLog 'push_wave_wait_idle' @{ ctx = "$($slot.currentPr)"; idle = $idleOk; action = "$($wave.action)" }
+                    # Re-mede apos wait (V e busy podem ter mudado).
+                    $guestBusy = Get-GuestHasActiveJob
+                    $vWave = Get-VFreeGB
+                    # Pure com GuestHasActiveJob=$false: queremos a intencao de
+                    # limpeza do tip; residual busy vira force abaixo.
+                    $wave = Resolve-PushWaveCompact -CurrentPr "$($slot.currentPr)" -TipHeadSha $tipSha `
+                        -LastCompactHeadSha "$($pq.lastCompactHeadSha)" -LastCompactContext "$($pq.lastCompactContext)" `
+                        -GuestHasActiveJob $false -VFreeGB $vWave -AdmitFloorGB $AdmitFloorGB
+                    # Ainda busy apos reap+wait: force Stop+compact (unico hard
+                    # reset). Tip novo precisa da box — paridade fresh runner.
+                    if ($guestBusy) {
+                        Write-OrcLog 'push_wave_force_compact' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; v_free_gb = $vWave; reason = 'guest ainda busy apos reap+wait; Stop-VM' } 'WARN'
+                        $wave = [pscustomobject]@{ action = 'compact'; reason = 'force apos tip change + busy residual' }
+                    }
                 }
                 switch ("$($wave.action)") {
                     'seed' {
@@ -656,7 +669,10 @@ try {
                         $pq.lastCompactContext = "$($slot.currentPr)"
                     }
                     'skip_clean' {
+                        # V: ok no host — ainda limpa guest (docker/cache/_work) pra
+                        # checks do tip novo nao herdarem estado do SHA velho.
                         Write-OrcLog 'push_wave_skip_clean' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; v_free_gb = $vWave; reason = $wave.reason }
+                        Invoke-GuestFullClean
                         $pq.lastCompactHeadSha = $tipSha
                         $pq.lastCompactContext = "$($slot.currentPr)"
                     }
@@ -675,9 +691,7 @@ try {
                         catch { }
                     }
                     default {
-                        if ($guestBusy -and $tipSha -and "$($pq.lastCompactHeadSha)" -and ("$tipSha".ToLowerInvariant() -ne "$($pq.lastCompactHeadSha)".ToLowerInvariant())) {
-                            Write-OrcLog 'push_wave_deferred' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; reason = $wave.reason } 'WARN'
-                        }
+                        # none: mesmo tip ou sem tip — no-op.
                     }
                 }
             }
