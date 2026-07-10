@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.22.3](https://github.com/advoq/civm/compare/v1.22.2...v1.22.3) (2026-07-10)
+
+
+### Bug Fixes
+
+* **orchestrator:** push-wave seed always + paid-CI clean on tip change ([70903a1](https://github.com/advoq/civm/commit/70903a1c32ca62c41b12d4fdf9083d6235cbe08c))
+* **orchestrator:** push-wave seed always + paid-CI clean on tip change ([a2647b5](https://github.com/advoq/civm/commit/a2647b512b69c7e0e693e9dfc2a89ca157f653de))
+* **orchestrator:** push-wave seed always + paid-CI clean on tip change ([#160](https://github.com/advoq/civm/issues/160)) ([70903a1](https://github.com/advoq/civm/commit/70903a1c32ca62c41b12d4fdf9083d6235cbe08c))
+
 ## [1.22.2](https://github.com/advoq/civm/compare/v1.22.1...v1.22.2) (2026-07-09)
 
 
