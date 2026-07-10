@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.22.4](https://github.com/advoq/civm/compare/v1.22.3...v1.22.4) (2026-07-10)
+
+
+### Bug Fixes
+
+* **deploy:** skip no-op copy when activate runs in-place ([60a6982](https://github.com/advoq/civm/commit/60a6982bb43c285c2946c81c26f01fd640bf9c0d))
+* **orchestrator:** push-wave before admit + reject stale host metrics ([fa713ef](https://github.com/advoq/civm/commit/fa713effcbb7bc755da7aa3c8424a458abbe448a))
+* **orchestrator:** push-wave before admit + reject stale host metrics ([ff8212f](https://github.com/advoq/civm/commit/ff8212f180545341069bce5bb085859559028d62))
+
 ## [1.22.3](https://github.com/advoq/civm/compare/v1.22.2...v1.22.3) (2026-07-10)
 
 
