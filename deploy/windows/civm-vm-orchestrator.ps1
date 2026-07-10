@@ -456,6 +456,132 @@ function Invoke-StopAndCompact {
 . "$PSScriptRoot\civm-reclaim-gate.ps1"
 . "$PSScriptRoot\civm-pr-queue.ps1"
 
+# Fila FIFO + push-wave (paridade CI pago no tip change). Retorna
+# @{ state; didCompact }. Com -DoEnforce: reap/wait/compact + publica contexto.
+# Sem -DoEnforce: so loga would_* (observe).
+function Invoke-PrQueuePushWave {
+    param(
+        [Parameter(Mandatory)][string]$NowUtc,
+        [int]$AdmitFloorGB = 55,
+        [Parameter(Mandatory)]$State,
+        [bool]$DoEnforce = $true
+    )
+    $didCompact = $false
+    try {
+        $act = Get-PrActivity
+        $pq = $null
+        if (Test-Path -LiteralPath $PrQueuePath) { try { $pq = Get-Content -LiteralPath $PrQueuePath -Raw | ConvertFrom-Json } catch {} }
+        if ($null -eq $pq) { $pq = [pscustomobject]@{ contexts = @(); currentPr = ''; currentIdleSinceUtc = ''; lastCompactHeadSha = ''; lastCompactContext = '' } }
+        if (-not ($pq.PSObject.Properties.Name -contains 'lastCompactHeadSha')) {
+            $pq | Add-Member -NotePropertyName lastCompactHeadSha -NotePropertyValue '' -Force
+        }
+        if (-not ($pq.PSObject.Properties.Name -contains 'lastCompactContext')) {
+            $pq | Add-Member -NotePropertyName lastCompactContext -NotePropertyValue '' -Force
+        }
+        $seen = @{}; foreach ($c in @($pq.contexts)) { if ($null -ne $c) { $seen["$($c.id)"] = $c.firstSeenUtc } }
+        $ordered = @()
+        foreach ($c in @($pq.contexts)) { if ($null -ne $c -and $act.ContainsKey("$($c.id)")) { $ordered += [pscustomobject]@{ id = "$($c.id)"; firstSeenUtc = $c.firstSeenUtc } } }
+        foreach ($id in ($act.Keys | Sort-Object)) { if (-not $seen.ContainsKey("$id")) { $ordered += [pscustomobject]@{ id = "$id"; firstSeenUtc = $NowUtc } } }
+        $prs = @(); foreach ($c in $ordered) { $prs += [pscustomobject]@{ number = $c.id; realJobs = [int]$act["$($c.id)"] } }
+        $slot = Resolve-PrSlot -Prs $prs -CurrentPr "$($pq.currentPr)" -CurrentIdleSinceUtc "$($pq.currentIdleSinceUtc)" -NowUtc $NowUtc
+        if ($slot.action -ne 'hold' -or "$($pq.currentPr)" -ne "$($slot.currentPr)") {
+            $ctxStr = (@($ordered | ForEach-Object { $cid = "$($_.id)"; "${cid}:$([int]$act[$cid])" }) -join ' ')
+            Write-OrcLog "would_$($slot.action)" @{ current = "$($slot.currentPr)"; ctxs = $ctxStr; reason = $slot.reason }
+        }
+        if ($DoEnforce) {
+            $prevCtx = "$($pq.currentPr)"
+            if ("$($slot.currentPr)" -ne '' -and ("$($slot.action)" -eq 'hold' -or "$($slot.action)" -eq 'grant')) {
+                $tipSha = Get-ContextHeadSha -ContextId "$($slot.currentPr)"
+                $lastTip = "$($pq.lastCompactHeadSha)"
+                $tipChanged = ($tipSha -ne '' -and $lastTip -ne '' -and ("$($pq.lastCompactContext)" -eq "$($slot.currentPr)") -and ("$tipSha".ToLowerInvariant() -ne "$lastTip".ToLowerInvariant()))
+                Write-OrcLog 'push_wave_tip' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; last = $lastTip; changed = $tipChanged }
+                $guestBusyBefore = Get-GuestHasActiveJob
+                $vWave = Get-VFreeGB
+                $wave = Resolve-PushWaveCompact -CurrentPr "$($slot.currentPr)" -TipHeadSha $tipSha `
+                    -LastCompactHeadSha "$($pq.lastCompactHeadSha)" -LastCompactContext "$($pq.lastCompactContext)" `
+                    -GuestHasActiveJob $guestBusyBefore -VFreeGB $vWave -AdmitFloorGB $AdmitFloorGB
+                if ("$($wave.action)" -eq 'compact' -or "$($wave.action)" -eq 'skip_clean') {
+                    if ($tipChanged) {
+                        Write-OrcLog 'push_wave_reap' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; from = $lastTip }
+                        Invoke-GuestReapRuns
+                    }
+                    $idleOk = Wait-GuestIdle -TimeoutSec 90 -PollSec 5
+                    Write-OrcLog 'push_wave_wait_idle' @{ ctx = "$($slot.currentPr)"; idle = $idleOk; action = "$($wave.action)" }
+                    $guestBusy = Get-GuestHasActiveJob
+                    $vWave = Get-VFreeGB
+                    $wave = Resolve-PushWaveCompact -CurrentPr "$($slot.currentPr)" -TipHeadSha $tipSha `
+                        -LastCompactHeadSha "$($pq.lastCompactHeadSha)" -LastCompactContext "$($pq.lastCompactContext)" `
+                        -GuestHasActiveJob $false -VFreeGB $vWave -AdmitFloorGB $AdmitFloorGB
+                    if ($guestBusy) {
+                        Write-OrcLog 'push_wave_force_compact' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; v_free_gb = $vWave; reason = 'guest ainda busy apos reap+wait; Stop-VM' } 'WARN'
+                        $wave = [pscustomobject]@{ action = 'compact'; reason = 'force apos tip change + busy residual' }
+                    }
+                }
+                switch ("$($wave.action)") {
+                    'seed' {
+                        Write-OrcLog 'push_wave_seed' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; reason = $wave.reason }
+                        $pq.lastCompactHeadSha = $tipSha
+                        $pq.lastCompactContext = "$($slot.currentPr)"
+                    }
+                    'skip_clean' {
+                        Write-OrcLog 'push_wave_skip_clean' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; v_free_gb = $vWave; reason = $wave.reason }
+                        Invoke-GuestFullClean
+                        $pq.lastCompactHeadSha = $tipSha
+                        $pq.lastCompactContext = "$($slot.currentPr)"
+                    }
+                    'compact' {
+                        Write-OrcLog 'push_wave_compact' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; from = "$($pq.lastCompactHeadSha)"; v_free_gb = $vWave; reason = $wave.reason } 'WARN'
+                        Invoke-StopAndCompact -Reason 'push_wave_boundary'
+                        $didCompact = $true
+                        $pq.lastCompactHeadSha = $tipSha
+                        $pq.lastCompactContext = "$($slot.currentPr)"
+                        try {
+                            if (-not ($State.PSObject.Properties.Name -contains 'lastBoundaryCompactUtc')) {
+                                $State | Add-Member -NotePropertyName lastBoundaryCompactUtc -NotePropertyValue '' -Force
+                            }
+                            $State.lastBoundaryCompactUtc = $NowUtc
+                        }
+                        catch { }
+                    }
+                }
+            }
+            if ($slot.action -eq 'boundary_advance') {
+                if (Get-GuestHasActiveJob) {
+                    Write-OrcLog 'pr_boundary_deferred' @{ done = $prevCtx; reason = 'guest com job ativo -> espera esvaziar antes de avancar (independente do disco)' } 'WARN'
+                    "$prevCtx" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                    $slot.currentPr = $prevCtx
+                    $slot.idleSinceUtc = "$($pq.currentIdleSinceUtc)"
+                }
+                else {
+                    $vNow = Get-VFreeGB
+                    if ($vNow -ge $AdmitFloorGB) {
+                        Write-OrcLog 'pr_boundary_skip_clean' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow }
+                        "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                    }
+                    else {
+                        Write-OrcLog 'pr_boundary_compact' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow } 'WARN'
+                        Invoke-StopAndCompact -Reason 'pr_boundary'
+                        $didCompact = $true
+                        "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
+                    }
+                    $pq.lastCompactHeadSha = ''
+                    $pq.lastCompactContext = ''
+                }
+            }
+            else {
+                try { "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii }
+                catch { Write-OrcLog 'pr_publish_error' @{ error = "$($_.Exception.Message)" } 'WARN' }
+            }
+        }
+        $pq.contexts = $ordered
+        $pq.currentPr = "$($slot.currentPr)"
+        $pq.currentIdleSinceUtc = "$($slot.idleSinceUtc)"
+        try { ($pq | ConvertTo-Json -Depth 5 -Compress) | Set-Content -LiteralPath $PrQueuePath -Encoding UTF8 } catch {}
+    }
+    catch { Write-OrcLog 'pr_queue_observe_error' @{ error = "$($_.Exception.Message)" } 'WARN' }
+    return [pscustomobject]@{ state = $State; didCompact = $didCompact }
+}
+
 # ---- decisao principal ----
 try {
     $vm = Get-VM -Name $VMName -ErrorAction Stop
@@ -471,13 +597,30 @@ try {
     # menor). O compact entre PRs e INCONDICIONAL (boundary_compact a cada PR; ver
     # decision) e libera o MAXIMO dos 2 lados; 55 e o piso alcancavel pra admitir logo
     # apos compactar (mirar 70 spiralava com reclaim_no_progress falso). O guest free vem
-    # do snapshot de host-metrics; 999 = ausente/ilegivel -> desconhecido, nao bloqueia.
+    # do snapshot de host-metrics; 999 = ausente/ilegivel/stale -> desconhecido, nao bloqueia.
     $AdmitFloorGB = 55
     $GuestFloorGB = 40
     $guestFree = 999
+    $metricsStale = $false
     try {
         $snap = Get-Content -LiteralPath 'V:\civm-host-metrics.json' -Raw -ErrorAction Stop | ConvertFrom-Json
-        if ($null -ne $snap.guest_free_gb -and [int]$snap.guest_free_gb -gt 0) { $guestFree = [int]$snap.guest_free_gb }
+        # Snapshot >30min e lixo (host-metrics task morta 2026-06-28 → guest_free
+        # travado em 44). Tratar como desconhecido em vez de alimentar a barreira.
+        $metricsMaxAgeMin = 30
+        if ($null -ne $snap.timestamp) {
+            try {
+                $snapUtc = [datetime]::Parse([string]$snap.timestamp).ToUniversalTime()
+                $ageMin = ((Get-Date).ToUniversalTime() - $snapUtc).TotalMinutes
+                if ($ageMin -gt $metricsMaxAgeMin) {
+                    $metricsStale = $true
+                    Write-OrcLog 'host_metrics_stale' @{ age_min = [math]::Round($ageMin, 1); max_age_min = $metricsMaxAgeMin; path = 'V:\civm-host-metrics.json' } 'WARN'
+                }
+            }
+            catch { $metricsStale = $true }
+        }
+        if (-not $metricsStale -and $null -ne $snap.guest_free_gb -and [int]$snap.guest_free_gb -gt 0) {
+            $guestFree = [int]$snap.guest_free_gb
+        }
     } catch { $guestFree = 999 }
     $nowUtc = (Get-Date).ToUniversalTime().ToString('o')
     # Cooldown do panic: fora da janela -> pode panicar; dentro -> a decisao
@@ -486,12 +629,34 @@ try {
     # Gate por-EVENTO: prevRunning (running do tick anterior) detecta a transicao >0->0
     # (PR/onda de runs acabou) -> compacta 1x por PR; sem timer.
     $prevRunning = [int]$state.prevRunning
-    Write-OrcLog 'tick' @{ vm = "$($vm.State)"; queued = $queued; running = $running; idle_min = [math]::Round($idleMin, 1); v_free_gb = $vfree; can_panic = $canPanic; prev_running = $prevRunning }
+    Write-OrcLog 'tick' @{ vm = "$($vm.State)"; queued = $queued; running = $running; idle_min = [math]::Round($idleMin, 1); v_free_gb = $vfree; can_panic = $canPanic; prev_running = $prevRunning; guest_free_gb = $guestFree; metrics_stale = $metricsStale }
+
+    # ---- PUSH-WAVE + fila ANTES da decisao de power (paridade CI pago) ----
+    # Antes (bug 2026-07-10): fila/push-wave rodava DEPOIS do switch. Com V:<55 e
+    # VM Off, reclaim_before_admit engolia o tick inteiro (~10min Optimize) e o
+    # tip change nunca limpava antes dos checks. Agora: tip change limpa PRIMEIRO,
+    # re-mede V:, so entao decide admit/start.
+    $didPushWaveCompact = $false
+    if ($EnforceQueue -and -not $Observe) {
+        $pw = Invoke-PrQueuePushWave -NowUtc $nowUtc -AdmitFloorGB $AdmitFloorGB -State $state
+        if ($null -ne $pw) {
+            $state = $pw.state
+            if ($pw.didCompact) { $didPushWaveCompact = $true }
+        }
+        # Re-mede apos possivel Stop+Optimize / full-clean do push-wave.
+        $vfree = Get-VFreeGB
+        $vm = Get-VM -Name $VMName -ErrorAction Stop
+    }
 
     # Decide no modulo puro testado (civm-orchestrator-decision.test.ps1); o
     # switch abaixo so EXECUTA a acao. A probe SSH e lazy: Get-OrchestratorDecision
     # so a chama no gate de stop. VFreeGB + CanPanic armam a seguranca de disco.
     $decision = Get-OrchestratorDecision -VmState "$($vm.State)" -Queued $queued -Running $running -IdleMinutes $idleMin -IdleStopMinutes $IdleStopMinutes -HasActiveJobProbe { Get-GuestHasActiveJob } -VFreeGB $vfree -WarnFloorGB $WarnFloorGB -PanicFloorGB $PanicFloorGB -CanPanic $canPanic -AdmitFloorGB $AdmitFloorGB -GuestFloorGB $GuestFloorGB -GuestFreeGB $guestFree -AdmitReclaimAttempts ([int]$state.admitReclaimAttempts) -PrevRunning $prevRunning
+    # Evita double Optimize no mesmo tick: push-wave ja compactou por tip change.
+    if ($didPushWaveCompact -and $decision -eq 'reclaim_before_admit') {
+        Write-OrcLog 'admit_skip_reclaim_after_push_wave' @{ v_free_gb = $vfree; floor = $AdmitFloorGB; note = 'push-wave ja limpou; sobe start' }
+        $decision = 'start'
+    }
 
     switch ($decision) {
         'noop_off' { }
@@ -590,162 +755,10 @@ try {
         Save-State $state
     }
 
-    # ---- OBSERVE da fila FIFO por-PR (Phase 1b: so LOGA, nunca impoe) ----
-    # Agrupa a atividade de box por contexto (PR/branch), mantem a ordem FIFO em
-    # $PrQueuePath, e loga o que a fila FARIA (grant/advance) sem mexer no power/compact.
-    # Valida o cerebro (Resolve-PrSlot) contra a box real antes de ligar o enforce.
-    try {
-        $act = Get-PrActivity
-        $pq = $null
-        if (Test-Path -LiteralPath $PrQueuePath) { try { $pq = Get-Content -LiteralPath $PrQueuePath -Raw | ConvertFrom-Json } catch {} }
-        if ($null -eq $pq) { $pq = [pscustomobject]@{ contexts = @(); currentPr = ''; currentIdleSinceUtc = ''; lastCompactHeadSha = ''; lastCompactContext = '' } }
-        # States antigos da fila nao tem os campos do push-wave — garante.
-        if (-not ($pq.PSObject.Properties.Name -contains 'lastCompactHeadSha')) {
-            $pq | Add-Member -NotePropertyName lastCompactHeadSha -NotePropertyValue '' -Force
-        }
-        if (-not ($pq.PSObject.Properties.Name -contains 'lastCompactContext')) {
-            $pq | Add-Member -NotePropertyName lastCompactContext -NotePropertyValue '' -Force
-        }
-        $seen = @{}; foreach ($c in @($pq.contexts)) { if ($null -ne $c) { $seen["$($c.id)"] = $c.firstSeenUtc } }
-        $ordered = @()
-        foreach ($c in @($pq.contexts)) { if ($null -ne $c -and $act.ContainsKey("$($c.id)")) { $ordered += [pscustomobject]@{ id = "$($c.id)"; firstSeenUtc = $c.firstSeenUtc } } }
-        foreach ($id in ($act.Keys | Sort-Object)) { if (-not $seen.ContainsKey("$id")) { $ordered += [pscustomobject]@{ id = "$id"; firstSeenUtc = $nowUtc } } }
-        $prs = @(); foreach ($c in $ordered) { $prs += [pscustomobject]@{ number = $c.id; realJobs = [int]$act["$($c.id)"] } }
-        $slot = Resolve-PrSlot -Prs $prs -CurrentPr "$($pq.currentPr)" -CurrentIdleSinceUtc "$($pq.currentIdleSinceUtc)" -NowUtc $nowUtc
-        if ($slot.action -ne 'hold' -or "$($pq.currentPr)" -ne "$($slot.currentPr)") {
-            $ctxStr = (@($ordered | ForEach-Object { $cid = "$($_.id)"; "${cid}:$([int]$act[$cid])" }) -join ' ')
-            Write-OrcLog "would_$($slot.action)" @{ current = "$($slot.currentPr)"; ctxs = $ctxStr; reason = $slot.reason }
-        }
-        # ENFORCE (so com -EnforceQueue, fora de -Observe): publica o ctx concedido no
-        # HOST (o gate Windows le; sobrevive ao Stop-VM) e, no boundary do contexto,
-        # limpa+compacta antes de liberar o proximo PR. O probe-gate evita compactar com
-        # job real ativo no guest (mesma seguranca do stop ocioso).
-        if ($EnforceQueue -and -not $Observe) {
-            $prevCtx = "$($pq.currentPr)"
-            # ---- PUSH-WAVE (paridade CI pago no push / re-run de tip novo): ----
-            # tip head_sha mudou => 1) seed tip SEMPRE (mesmo busy)  2) reaper
-            # cancela SHA velho  3) wait idle  4) compact se V sujo OU guest
-            # full-clean se V ok  5) checks do tip novo na box limpa.
-            # Mesmo tip => none (anti-thrash mid-batch do mesmo push).
-            if ("$($slot.currentPr)" -ne '' -and ("$($slot.action)" -eq 'hold' -or "$($slot.action)" -eq 'grant')) {
-                $tipSha = Get-ContextHeadSha -ContextId "$($slot.currentPr)"
-                $lastTip = "$($pq.lastCompactHeadSha)"
-                $tipChanged = ($tipSha -ne '' -and $lastTip -ne '' -and ("$($pq.lastCompactContext)" -eq "$($slot.currentPr)") -and ("$tipSha".ToLowerInvariant() -ne "$lastTip".ToLowerInvariant()))
-                # Decide ANTES do reap (pure): seed grava tip mesmo com busy.
-                $guestBusyBefore = Get-GuestHasActiveJob
-                $vWave = Get-VFreeGB
-                $wave = Resolve-PushWaveCompact -CurrentPr "$($slot.currentPr)" -TipHeadSha $tipSha `
-                    -LastCompactHeadSha "$($pq.lastCompactHeadSha)" -LastCompactContext "$($pq.lastCompactContext)" `
-                    -GuestHasActiveJob $guestBusyBefore -VFreeGB $vWave -AdmitFloorGB $AdmitFloorGB
-                # Tip mudou (compact/skip_clean): reap+wait ANTES de limpar —
-                # senao workers do SHA velho seguram o guest e o V: (CI pago =
-                # cancel + fresh). Seed nao precisa reap.
-                if ("$($wave.action)" -eq 'compact' -or "$($wave.action)" -eq 'skip_clean') {
-                    if ($tipChanged) {
-                        Write-OrcLog 'push_wave_reap' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; from = $lastTip }
-                        Invoke-GuestReapRuns
-                    }
-                    $idleOk = Wait-GuestIdle -TimeoutSec 90 -PollSec 5
-                    Write-OrcLog 'push_wave_wait_idle' @{ ctx = "$($slot.currentPr)"; idle = $idleOk; action = "$($wave.action)" }
-                    # Re-mede apos wait (V e busy podem ter mudado).
-                    $guestBusy = Get-GuestHasActiveJob
-                    $vWave = Get-VFreeGB
-                    # Pure com GuestHasActiveJob=$false: queremos a intencao de
-                    # limpeza do tip; residual busy vira force abaixo.
-                    $wave = Resolve-PushWaveCompact -CurrentPr "$($slot.currentPr)" -TipHeadSha $tipSha `
-                        -LastCompactHeadSha "$($pq.lastCompactHeadSha)" -LastCompactContext "$($pq.lastCompactContext)" `
-                        -GuestHasActiveJob $false -VFreeGB $vWave -AdmitFloorGB $AdmitFloorGB
-                    # Ainda busy apos reap+wait: force Stop+compact (unico hard
-                    # reset). Tip novo precisa da box — paridade fresh runner.
-                    if ($guestBusy) {
-                        Write-OrcLog 'push_wave_force_compact' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; v_free_gb = $vWave; reason = 'guest ainda busy apos reap+wait; Stop-VM' } 'WARN'
-                        $wave = [pscustomobject]@{ action = 'compact'; reason = 'force apos tip change + busy residual' }
-                    }
-                }
-                switch ("$($wave.action)") {
-                    'seed' {
-                        Write-OrcLog 'push_wave_seed' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; reason = $wave.reason }
-                        $pq.lastCompactHeadSha = $tipSha
-                        $pq.lastCompactContext = "$($slot.currentPr)"
-                    }
-                    'skip_clean' {
-                        # V: ok no host — ainda limpa guest (docker/cache/_work) pra
-                        # checks do tip novo nao herdarem estado do SHA velho.
-                        Write-OrcLog 'push_wave_skip_clean' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; v_free_gb = $vWave; reason = $wave.reason }
-                        Invoke-GuestFullClean
-                        $pq.lastCompactHeadSha = $tipSha
-                        $pq.lastCompactContext = "$($slot.currentPr)"
-                    }
-                    'compact' {
-                        Write-OrcLog 'push_wave_compact' @{ ctx = "$($slot.currentPr)"; tip = $tipSha; from = "$($pq.lastCompactHeadSha)"; v_free_gb = $vWave; reason = $wave.reason } 'WARN'
-                        Invoke-StopAndCompact -Reason 'push_wave_boundary'
-                        $pq.lastCompactHeadSha = $tipSha
-                        $pq.lastCompactContext = "$($slot.currentPr)"
-                        try {
-                            if (-not ($state.PSObject.Properties.Name -contains 'lastBoundaryCompactUtc')) {
-                                $state | Add-Member -NotePropertyName lastBoundaryCompactUtc -NotePropertyValue '' -Force
-                            }
-                            $state.lastBoundaryCompactUtc = $nowUtc
-                            Save-State $state
-                        }
-                        catch { }
-                    }
-                    default {
-                        # none: mesmo tip ou sem tip — no-op.
-                    }
-                }
-            }
-            if ($slot.action -eq 'boundary_advance') {
-                # No boundary o proximo PR so e liberado quando a box esta apta. A pergunta
-                # "o guest tem job ativo?" e checada SEMPRE primeiro, independente do disco —
-                # sao duas perguntas independentes (disco limpo nao prova guest ocioso). Antes
-                # desta correcao, o caso "box ja fresca" pulava a probe e avancava direto: se
-                # Resolve-PrSlot decidiu boundary_advance por um miss passageiro de
-                # Get-PrActivity (a contagem de atividade do GitHub e sujeita a lag/timeout,
-                # ver Invoke-RestMethod com try/catch silencioso ali), a box fresca não
-                # provava nada sobre o PR anterior de fato ter acabado — so que o compact
-                # anterior tinha ido bem. Tres casos, agora nesta ordem:
-                # (a) guest com job ativo (via SSH, ground-truth independente da contagem do
-                #     GitHub) -> NAO avanca de jeito nenhum, segura no atual e re-tenta no
-                #     proximo tick — preserva o grace, nunca orfana um PR com trabalho em voo;
-                # (b) guest idle + box JA fresca (V>=floor) -> avanca direto, sem desperdicio
-                #     entre PRs leves que nao sujaram a box;
-                # (c) guest idle + box suja -> compacta e SO entao libera (box fresca).
-                if (Get-GuestHasActiveJob) {
-                    Write-OrcLog 'pr_boundary_deferred' @{ done = $prevCtx; reason = 'guest com job ativo -> espera esvaziar antes de avancar (independente do disco)' } 'WARN'
-                    "$prevCtx" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
-                    $slot.currentPr = $prevCtx
-                    $slot.idleSinceUtc = "$($pq.currentIdleSinceUtc)"
-                }
-                else {
-                    $vNow = Get-VFreeGB
-                    if ($vNow -ge $AdmitFloorGB) {
-                        Write-OrcLog 'pr_boundary_skip_clean' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow }
-                        "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
-                    }
-                    else {
-                        Write-OrcLog 'pr_boundary_compact' @{ done = $prevCtx; next = "$($slot.currentPr)"; v_free_gb = $vNow } 'WARN'
-                        Invoke-StopAndCompact -Reason 'pr_boundary'
-                        "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii
-                    }
-                    # Cross-PR: reseta o tip de push-wave pro proximo ctx (seed no
-                    # 1o hold) — evita compact falso se o tip do PR novo bate o
-                    # last do PR antigo por coincidencia.
-                    $pq.lastCompactHeadSha = ''
-                    $pq.lastCompactContext = ''
-                }
-            }
-            else {
-                try { "$($slot.currentPr)" | Set-Content -LiteralPath $CurrentContextPath -NoNewline -Encoding ascii }
-                catch { Write-OrcLog 'pr_publish_error' @{ error = "$($_.Exception.Message)" } 'WARN' }
-            }
-        }
-        $pq.contexts = $ordered
-        $pq.currentPr = "$($slot.currentPr)"
-        $pq.currentIdleSinceUtc = "$($slot.idleSinceUtc)"
-        try { ($pq | ConvertTo-Json -Depth 5 -Compress) | Set-Content -LiteralPath $PrQueuePath -Encoding UTF8 } catch {}
+    # Observe-only: se NAO enforce no inicio do tick, ainda loga would_* da fila.
+    if (-not ($EnforceQueue -and -not $Observe)) {
+        $null = Invoke-PrQueuePushWave -NowUtc $nowUtc -AdmitFloorGB $AdmitFloorGB -State $state -DoEnforce $false
     }
-    catch { Write-OrcLog 'pr_queue_observe_error' @{ error = "$($_.Exception.Message)" } 'WARN' }
 }
 catch {
     # Fail-safe: na duvida NUNCA desliga (so o caminho de Start e seguro). Um
