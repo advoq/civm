@@ -66,13 +66,18 @@ function Test-Wave($label, $got, $expAction) {
 }
 Test-Wave 'sem currentPr -> none' (Resolve-PushWaveCompact -CurrentPr '' -TipHeadSha 'aaa') 'none'
 Test-Wave 'sem tip -> none' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha '') 'none'
-Test-Wave 'guest ocupado -> none (defere)' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -GuestHasActiveJob $true -VFreeGB 25) 'none'
-Test-Wave '1a vez (sem last) -> seed' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'aaa' -LastCompactHeadSha '' -LastCompactContext '' -VFreeGB 25) 'seed'
+# Seed SEMPRE (mesmo busy) — bug 2026-07-10: busy no topo matava o seed e o wave
+Test-Wave '1a vez (sem last) + busy -> seed' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'aaa' -LastCompactHeadSha '' -LastCompactContext '' -GuestHasActiveJob $true -VFreeGB 25) 'seed'
+Test-Wave '1a vez (sem last) idle -> seed' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'aaa' -LastCompactHeadSha '' -LastCompactContext '' -VFreeGB 25) 'seed'
 Test-Wave 'ctx novo (last de outro PR) -> seed' (Resolve-PushWaveCompact -CurrentPr 'pr-2' -TipHeadSha 'ccc' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 25) 'seed'
 Test-Wave 'mesmo tip (intra-push) -> none anti-thrash' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'aaa' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 25) 'none'
+Test-Wave 'mesmo tip + busy -> none anti-thrash' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'aaa' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -GuestHasActiveJob $true -VFreeGB 25) 'none'
+# Tip mudou: intencao compact/skip mesmo com busy (caller reap+wait+force)
+Test-Wave 'tip mudou + V sujo + busy -> compact' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -GuestHasActiveJob $true -VFreeGB 25) 'compact'
 Test-Wave 'tip mudou + V sujo -> compact' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 25) 'compact'
 Test-Wave 'tip mudou + V=54 borda -> compact' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 54) 'compact'
 Test-Wave 'tip mudou + V=55 ==floor -> skip_clean' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 55) 'skip_clean'
+Test-Wave 'tip mudou + V folgado + busy -> skip_clean' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -GuestHasActiveJob $true -VFreeGB 67) 'skip_clean'
 Test-Wave 'tip mudou + V folgado -> skip_clean' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 67) 'skip_clean'
 Test-Wave 'tip mudou + V=0 nao medido -> seed fail-safe' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 0) 'seed'
 Test-Wave 'case-insensitive same tip -> none' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'AABB' -LastCompactHeadSha 'aabb' -LastCompactContext 'pr-1' -VFreeGB 25) 'none'

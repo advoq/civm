@@ -1180,3 +1180,18 @@ push com V<55 deve logar push_wave_compact.
 **Proxima acao:** confirmar CI Router verde no advoq#1423; merge #158; monitorar push-wave_reap nos logs do orchestrator no proximo multi-push.
 **Como medir:** `ssh gha-ubuntu-2404 'ls -ld ~/actions-runner-advoq-org/_work/advoq/advoq'`; `gh run view 29052955302 --repo advoq/advoq`; dry-run `civmctl hook job-completed --json | jq '.actions[]|select(.name=="workspace_stub")'`.
 
+
+## 2026-07-10 13:44 -03 — push-wave seed always (paid parity)
+
+**O que:** Fix do path morto do push-wave: seed grava tip mesmo com guest busy; tip change retorna compact/skip_clean mesmo busy (caller reap+wait+force).
+**Categoria:** infra-ci / orchestrator
+**Dados medidos:**
+- Antes: `grep push_wave` no log = 0; `lastCompactHeadSha=""` em V:\civm-pr-queue.json sob pr-1423 com jobs ativos.
+- Causa: `GuestHasActiveJob` no topo de Resolve-PushWaveCompact bloqueava seed.
+- Testes puros: 35 PASS / 0 FAIL (incl. seed+busy, tip-change+busy→compact).
+- Deploy live: C:\civm-deploy SHA pr-queue + orchestrator; seed_busy=seed; tip_busy_compact=compact.
+- Fila live seedada com tip atual de #1423 para o proximo synchronize disparar wave.
+**Veredito:** ✅ path de decisao corrigido e deployado; observacao de push_wave_* no log no proximo push.
+**Proxima acao:** no proximo push do #1423, confirmar `push_wave_seed` ou `push_wave_reap`+`push_wave_compact` no civm-orchestrator.log.
+**Como medir:** `grep push_wave V:\civm-orchestrator.log | tail`; `Get-Content V:\civm-pr-queue.json`.
+
