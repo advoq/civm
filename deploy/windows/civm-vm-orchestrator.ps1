@@ -25,6 +25,7 @@
 .NOTES
     Requer um PAT actions:read por resource owner em
     C:\ProgramData\civm\gh-token-{advoq,emersonbusson}.txt (o host nao tem gh).
+    Get-ContextHeadSha le tip via /actions/runs (nao depende de pulls:read).
     DEVE rodar com o mesmo principal do civm-vhdx-autoreclaim (SYSTEM, que ja faz
     SSH ao guest com sucesso); como elevated-user a ssh key fica ilegivel.
     Ao ATIVAR (sem -WhatIf), DESABILITE o autoreclaim + o optimize-watchdog: o
@@ -169,25 +170,83 @@ function Get-PrActivity {
 
 # Tip head_sha do contexto (PR ou branch). Sinal de "push novo" para o
 # push-wave compact (Resolve-PushWaveCompact). Falha de API -> '' (caller seed/none).
+#
+# Fonte primaria: GET /actions/runs (PAT fine-grained da box tem actions:read).
+# /pulls/{n} e /commits?sha= exigem contents/pull_requests e devolvem 403 no
+# token da box — o catch silencioso deixava tip="" e o push-wave NUNCA compactava
+# (changed=false). Fallback para /pulls|/commits so se actions nao achar match.
 function Get-ContextHeadSha {
     param([Parameter(Mandatory)][string]$ContextId)
     if ([string]::IsNullOrWhiteSpace($ContextId)) { return '' }
     try {
         $token = Get-GhTokenForOwner -Owner 'advoq'
         $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'civm-orchestrator'; Accept = 'application/vnd.github+json' }
-        if ($ContextId -match '^pr-(\d+)$') {
-            $uri = "https://api.github.com/repos/advoq/advoq/pulls/$($Matches[1])"
-            $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
-            return [string]$resp.head.sha
+
+        # actions/runs lista o mais recente primeiro; head_sha e o tip do workflow
+        # daquele PR/branch (mesmo SHA que o reaper de superseded-sha usa).
+        $runsUri = 'https://api.github.com/repos/advoq/advoq/actions/runs?per_page=50'
+        $runsResp = $null
+        try {
+            $runsResp = Invoke-RestMethod -Uri $runsUri -Headers $headers -Method Get -TimeoutSec 20
         }
+        catch {
+            Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; via = 'actions_runs'; error = "$($_.Exception.Message)" } 'WARN'
+        }
+
+        if ($ContextId -match '^pr-(\d+)$') {
+            $prNum = [int]$Matches[1]
+            if ($null -ne $runsResp) {
+                foreach ($run in @($runsResp.workflow_runs)) {
+                    $matched = $false
+                    foreach ($pr in @($run.pull_requests)) {
+                        if ($null -ne $pr -and [int]$pr.number -eq $prNum) { $matched = $true; break }
+                    }
+                    if (-not $matched) { continue }
+                    $sha = [string]$run.head_sha
+                    if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
+                }
+            }
+            # Fallback: PAT com pull_requests:read (gh auth / classic repo scope).
+            try {
+                $uri = "https://api.github.com/repos/advoq/advoq/pulls/$prNum"
+                $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
+                $sha = [string]$resp.head.sha
+                if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
+            }
+            catch {
+                Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; via = 'pulls'; error = "$($_.Exception.Message)" } 'WARN'
+            }
+            return ''
+        }
+
         if ($ContextId -match '^branch-(.+)$') {
-            $branch = [uri]::EscapeDataString($Matches[1])
-            $uri = "https://api.github.com/repos/advoq/advoq/commits?sha=$branch&per_page=1"
-            $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
-            if ($resp -and @($resp).Count -gt 0) { return [string]$resp[0].sha }
+            $branchName = [string]$Matches[1]
+            if ($null -ne $runsResp) {
+                foreach ($run in @($runsResp.workflow_runs)) {
+                    if ("$($run.head_branch)" -ne $branchName) { continue }
+                    $sha = [string]$run.head_sha
+                    if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
+                }
+            }
+            try {
+                $branch = [uri]::EscapeDataString($branchName)
+                $uri = "https://api.github.com/repos/advoq/advoq/commits?sha=$branch&per_page=1"
+                $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
+                if ($resp -and @($resp).Count -gt 0) {
+                    $sha = [string]$resp[0].sha
+                    if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
+                }
+            }
+            catch {
+                Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; via = 'commits'; error = "$($_.Exception.Message)" } 'WARN'
+            }
+            return ''
         }
     }
-    catch { return '' }
+    catch {
+        Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; via = 'outer'; error = "$($_.Exception.Message)" } 'WARN'
+        return ''
+    }
     return ''
 }
 
