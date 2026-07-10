@@ -12,16 +12,37 @@ if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst -Force | Ou
 # O caller dot-sourceia decision + reclaim-gate via $PSScriptRoot -> os 3 DEVEM
 # ser copiados juntos, senao o orchestrator novo chama uma funcao que o gate
 # velho em C:\civm-deploy nao tem (ex.: Test-ReclaimStuck) e quebra no tick.
-Copy-Item (Join-Path $PSScriptRoot 'civm-orchestrator-decision.ps1') $dst -Force
-Copy-Item (Join-Path $PSScriptRoot 'civm-reclaim-gate.ps1') $dst -Force
-Copy-Item (Join-Path $PSScriptRoot 'civm-vm-orchestrator.ps1') $dst -Force
+# Caller dot-sourceia decision + reclaim-gate + pr-queue. Host-metrics e task
+# separada mas o arquivo DEVE existir em C:\civm-deploy (task falhava 2026-07:
+# metrics.json stale desde 2026-06-28).
+$toCopy = @(
+    'civm-orchestrator-decision.ps1',
+    'civm-reclaim-gate.ps1',
+    'civm-pr-queue.ps1',
+    'civm-vm-orchestrator.ps1',
+    'civm-host-metrics.ps1'
+)
+foreach ($f in $toCopy) {
+    $src = Join-Path $PSScriptRoot $f
+    if (-not (Test-Path -LiteralPath $src)) { throw "missing source: $src" }
+    $destFile = Join-Path $dst $f
+    # Skip no-op when ja estamos em C:\civm-deploy (re-run in-place).
+    if ((Resolve-Path -LiteralPath $src).Path -eq (Resolve-Path -LiteralPath (Split-Path $destFile -Parent)).Path + "\$f") {
+        if ((Test-Path -LiteralPath $destFile) -and ((Get-FileHash $src).Hash -eq (Get-FileHash $destFile).Hash)) { continue }
+    }
+    if ((Test-Path -LiteralPath $destFile) -and ((Resolve-Path $src).Path -eq (Resolve-Path $destFile).Path)) { continue }
+    Copy-Item $src $destFile -Force
+}
 $perr = $null
 [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $dst 'civm-vm-orchestrator.ps1'), [ref]$null, [ref]$perr) | Out-Null
 if ($perr) { throw "parse error no caller deployado: $($perr -join '; ')" }
-. (Join-Path $dst 'civm-orchestrator-decision.ps1')  # dot-source so as funcoes -> valida
-. (Join-Path $dst 'civm-reclaim-gate.ps1')            # idem: valida o gate (Test-ReclaimStuck etc.)
-'deploy: 3 .ps1 copiados + validados por AST'
-$arg = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\civm-deploy\civm-vm-orchestrator.ps1'
+. (Join-Path $dst 'civm-orchestrator-decision.ps1')
+. (Join-Path $dst 'civm-reclaim-gate.ps1')
+. (Join-Path $dst 'civm-pr-queue.ps1')
+"deploy: $($toCopy.Count) .ps1 copiados + validados por AST"
+# -EnforceQueue: publica currentPr + push-wave no tip change (sem isto o wave
+# nunca roda — so would_* de observe).
+$arg = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\civm-deploy\civm-vm-orchestrator.ps1 -EnforceQueue'
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date)
 $trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Days 3650)).Repetition
