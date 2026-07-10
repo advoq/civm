@@ -1195,3 +1195,57 @@ push com V<55 deve logar push_wave_compact.
 **Proxima acao:** no proximo push do #1423, confirmar `push_wave_seed` ou `push_wave_reap`+`push_wave_compact` no civm-orchestrator.log.
 **Como medir:** `grep push_wave V:\civm-orchestrator.log | tail`; `Get-Content V:\civm-pr-queue.json`.
 
+
+## 2026-07-10 17:20 -03 — push-wave tip via actions/runs + compact LIVE no #1423
+
+**O que:** Diagnostico e fix do push-wave que logava `tip=""` / `changed=false`
+e nunca compactava no push. Causa: PAT fine-grained em
+`C:\ProgramData\civm\gh-token-advoq.txt` tem `actions:read` mas **403** em
+`GET /repos/advoq/advoq/pulls/{n}` ("Resource not accessible by personal access
+token"). `Get-ContextHeadSha` usava so `/pulls` e engolia o erro. Fix: tip
+primario via `GET /actions/runs` (head_sha do PR) + log `tip_fetch_failed`.
+Deploy live em `C:\civm-deploy\civm-vm-orchestrator.ps1`. Commit
+`a041629` branch `fix/push-wave-before-admit-host-metrics` (civm#162).
+
+**Categoria:** host-ops + disk-safety + orchestrator
+
+**Dados medidos:**
+- PAT probe: `pulls/1423` → HTTP 403; `actions/runs` → 200 com
+  `head_sha=b3e65352…` (tip real do advoq#1423)
+- Antes do fix (tick 20:01:37Z): `push_wave_tip tip="" last=4c3ce653… changed=false`
+- Depois do deploy (tick 20:03:38Z): `tip=b3e65352… last=4c3ce653… changed=true`
+- Fluxo completo:
+  - `push_wave_reap` 20:03:39Z
+  - `push_wave_wait_idle idle=true` 20:05:01Z
+  - `push_wave_compact V=28<55` 20:05:02Z reason tip mudou
+  - `guest_full_clean free_after=42` 20:05:09Z
+  - `reclaim_done recovered_gb=10 vhdx_gb=74 v_free_gb=45` 20:15:35Z (~10 min Optimize-VHD)
+  - `admit_skip_reclaim_after_push_wave` (nao recompactou de novo)
+  - `vm_started queued=18` 20:15:46Z
+- Fila pos-wave: `lastCompactHeadSha=b3e65352…` `lastCompactContext=pr-1423`
+- Tick anti-thrash 20:17:39Z: tip==last → `changed=false` (correto)
+- Host metrics (VM Running): `guest_free_gb=42`, `vhdx_file_size_gb=74`,
+  `v_free_gb≈38` (V: 120G, C: 271G free)
+- Residual host: WSL `.wslconfig memory=16GB` + VM startup 7168 MB em host
+  ~32 GB → Start-VM falhou 1x com `0x800705AA` (RAM) antes de liberar memoria;
+  floor admit 55 ainda nao alcancado (teto limpo observado ~45 GB V free)
+
+**Veredito:** ✅ push-wave compact no tip change **provado por efeito** (recovered
+10 GB, lastCompactHeadSha atualizado, VM religou). 🟡 floor 55 GB V free e
+pressao de RAM host (WSL 16G vs Hyper-V 7G) continuam gaps operacionais.
+
+**Proxima acao:** merge civm#162; se OOM no Start-VM voltar, baixar
+`memory=` do `.wslconfig` (8–10 GB) e reiniciar WSL; opcional expandir PAT com
+`pull_requests:read` como defesa em profundidade.
+
+**Como medir:**
+```
+# tip do PR via PAT da box
+curl -sH "Authorization: Bearer $(tr -d '\r\n' </mnt/c/ProgramData/civm/gh-token-advoq.txt)" \
+  -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/advoq/advoq/actions/runs?per_page=5" | head
+# log
+python3 -c 'import json; ...'  # eventos push_wave_* em V:\civm-orchestrator.log
+cat /mnt/v/civm-pr-queue.json
+df -h /mnt/v
+```
