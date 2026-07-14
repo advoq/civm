@@ -60,6 +60,11 @@ Register the wrapper as the Scheduled Task action (SYSTEM, every ~2 min, boot tr
 Disable legacy `civm-vhdx-autoreclaim` / `civm-vhdx-optimize` / `*-watchdog` so **one owner**
 holds stop/compact (Kahneman #15).
 
+The task contract is also part of availability: `AtStartup`, `StartWhenAvailable`,
+`DisallowStartIfOnBatteries=false` and `StopIfGoingOnBatteries=false`. Registration
+must replace the existing definition with `Register-ScheduledTask -Force`; never
+unregister the last valid definition before deployment validation finishes.
+
 ## host-metrics
 
 ```powershell
@@ -79,6 +84,15 @@ the orchestrator treats missing/`<=0` guest free as **999 (unknown)** — does n
 | Idle ≥ `IdleStopMinutes` (default 10) + empty queue | `reclaim_start` → VM Off; optional `reclaim_mount_retry` then `reclaim_done` |
 | Queue while Off | `vm_started` → guest runners online |
 | Lock | Only one of PS orch / civm-host **active** holds `V:\civm-reclaim.lock` |
+| Reboot/power policy | boot trigger present; start/stop-on-battery both `false`; `StartWhenAvailable=true` |
+
+Inspect the effective definition from an elevated shell (a non-elevated query can
+hide SYSTEM tasks):
+
+```powershell
+$t = Get-ScheduledTask -TaskName 'civm-vm-orchestrator'
+$t | Select-Object State, Actions, Triggers, Settings
+```
 
 ## Rollback trigger
 

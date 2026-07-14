@@ -135,6 +135,7 @@ recupera o `V:` do host. Ver `docs/specs/civm-disk-gate-per-batch/SPECv4.md`.
 | RF-8 | Um PAT `actions:read` por resource owner; o stop-guard via SSH é a salvaguarda final independente de token | `orchestrator.ps1:38-54,166-175` |
 | RF-9 | Ownership exclusivo: orchestrator é o único dono do power-state + stop/compact (ver §2 Ownership abaixo) | `orchestrator.ps1:30-32`, `activate-orchestrator.ps1:12` |
 | RF-10 | **Disco limpo por batch (§2 Política definitiva):** todo início de batch (PR inicial OU re-run) só admite com `V:` ≥ `AdmitFloorGB` (51); abaixo disso, ciclo limpa-tudo + `Optimize-VHD` ANTES de iniciar, independente do power-state. Re-run após PR completo dispara o ciclo antes de re-rodar; PR na fila respeita o mesmo. **Estende** `reclaim_before_admit` (hoje só VM-Off+fila) e `boundary_compact` (hoje `<40` no gap) para disparar sempre que um batch novo vai iniciar e `V: < 51`. | `decision.ps1` (`reclaim_before_admit`/`boundary_compact`), `orchestrator.ps1:286` (AdmitFloorGB). **GAP: requer mudança na decisão + casos na decision-table (validar em pwsh na box)** |
+| RF-11 | **Liveness pós-reboot/energia:** a task usa gatilhos periódico + `AtStartup`, `StartWhenAvailable`, permite iniciar e continuar em bateria e é substituída com `Register-ScheduledTask -Force`, sem janela criada por `Unregister-ScheduledTask`. A ativação recusa dual-owner quando `civm-host-orchestrator` aponta para `--active`/wrapper `active.cmd`. | `activate-orchestrator.ps1`, `register-orchestrator.ps1`, `orchestrator-task-registration.test.ps1` |
 
 ### Ownership (CRÍTICO — um dono só, fail-safe #15)
 
@@ -482,6 +483,11 @@ Auxiliares (WARN, best-effort, não bloqueiam): `guest_full_clean[_warn]`,
   `Optimize-VHD` de ~8 min bloqueia os ticks seguintes; um job que chega durante
   um compact espera ~10 min (cold start pior) — aceitável para CI
   (`validation.md` 2026-06-17 09:59).
+- **Liveness da task (RF-11).** `AtStartup` + `StartWhenAvailable` recuperam o
+  loop depois de reboot ou tick perdido. `AllowStartIfOnBatteries` e
+  `DontStopIfGoingOnBatteries` impedem que uma troca de alimentação silencie o
+  único publicador de `V:\civm-current-context`. O registro usa `-Force` sobre a
+  definição existente; falha de cópia/parse não remove a última task válida.
 - **Modo `-Observe`** (`orchestrator.ps1:66-69`): loga `would_*` em vez de agir —
   valida a lógica contra a box real sem mexer na VM. Preferido a `-WhatIf` (que
   suprimiria até o `Add-Content` do log).
@@ -509,6 +515,7 @@ Testes (rodar localmente, sem Hyper-V):
 ```powershell
 pwsh deploy/windows/civm-orchestrator-decision.test.ps1   # 59 (47 decision-table + 10 unit + 2 stateful; gate de admissão warm)
 pwsh deploy/windows/civm-reclaim-gate.test.ps1            # 10 casos
+pwsh deploy/windows/orchestrator-task-registration.test.ps1 # contrato de liveness/registro/ownership
 ```
 
 ```bash
