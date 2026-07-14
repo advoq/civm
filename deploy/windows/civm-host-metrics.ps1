@@ -184,7 +184,7 @@ try {
     # 4. Guest free via SSH only when Running — Off has no listener (timeout only
     # poisons the metrics task and stamps guest_free=0 as if measured).
     if ($vmState -ne 'Running') {
-        Write-Log -Level 'INFO' -Message "VM state=$vmState: skip guest SSH; host-only snapshot"
+        Write-Log -Level 'INFO' -Message ("VM state={0}: skip guest SSH; host-only snapshot" -f $vmState)
         $metrics = [ordered]@{
             v_free_gb         = $vFreeGB
             v_size_gb         = $vSizeGB
@@ -200,7 +200,7 @@ try {
         }
         $json = $metrics | ConvertTo-Json -Depth 4
         Write-JsonAtomic -Path $HostMetricsPath -Json $json
-        Write-Log -Level 'INFO' -Message "host-only snapshot written to $HostMetricsPath (vm=$vmState)"
+        Write-Log -Level 'INFO' -Message ("host-only snapshot written to {0} (vm={1})" -f $HostMetricsPath, $vmState)
         exit 0
     }
 
