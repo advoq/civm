@@ -107,6 +107,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history for gitleaks
 
       - uses: actions/setup-go@v5
         with:
@@ -142,11 +144,18 @@ jobs:
           fi
 
       - name: Gitleaks (tree + git history)
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Fail the job on any leak (default). No allowlist file yet — add
-          # .gitleaks.toml only with a documented false-positive justification.
+        # Use the open-source CLI directly (gitleaks-action requires a paid
+        # GITLEAKS_LICENSE on organization repos).
+        run: |
+          set -euo pipefail
+          ver=v8.24.0
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/${ver}/gitleaks_${ver#v}_linux_x64.tar.gz" \
+            | tar -xz -C /tmp gitleaks
+          /tmp/gitleaks version
+          # Working tree (no .git needed)
+          /tmp/gitleaks detect --source . --no-git --redact --exit-code 1
+          # Full git history (shallow clone is enough for PR tip; full history on push)
+          /tmp/gitleaks detect --source . --redact --exit-code 1 --log-opts="--all"
 
       - name: go test (race + cover)
         run: go test -race -count=1 -coverprofile=coverage.out ./...
