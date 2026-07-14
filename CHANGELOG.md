@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.22.7](https://github.com/advoq/civm/compare/v1.22.6...v1.22.7) (2026-07-14)
+
+
+### Bug Fixes
+
+* **metrics:** escape vmState in log string; quiet tip 404 ([#173](https://github.com/advoq/civm/issues/173)) ([fdc0528](https://github.com/advoq/civm/commit/fdc05281beffd9446edf2c2df67565732013887b))
+* **orchestrator:** treat VM Off as no active guest job ([#172](https://github.com/advoq/civm/issues/172)) ([44d321a](https://github.com/advoq/civm/commit/44d321a3aa535d2d9c7ff401ec433d741b242474))
+
+
+### Documentation
+
+* host orchestrator setup runbook and supersede Go host port ([#170](https://github.com/advoq/civm/issues/170)) ([93cb600](https://github.com/advoq/civm/commit/93cb60041f60f1d3b82bf2e7782fa9d841719f16))
+
 ## [1.22.6](https://github.com/advoq/civm/compare/v1.22.5...v1.22.6) (2026-07-14)
 
 
