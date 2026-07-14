@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.5](https://github.com/advoq/civm/compare/v1.22.4...v1.22.5) (2026-07-14)
+
+
+### CI
+
+* add gitleaks full-history secret scan ([#166](https://github.com/advoq/civm/issues/166)) ([c587d64](https://github.com/advoq/civm/commit/c587d6407c3dbea919a1a4607d861d532a55ddcd))
+
 ## [1.22.4](https://github.com/advoq/civm/compare/v1.22.3...v1.22.4) (2026-07-10)
 
 
