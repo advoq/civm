@@ -127,8 +127,8 @@ jobs:
 
       - name: Secret pattern scan
         run: |
-          # High-confidence secret shapes (expand when going public; false positives
-          # must be fixed by redaction, not by weakening the pattern).
+          # High-confidence secret shapes (defense in depth with gitleaks below).
+          # False positives must be fixed by redaction, not by weakening the pattern.
           if grep -RInE --exclude-dir=.git \
             'ghp_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9_]{20,}|ghu_[A-Za-z0-9_]{20,}|ghs_[A-Za-z0-9_]{20,}|ghr_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}' \
             .; then
@@ -140,6 +140,13 @@ jobs:
             | grep -v 'runbooks/CI-GITHUB-APP-SETUP.md:'; then
             exit 1
           fi
+
+      - name: Gitleaks (tree + git history)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fail the job on any leak (default). No allowlist file yet — add
+          # .gitleaks.toml only with a documented false-positive justification.
 
       - name: go test (race + cover)
         run: go test -race -count=1 -coverprofile=coverage.out ./...
