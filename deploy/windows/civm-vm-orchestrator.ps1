@@ -249,7 +249,10 @@ function Get-ContextHeadSha {
                     }
                 }
                 catch {
-                    Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; repo = $repo; via = 'commits'; error = "$($_.Exception.Message)" } 'WARN'
+                    # 403/404 = token or repo without this branch; try next Repos entry.
+                    if ("$($_.Exception.Message)" -notmatch '404|403|Proibido|Forbidden|Not Found|N.o Localizado') {
+                        Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; repo = $repo; via = 'commits'; error = "$($_.Exception.Message)" } 'WARN'
+                    }
                 }
             }
         }
