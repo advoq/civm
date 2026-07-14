@@ -24,6 +24,16 @@ health/doctor, and copy-paste workflow templates.
 
 [MIT](LICENSE) — see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
+## Windows Hyper-V host (optional scale-to-zero)
+
+Production host brain today: PowerShell under `deploy/windows/` (Scheduled Task as **SYSTEM**).
+Configure **`Repos`** and **`TokenPaths`** on the host (empty in-repo defaults by design).
+Prefer a **host-local lab wrapper** so org/repo fleets never land in git.
+
+- Runbook: [`runbooks/HOST-ORCHESTRATOR-SETUP.md`](runbooks/HOST-ORCHESTRATOR-SETUP.md)
+- Behavior: [`docs/specs/orchestrator-scale-to-zero/`](docs/specs/orchestrator-scale-to-zero/)
+- Optional C# port (shadow until cutover): sibling project **civm-host**
+
 ## Bootstrap (guest Ubuntu 24.04)
 
 On a clean Ubuntu 24.04 LTS VM (as a user with sudo):
