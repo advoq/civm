@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.8](https://github.com/advoq/civm/compare/v1.22.7...v1.22.8) (2026-07-14)
+
+
+### Bug Fixes
+
+* **orchestrator:** quiet expected 403 on multi-repo tip commits ([#174](https://github.com/advoq/civm/issues/174)) ([d3300f3](https://github.com/advoq/civm/commit/d3300f3634ae80fe0315d2c18196dcf436f98304))
+
 ## [1.22.7](https://github.com/advoq/civm/compare/v1.22.6...v1.22.7) (2026-07-14)
 
 
