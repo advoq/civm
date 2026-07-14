@@ -827,6 +827,11 @@ func TestRun_WalkError(t *testing.T) {
 	opts.TmpDir = "x"
 	opts.DockerPrune = false
 	opts.AptClean = false
+	// Force a codespace root so codespace_stale also hits WalkFn (empty glob
+	// on GitHub-hosted CI is a no-op without error — not a walk failure).
+	opts.GlobFn = func(string) ([]string, error) {
+		return []string{"/home/x/codespace"}, nil
+	}
 	opts.WalkFn = func(string, fs.WalkDirFunc) error {
 		return errors.New("walk falhou")
 	}
