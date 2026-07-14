@@ -28,7 +28,7 @@ civm **NÃO** permite autonomamente:
 - ❌ `git push` para `origin/main` (sempre humano)
 - ❌ Alterar `.git/config` ou hooks
 - ❌ Criar/deletar repos no GitHub via `gh repo create`/`gh repo delete`
-- ❌ Modificar repos peer (vitae, advoq) sem autorização
+- ❌ Modificar repos peer (peer, acme) sem autorização
   explícita do humano para o escopo cross-repo
 - ❌ Executar `civmctl bootstrap` ou `civmctl cleanup --execute` na máquina
   do dev (destinado à VM dedicada; agente sandboxed não tem SSH)
@@ -94,7 +94,7 @@ runners (`.runner` com `gitHubUrl` ou `serverUrl`) e usa o nome dos services
 
 `civmctl doctor --repos=auto --json` é o diagnóstico genérico da VM: infere
 repos a partir dos services `actions.runner.*`, valida scripts `.sh`
-gerenciados de hooks de job e não depende da fleet `advoq/*` estar hardcoded.
+gerenciados de hooks de job e não depende da fleet `acme/*` estar hardcoded.
 Use `--repos=owner/a,owner/b` quando a inferência local não for suficiente, e
 `--repos=none` para pular GitHub em auditoria local/offline.
 
@@ -155,7 +155,7 @@ Releases sao criados via merge do PR
 merge desse PR, revalidar sem mutação:
 
 ```bash
-gh release view "$(gh release list --repo advoq/civm --limit 1 --json tagName --jq '.[0].tagName')"
+gh release view "$(gh release list --repo acme/civm --limit 1 --json tagName --jq '.[0].tagName')"
 git fetch --tags origin && git tag --list 'v*' --sort=-version:refname | head -3
 git status --short --branch
 gh run list --workflow=ci.yml --branch=main --limit 5
@@ -233,7 +233,7 @@ em produção, reavaliar (talvez voltar para runbook puro + Ansible playbook).
 - `AGENTS.md` — resumo geral
 - `MEMORY.md` — log temporal append-only
 - `runbooks/MULTI-PROJECT-RUNNER.md` — fluxo de provisionamento
-- `runbooks/RUNNER-SERIALIZATION.md` — invariante "1 runner por org" (advoq no runner ORG; serialização anti concurrent-prune)
+- `runbooks/RUNNER-SERIALIZATION.md` — invariante "1 runner por org" (acme no runner ORG; serialização anti concurrent-prune)
 - `templates/CIVM-USAGE.md` — fonte de `docs/CIVM.md` nos peer repos
 - `cmd/civmctl/` — código do CLI
 

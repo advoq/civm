@@ -208,7 +208,7 @@ func TestIntegration_RunnerWatchdogExecuteFakeRestartsAndReruns(t *testing.T) {
 	if err := os.MkdirAll(runnerDir, 0755); err != nil { //nolint:gosec // G301: fake runner dir needs traversal bit.
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(runnerDir, ".runner"), []byte(`{"gitHubUrl":"https://github.com/advoq/civm"}`), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(runnerDir, ".runner"), []byte(`{"gitHubUrl":"https://github.com/acme/civm"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(runnerDir, ".env"), []byte("EXISTING=1\n"), 0600); err != nil {
@@ -226,7 +226,7 @@ printf '1 0 init /sbin/init\n'
 	writeFakeCommand(t, binDir, "systemctl", `#!/usr/bin/env bash
 printf 'systemctl %s\n' "$*" >> "$CIVM_FAKE_LOG"
 if [ "$1" = "list-units" ]; then
-  printf 'actions.runner.advoq-civm.civm-self.service loaded failed failed GitHub Actions Runner\n'
+  printf 'actions.runner.acme-civm.civm-self.service loaded failed failed GitHub Actions Runner\n'
   exit 0
 fi
 if [ "$1" = "show" ]; then
@@ -245,20 +245,20 @@ exit 0
 `)
 	writeFakeCommand(t, binDir, "gh", `#!/usr/bin/env bash
 printf 'gh %s\n' "$*" >> "$CIVM_FAKE_LOG"
-if [ "$1" = "api" ] && [ "$2" = "/repos/advoq/civm/actions/runners" ]; then
+if [ "$1" = "api" ] && [ "$2" = "/repos/acme/civm/actions/runners" ]; then
   cat <<'JSON'
 {"runners":[{"id":1,"name":"civm-self","status":"online","busy":false,"labels":[{"name":"self-hosted"},{"name":"civm"}]}]}
 JSON
   exit 0
 fi
-if [ "$1" = "api" ] && [ "$2" = "/repos/advoq/civm/actions/runs?per_page=20&status=completed" ]; then
+if [ "$1" = "api" ] && [ "$2" = "/repos/acme/civm/actions/runs?per_page=20&status=completed" ]; then
   created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   cat <<JSON
-{"workflow_runs":[{"id":99,"head_sha":"abc123","status":"completed","conclusion":"failure","created_at":"$created_at","html_url":"https://github.com/advoq/civm/actions/runs/99","pull_requests":[{"number":7}]}]}
+{"workflow_runs":[{"id":99,"head_sha":"abc123","status":"completed","conclusion":"failure","created_at":"$created_at","html_url":"https://github.com/acme/civm/actions/runs/99","pull_requests":[{"number":7}]}]}
 JSON
   exit 0
 fi
-if [ "$1" = "api" ] && [ "$2" = "/repos/advoq/civm/pulls/7" ]; then
+if [ "$1" = "api" ] && [ "$2" = "/repos/acme/civm/pulls/7" ]; then
   printf '{"number":7,"state":"open","mergeable_state":"clean"}\n'
   exit 0
 fi
@@ -319,10 +319,10 @@ exit 1
 		t.Fatal(err)
 	}
 	log := string(logData)
-	if !strings.Contains(log, "sudo systemctl restart actions.runner.advoq-civm.civm-self.service") {
+	if !strings.Contains(log, "sudo systemctl restart actions.runner.acme-civm.civm-self.service") {
 		t.Fatalf("missing restart command in log:\n%s", log)
 	}
-	if !strings.Contains(log, "gh run rerun 99 --repo advoq/civm --failed") {
+	if !strings.Contains(log, "gh run rerun 99 --repo acme/civm --failed") {
 		t.Fatalf("missing rerun command in log:\n%s", log)
 	}
 	marker, err := os.ReadFile(markerPath)

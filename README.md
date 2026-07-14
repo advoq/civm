@@ -1,51 +1,59 @@
-# civm — infraestrutura de CI compartilhada
+# civm
 
-Repo dedicado para a infraestrutura de CI/CD que serve múltiplos
-projetos do mesmo dono (vitae, advoq, etc).
+[![CI](https://github.com/advoq/civm/actions/workflows/ci.yml/badge.svg)](https://github.com/advoq/civm/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**O que civm É:**
+**civm** is open-source tooling to **provision and operate self-hosted
+GitHub Actions runners** on a Linux VM (and optional Windows Hyper-V host
+helpers), with parity pins against `ubuntu-latest`, automated cleanup,
+health/doctor, and copy-paste workflow templates.
 
-- Repo de infra que **hospeda configuração da VM self-hosted**
-  registrada como GitHub Actions runner com label `civm`.
-- Quando GitHub Actions atribui um job ao label `civm`, o runner
-  na VM executa **exatamente o .yml do peer repo**, igual ubuntu-latest
-  faria.
-- **Provisionamento automatico via `civmctl`** (Go binary deste repo):
-  paridade com Ubuntu 24.04 LTS, Go 1.22-1.26, Node 20/22/24, Python
-  3.10-3.14, Docker 28.0.4, gh 2.89.0. Bootstrap idempotente.
-- Distribui templates de workflow + runbooks operacionais + disciplinas
-  metodológicas + regras granulares que peers podem **copiar** para
-  seus próprios repos.
+| You want… | Use… |
+| --- | --- |
+| Install / maintain the runner VM | `civmctl` (this repo, Go) |
+| Windows scale-to-zero Hyper-V brain | sibling project **civm-host** (optional) |
+| CI for your product repos | your repos + `templates/*.yml.template` |
 
-**O que civm NÃO é:**
+**What civm is not**
 
-- ❌ Não é uma camada de "audit". GitHub Actions não audita código por
-  si só — só roda o que está no .yml. Se um peer quer audit de estilo,
-  adiciona step `eslint .` ou ferramenta-do-projeto no próprio .yml.
-- ❌ Não é uma plataforma de orquestração custom. civm é só onde a
-  VM mora; orquestração é GitHub Actions padrão.
-- ❌ `civmctl` **não faz audit**. Faz provisioning + maintenance da VM
-  (bootstrap idempotente, cleanup automatizado, health check, runner
-  registration). Discipline checks ficam no projeto do peer.
+- Not an application platform or custom orchestrator (GitHub Actions remains the scheduler).
+- Not a code linter product — project-specific audits stay in each app repo.
+- Not a multi-tenant SaaS fleet: **you** configure which `owner/repo` list a box serves.
 
-## Bootstrap em 1 comando (zero-effort)
+## License
 
-Numa VM Ubuntu 24.04 LTS limpa, como root:
+[MIT](LICENSE) — see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+
+## Bootstrap (guest Ubuntu 24.04)
+
+On a clean Ubuntu 24.04 LTS VM (as a user with sudo):
 
 ```bash
-git clone https://github.com/advoq/civm.git /opt/civm
+git clone https://github.com/advoq/civm.git /opt/civm   # or your fork
 cd /opt/civm
 go build -o /usr/local/bin/civmctl ./cmd/civmctl
 sudo civmctl bootstrap --execute
 sudo cp deploy/systemd/civmctl-*.service deploy/systemd/civmctl-*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now civmctl-cleanup.timer civmctl-disk-watchdog.timer civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer civmctl-metrics.timer
+sudo systemctl enable --now \
+  civmctl-cleanup.timer civmctl-disk-watchdog.timer \
+  civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer \
+  civmctl-metrics.timer
 civmctl parity
 civmctl health
-civmctl capacity --json
 ```
 
-Detalhes em `runbooks/MULTI-PROJECT-RUNNER.md` §"Setup zero-effort".
+Register a runner (token is ephemeral; never commit it):
+
+```bash
+TOKEN=$(gh api -X POST /repos/<owner>/<repo>/actions/runners/registration-token --jq .token)
+civmctl runner add --repo=<owner>/<repo> --token="$TOKEN" --short=<short> --execute
+```
+
+Prefer **one org-level runner** when many repos share a box (serialization).
+See `runbooks/RUNNER-SERIALIZATION.md` and `runbooks/ORG-RUNNER-ADOPTION.md`.
+
+Full multi-runner / disk / host notes: `runbooks/MULTI-PROJECT-RUNNER.md`.
 
 ## Comandos civmctl
 
@@ -101,20 +109,21 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 
 ## Estrutura por audiência
 
-### Para quem **mantém civm** (admin do repo)
+### Maintainers of this repo
 
-| Arquivo | Função |
+| File | Role |
 |---|---|
-| `README.md` | este arquivo |
-| `.github/workflows/ci.yml` | próprio CI: yamllint nos templates, link check |
-| `.gitignore` | exclude common artifacts |
+| `README.md` | this file |
+| `LICENSE` / `CONTRIBUTING.md` / `SECURITY.md` | open-source baseline |
+| `.github/workflows/ci.yml` | GitHub-hosted CI (`ubuntu-latest`) |
+| `.gitignore` | keep lab secrets / logs out of git |
 
 ### Para quem **administra a VM** (sysadmin do civm)
 
 | Arquivo | Função |
 |---|---|
 | `runbooks/MULTI-PROJECT-RUNNER.md` | provisionar VM + N runners + tools (parity ubuntu-latest) + timers systemd de cleanup/watchdog (128GB SSD) |
-| `runbooks/RUNNER-SERIALIZATION.md` | invariante "1 runner por org": advoq serializa no runner ORG (`civm-advoq-org`); por quê (concurrent prune, #1184), como verificar e impor (`serialize-runner.ps1`) |
+| `runbooks/RUNNER-SERIALIZATION.md` | invariante "1 runner por org": acme serializa no runner ORG (`civm-acme-org`); por quê (concurrent prune, #1184), como verificar e impor (`serialize-runner.ps1`) |
 | `runbooks/RUNBOOK-HOST-VHDX-MAINTENANCE.md` | manutenção do VHDX do host (reclamação de volume) — alavancas break-glass quando o orchestrator está pausado |
 | `runbooks/LOCAL-CI-DISCIPLINE.md` | filosofia "local CI é gate de verdade, remoto é mirror" |
 
@@ -206,7 +215,7 @@ civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml
 ```
 
 Audit/discipline-checks ficam no projeto do peer (cada um com sua
-própria ferramenta — ex.: advoq tem `devctl`).
+própria ferramenta — ex.: acme tem `devctl`).
 `peer-status` é observabilidade read-only: consolida sinais para decisão
 humana, mas não corrige workspace ou configuração de peer automaticamente.
 
@@ -263,7 +272,7 @@ ssh gha-ubuntu-2404 'civmctl parity'
 ssh gha-ubuntu-2404 'civmctl health'
 ssh gha-ubuntu-2404 'civmctl doctor --repos=auto --json'
 ssh gha-ubuntu-2404 'civmctl active-runs --repos=auto --json'
-ssh gha-ubuntu-2404 'civmctl actions-metrics --org=advoq --period=month --json'
+ssh gha-ubuntu-2404 'civmctl actions-metrics --org=acme --period=month --json'
 ssh gha-ubuntu-2404 'civmctl idle-check'
 ```
 

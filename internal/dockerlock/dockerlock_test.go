@@ -14,7 +14,7 @@ import (
 
 const (
 	testScope      = "docker-heavy"
-	testRepo       = "advoq/civm"
+	testRepo       = "acme/civm"
 	testRunID      = "run-42"
 	selfStartTicks = uint64(123456)
 )

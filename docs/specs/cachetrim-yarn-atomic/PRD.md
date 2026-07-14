@@ -22,7 +22,7 @@ geralmente o mais antigo) deixa o pacote **parcial**. O `yarn install
 
 ```
 error Error: ENOENT: no such file or directory, open
-'/home/emdev/.cache/yarn-advoq-web/v6/npm-@adobe-css-tools-4.4.4-.../.yarn-metadata.json'
+'/home/emdev/.cache/yarn-acme-web/v6/npm-@adobe-css-tools-4.4.4-.../.yarn-metadata.json'
 [x] yarn failed
 error: yarn install --frozen-lockfile: exit status 1
 ```
@@ -32,8 +32,8 @@ bumps — o pacote estava no cache e foi parcialmente trimado.
 
 ## Causa raiz
 
-1. Há 4 dirs yarn (`yarn`, `yarn-advoq-web`, `yarn-advoq-tenant-isolation-smoke`,
-   `yarn-advoq-audit`). O cap de família (3GB) é dividido entre os dirs casados
+1. Há 4 dirs yarn (`yarn`, `yarn-acme-web`, `yarn-acme-tenant-isolation-smoke`,
+   `yarn-acme-audit`). O cap de família (3GB) é dividido entre os dirs casados
    (`per = 3GB / 4 = 0.75GB/dir`).
 2. Cada dir tem ~0.84GB > 0.75GB → `TrimByAge` dispara em cada um.
 3. Trim por arquivo remove o arquivo mais antigo de dentro de um pacote → pacote

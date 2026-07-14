@@ -26,7 +26,7 @@ func runActionsMetrics(args []string) int {
 		return exitUsage
 	}
 	if strings.TrimSpace(*org) == "" {
-		fmt.Fprintln(os.Stderr, "erro: --org obrigatório (ex: --org=advoq)")
+		fmt.Fprintln(os.Stderr, "erro: --org obrigatório (ex: --org=acme)")
 		return exitUsage
 	}
 

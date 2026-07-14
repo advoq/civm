@@ -113,11 +113,11 @@ documentado neste arquivo. Rollout em VM real deve ser registrado em
   bootstrap completo.
 - **Cleanup execute real com este diff**: rodei após `idle-check` provar
   VM idle; liberou 12.3 GB via Docker prune. Antes disso, a VM estava busy
-  com job real do vitae e o guard bloqueava a frente destrutiva.
+  com job real do peer e o guard bloqueava a frente destrutiva.
 - **systemd cleanup diário**: `civmctl-cleanup.timer` ainda não tinha entrada
   de journal; `civmctl-disk-watchdog.timer` disparou e decidiu `ok` com
   disco abaixo do threshold.
-- **Runner ambíguo online**: `vitae-local-vm-1` não existia na VM
+- **Runner ambíguo online**: `legacy-local-vm-1` não existia na VM
   `gha-ubuntu-2404` e não tinha mais função operacional; foi removido
   do GitHub via API. Se ele reaparecer, há outro host externo ainda rodando
   esse listener.

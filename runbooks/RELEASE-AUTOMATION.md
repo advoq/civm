@@ -74,7 +74,7 @@ O caminho primario usa GitHub App dedicado e token efemero gerado por
 Setup do App:
 
 1. Criar GitHub App dedicado para release automation.
-2. Instalar apenas em `advoq/civm`.
+2. Instalar apenas em `acme/civm`.
 3. Conceder permissoes minimas:
    - `contents: write`
    - `pull-requests: write`
@@ -85,7 +85,7 @@ Setup do App:
    - `RELEASE_APP_PRIVATE_KEY` = private key PEM do App.
 
 Nao colar a private key em runbook, commit, log ou issue. Validar apenas
-nomes de secrets com `gh secret list --repo advoq/civm`.
+nomes de secrets com `gh secret list --repo acme/civm`.
 
 Fallbacks, em ordem:
 
@@ -102,13 +102,13 @@ Fallbacks, em ordem:
 
 ```bash
 # Ver PRs de release pendentes
-gh pr list --repo advoq/civm --label "autorelease: pending"
+gh pr list --repo acme/civm --label "autorelease: pending"
 
 # Inspecionar o PR de release antes do merge
-gh pr view <num> --repo advoq/civm
+gh pr view <num> --repo acme/civm
 
 # Mergear (squash). Tag + release sao criados imediatamente.
-gh pr merge <num> --repo advoq/civm --squash
+gh pr merge <num> --repo acme/civm --squash
 ```
 
 ## Override de versao
@@ -124,7 +124,7 @@ commit em `main` direto pela governance normal (issue + branch + PR).
 ## Validacao apos primeiro merge
 
 ```bash
-gh release list --repo advoq/civm
+gh release list --repo acme/civm
 git fetch --tags origin
 git tag --list 'v*'
 ```

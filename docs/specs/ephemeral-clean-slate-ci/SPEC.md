@@ -219,7 +219,7 @@ os 7 dias do GitHub), cap ~80 GB (8 runners × ~10 GB) dentro do `V:` de 120 GB.
   - escuta só em loopback (`127.0.0.1`), sem credencial hardcoded.
   - sobrevive a `docker prune` (volume nomeado + restart=always + tagged em uso).
   - lifecycle de eviction por último-acesso, cap ~80 GB.
-- **Workflows peer (advoq):** trocar `cache:false` +
+- **Workflows peer (acme):** trocar `cache:false` +
   `GOCACHE/YARN_CACHE_FOLDER=$HOME/.cache/...-$GITHUB_JOB` por uma action de cache
   de fork (`runs-on/cache` / `tespkg/actions-cache@v1`) apontada para o backend
   LOCAL, com `key=hash(go.sum)/hash(yarn.lock)` e `path=GOCACHE/go-mod/yarn`. Essa
@@ -275,7 +275,7 @@ anexada (#3 número não adjetivo).
 - `internal/cleanup/cleanup_test.go` — ITEM-3 (par #13 do volume prune).
 - `internal/hook/hook.go` — ITEM-5 (wipe-por-job em job-completed).
 - config dos units systemd / bootstrap — ITEM-4 (HOME por-runner).
-- workflows peer (advoq, fora do civm) — ITEM-6 (action de cache de fork).
+- workflows peer (acme, fora do civm) — ITEM-6 (action de cache de fork).
 
 ## Arquivos a DELETAR
 

@@ -37,7 +37,7 @@ func ts(s string) time.Time {
 // open maps branch -> current open-PR head SHA (empty value still means open).
 func fixture(open map[string]string, runs []Run, cancelled *[]int64) Options {
 	return Options{
-		Repos:   []string{"advoq/advoq"},
+		Repos:   []string{"acme/app"},
 		Execute: true,
 		OpenHeadsFn: func(_ context.Context, _ string) (map[string]string, error) {
 			return open, nil
@@ -155,7 +155,7 @@ func TestReapInvalidRepoSkipped(t *testing.T) {
 func TestReapCancelFailureSetsExit(t *testing.T) {
 	runs := []Run{{ID: 9, Event: "pull_request", Status: "queued", Branch: "fix/closed"}}
 	opts := Options{
-		Repos:          []string{"advoq/advoq"},
+		Repos:          []string{"acme/app"},
 		Execute:        true,
 		OpenHeadsFn: func(_ context.Context, _ string) (map[string]string, error) { return nil, nil },
 		ActiveRunsFn:   func(_ context.Context, _ string) ([]Run, error) { return runs, nil },
@@ -188,7 +188,7 @@ func TestParseActiveRunsMultiPage(t *testing.T) {
 	// Two concatenated pages as gh --paginate emits them.
 	page := `{"workflow_runs":[{"id":1,"head_branch":"a","event":"pull_request","status":"queued","name":"Go CI","created_at":"2026-06-04T10:00:00Z"}]}` +
 		`{"workflow_runs":[{"id":2,"head_branch":"b","event":"push","status":"in_progress","name":"Web CI","created_at":"2026-06-04T11:00:00Z"}]}`
-	runs, err := parseActiveRuns([]byte(page), "advoq/advoq")
+	runs, err := parseActiveRuns([]byte(page), "acme/app")
 	if err != nil {
 		t.Fatalf("parse err: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestParseActiveRunsMultiPage(t *testing.T) {
 }
 
 func TestRenderJSONRoundTrips(t *testing.T) {
-	report := Report{Executed: true, Repos: []string{"advoq/advoq"}, Cancelled: 1}
+	report := Report{Executed: true, Repos: []string{"acme/app"}, Cancelled: 1}
 	var sb strings.Builder
 	if err := report.RenderJSON(&sb); err != nil {
 		t.Fatalf("render: %v", err)
@@ -225,7 +225,7 @@ func TestReapEndToEndViaRunFn(t *testing.T) {
 	inprog := `{"workflow_runs":[{"id":3,"head_branch":"old/gone","event":"pull_request","status":"in_progress","name":"Docs CI","created_at":"2026-06-04T09:00:00Z"}]}`
 
 	opts := Options{
-		Repos:   []string{"advoq/advoq"},
+		Repos:   []string{"acme/app"},
 		Execute: true,
 		RunFn:   mockGH(open, queued, inprog, nil),
 	}
@@ -247,7 +247,7 @@ func TestReapEndToEndCancelError(t *testing.T) {
 	queued := `{"workflow_runs":[{"id":9,"head_branch":"fix/closed","event":"pull_request","status":"queued","name":"Go CI"}]}`
 	inprog := `{"workflow_runs":[]}`
 	opts := Options{
-		Repos:   []string{"advoq/advoq"},
+		Repos:   []string{"acme/app"},
 		Execute: true,
 		RunFn:   mockGH(open, queued, inprog, fmt.Errorf("boom")),
 	}
@@ -259,7 +259,7 @@ func TestReapEndToEndCancelError(t *testing.T) {
 
 func TestReapOpenBranchesError(t *testing.T) {
 	opts := Options{
-		Repos: []string{"advoq/advoq"},
+		Repos: []string{"acme/app"},
 		RunFn: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
 			return nil, fmt.Errorf("gh down")
 		},
@@ -288,7 +288,7 @@ func TestCancelRunPrefersForceCancel(t *testing.T) {
 		calls = append(calls, strings.Join(args, " "))
 		return nil, nil
 	}
-	if err := cancelRun(context.Background(), "advoq/advoq", 42, runFn); err != nil {
+	if err := cancelRun(context.Background(), "acme/app", 42, runFn); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if len(calls) != 1 || !strings.Contains(calls[0], "force-cancel") {
@@ -306,7 +306,7 @@ func TestCancelRunFallsBackToPlainCancel(t *testing.T) {
 		}
 		return nil, nil
 	}
-	if err := cancelRun(context.Background(), "advoq/advoq", 42, runFn); err != nil {
+	if err := cancelRun(context.Background(), "acme/app", 42, runFn); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if len(calls) != 2 {
@@ -321,7 +321,7 @@ func TestCancelRunBothFail(t *testing.T) {
 	runFn := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
 		return nil, fmt.Errorf("network down")
 	}
-	if err := cancelRun(context.Background(), "advoq/advoq", 42, runFn); err == nil {
+	if err := cancelRun(context.Background(), "acme/app", 42, runFn); err == nil {
 		t.Fatal("expected error when both force-cancel and cancel fail")
 	}
 }
@@ -340,7 +340,7 @@ func TestCancelRunAlreadyCompletedWrapsSentinel(t *testing.T) {
 		}
 		return nil, fmt.Errorf("exit status 1: Cannot cancel a run that is completed.")
 	}
-	err := cancelRun(context.Background(), "advoq/advoq", 26423751663, runFn)
+	err := cancelRun(context.Background(), "acme/app", 26423751663, runFn)
 	if !errors.Is(err, ErrRunAlreadyCompleted) {
 		t.Fatalf("err = %v, want errors.Is(err, ErrRunAlreadyCompleted)", err)
 	}
@@ -353,7 +353,7 @@ func TestCancelRunGenuineFailureDoesNotMatchSentinel(t *testing.T) {
 	runFn := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
 		return nil, fmt.Errorf("exit status 1: API rate limit exceeded")
 	}
-	err := cancelRun(context.Background(), "advoq/advoq", 42, runFn)
+	err := cancelRun(context.Background(), "acme/app", 42, runFn)
 	if errors.Is(err, ErrRunAlreadyCompleted) {
 		t.Fatalf("a rate-limit error must not match ErrRunAlreadyCompleted, got %v", err)
 	}
@@ -371,7 +371,7 @@ func TestCancelRunGenuineFailureDoesNotMatchSentinel(t *testing.T) {
 func TestReapAlreadyCompletedGhostIsInfoNotFailure(t *testing.T) {
 	runs := []Run{{ID: 26423751663, Event: "pull_request", Status: "queued", Branch: "feature/add-finance-module"}}
 	opts := Options{
-		Repos:          []string{"advoq/advoq"},
+		Repos:          []string{"acme/app"},
 		Execute:        true,
 		OpenHeadsFn: func(_ context.Context, _ string) (map[string]string, error) { return nil, nil },
 		ActiveRunsFn:   func(_ context.Context, _ string) ([]Run, error) { return runs, nil },
@@ -460,7 +460,7 @@ func TestReapKeepsCurrentHeadCaseInsensitive(t *testing.T) {
 
 func TestParseActiveRunsCapturesHeadSHA(t *testing.T) {
 	page := `{"workflow_runs":[{"id":1,"head_branch":"a","head_sha":"deadbeef","event":"pull_request","status":"queued","name":"Go CI","created_at":"2026-06-04T10:00:00Z"}]}`
-	runs, err := parseActiveRuns([]byte(page), "advoq/advoq")
+	runs, err := parseActiveRuns([]byte(page), "acme/app")
 	if err != nil {
 		t.Fatalf("parse err: %v", err)
 	}

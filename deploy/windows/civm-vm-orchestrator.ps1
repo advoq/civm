@@ -24,34 +24,29 @@
 
 .NOTES
     Requer um PAT actions:read por resource owner em
-    C:\ProgramData\civm\gh-token-{advoq,emersonbusson}.txt (o host nao tem gh).
+    C:\ProgramData\civm\gh-token-<owner>.txt (o host nao tem gh).
+    Get-ContextHeadSha le tip via /actions/runs (nao depende de pulls:read).
     DEVE rodar com o mesmo principal do civm-vhdx-autoreclaim (SYSTEM, que ja faz
     SSH ao guest com sucesso); como elevated-user a ssh key fica ilegivel.
     Ao ATIVAR (sem -WhatIf), DESABILITE o autoreclaim + o optimize-watchdog: o
     orchestrator subsume o stop+compact deles (um dono so da VM, sem curadores em
     conflito disputando o lock/power-state — fail-safe #15).
+
+    Defaults genericos: preencha TokenPaths e Repos no host (ou via wrapper).
+    Nao ha fleet multi-produto embutida no script.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [string]$VMName = 'gha-ubuntu-2404',
     [string]$VhdxPath = 'V:\Hyper-V\gha-ubuntu-2404\Virtual Hard Disks\gha-ubuntu-2404.vhdx',
-    # Um PAT fine-grained por resource owner (cada um cobre 1 dono). advoq cobre
-    # advoq/advoq; emersonbusson cobre os 5 repos pessoais.
-    [hashtable]$TokenPaths = @{
-        'advoq'         = 'C:\ProgramData\civm\gh-token-advoq.txt'
-        'emersonbusson' = 'C:\ProgramData\civm\gh-token-emersonbusson.txt'
-    },
+    # Um PAT fine-grained por resource owner (cada um cobre 1 dono).
+    # Exemplo: @{ 'myorg' = 'C:\ProgramData\civm\gh-token-myorg.txt' }
+    [hashtable]$TokenPaths = @{},
     [string]$GuestSshTarget = 'emdev@gha-ubuntu-2404',
     [string]$SshKeyPath = 'C:\ProgramData\civm\ssh\id_ed25519',
-    # Os 7 runners da box -> 6 repos em 2 donos. Cada repo e consultado com o
-    # token do seu owner (TokenPaths). O stop-guard via SSH (Get-GuestHasActiveJob)
-    # continua a salvaguarda final, independente de token.
-    [string[]]$Repos = @(
-        'advoq/advoq', 'advoq/civm',
-        'emersonbusson/advoqwhatsappapi', 'emersonbusson/chatwoot-realtime',
-        'emersonbusson/n8n-engine', 'emersonbusson/typebot-runtime',
-        'emersonbusson/vitae'
-    ),
+    # Repos vigiados (owner/name). Vazio = orchestrator nao ve fila GitHub ate
+    # o operador configurar (fail-safe: sem repo, nao desliga por "idle API").
+    [string[]]$Repos = @(),
     [ValidateRange(1, 120)][int]$IdleStopMinutes = 10,
     # Pisos de seguranca de disco (V: livre em GB). warn = limpa cache online
     # (seguro, sem matar job); panic = compacta offline mesmo ocupado (mata job,
@@ -141,7 +136,7 @@ function Get-RunCount {
     return $total
 }
 
-# Get-PrActivity: agrupa os runs de box ATIVOS (queued+in_progress) do advoq/advoq por
+# Get-PrActivity: agrupa os runs de box ATIVOS (queued+in_progress) do acme/app por
 # CONTEXTO — um PR (pr-<num>) ou um push de branch (branch-<ref>). Retorna um hashtable
 # id -> contagem de runs ativos. E o que a fila FIFO agrupa (todos os checks de um
 # contexto antes do proximo). Falha de API -> pula o status (fail-safe; o tick observe so
@@ -150,10 +145,10 @@ function Get-PrActivity {
     param([int]$MaxAgeHours = 12)
     $cutoff = (Get-Date).ToUniversalTime().AddHours(-$MaxAgeHours)
     $counts = @{}
-    $token = Get-GhTokenForOwner -Owner 'advoq'
+    $token = Get-GhTokenForOwner -Owner 'acme'
     $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'civm-orchestrator'; Accept = 'application/vnd.github+json' }
     foreach ($status in @('queued', 'in_progress')) {
-        $uri = "https://api.github.com/repos/advoq/advoq/actions/runs?status=$status&per_page=100"
+        $uri = "https://api.github.com/repos/acme/app/actions/runs?status=$status&per_page=100"
         try { $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20 } catch { continue }
         foreach ($run in $resp.workflow_runs) {
             if ($run.status -ne $status) { continue }
@@ -169,25 +164,83 @@ function Get-PrActivity {
 
 # Tip head_sha do contexto (PR ou branch). Sinal de "push novo" para o
 # push-wave compact (Resolve-PushWaveCompact). Falha de API -> '' (caller seed/none).
+#
+# Fonte primaria: GET /actions/runs (PAT fine-grained da box tem actions:read).
+# /pulls/{n} e /commits?sha= exigem contents/pull_requests e devolvem 403 no
+# token da box — o catch silencioso deixava tip="" e o push-wave NUNCA compactava
+# (changed=false). Fallback para /pulls|/commits so se actions nao achar match.
 function Get-ContextHeadSha {
     param([Parameter(Mandatory)][string]$ContextId)
     if ([string]::IsNullOrWhiteSpace($ContextId)) { return '' }
     try {
-        $token = Get-GhTokenForOwner -Owner 'advoq'
+        $token = Get-GhTokenForOwner -Owner 'acme'
         $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'civm-orchestrator'; Accept = 'application/vnd.github+json' }
-        if ($ContextId -match '^pr-(\d+)$') {
-            $uri = "https://api.github.com/repos/advoq/advoq/pulls/$($Matches[1])"
-            $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
-            return [string]$resp.head.sha
+
+        # actions/runs lista o mais recente primeiro; head_sha e o tip do workflow
+        # daquele PR/branch (mesmo SHA que o reaper de superseded-sha usa).
+        $runsUri = 'https://api.github.com/repos/acme/app/actions/runs?per_page=50'
+        $runsResp = $null
+        try {
+            $runsResp = Invoke-RestMethod -Uri $runsUri -Headers $headers -Method Get -TimeoutSec 20
         }
+        catch {
+            Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; via = 'actions_runs'; error = "$($_.Exception.Message)" } 'WARN'
+        }
+
+        if ($ContextId -match '^pr-(\d+)$') {
+            $prNum = [int]$Matches[1]
+            if ($null -ne $runsResp) {
+                foreach ($run in @($runsResp.workflow_runs)) {
+                    $matched = $false
+                    foreach ($pr in @($run.pull_requests)) {
+                        if ($null -ne $pr -and [int]$pr.number -eq $prNum) { $matched = $true; break }
+                    }
+                    if (-not $matched) { continue }
+                    $sha = [string]$run.head_sha
+                    if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
+                }
+            }
+            # Fallback: PAT com pull_requests:read (gh auth / classic repo scope).
+            try {
+                $uri = "https://api.github.com/repos/acme/app/pulls/$prNum"
+                $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
+                $sha = [string]$resp.head.sha
+                if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
+            }
+            catch {
+                Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; via = 'pulls'; error = "$($_.Exception.Message)" } 'WARN'
+            }
+            return ''
+        }
+
         if ($ContextId -match '^branch-(.+)$') {
-            $branch = [uri]::EscapeDataString($Matches[1])
-            $uri = "https://api.github.com/repos/advoq/advoq/commits?sha=$branch&per_page=1"
-            $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
-            if ($resp -and @($resp).Count -gt 0) { return [string]$resp[0].sha }
+            $branchName = [string]$Matches[1]
+            if ($null -ne $runsResp) {
+                foreach ($run in @($runsResp.workflow_runs)) {
+                    if ("$($run.head_branch)" -ne $branchName) { continue }
+                    $sha = [string]$run.head_sha
+                    if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
+                }
+            }
+            try {
+                $branch = [uri]::EscapeDataString($branchName)
+                $uri = "https://api.github.com/repos/acme/app/commits?sha=$branch&per_page=1"
+                $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
+                if ($resp -and @($resp).Count -gt 0) {
+                    $sha = [string]$resp[0].sha
+                    if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
+                }
+            }
+            catch {
+                Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; via = 'commits'; error = "$($_.Exception.Message)" } 'WARN'
+            }
+            return ''
         }
     }
-    catch { return '' }
+    catch {
+        Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; via = 'outer'; error = "$($_.Exception.Message)" } 'WARN'
+        return ''
+    }
     return ''
 }
 
@@ -297,8 +350,8 @@ function Invoke-GuestFullClean {
     # STUB _work/<owner>/<repo>: o runner invoca job-started/job-completed com
     # WorkingDirectory=GITHUB_WORKSPACE. Se o dir nao existe (apos full clean),
     # o Process.Start falha com "No such file or directory" ANTES do hook rodar
-    # (CI Router fail em 9s, advoq#1423 2026-07-09). Re-cria stubs vazios dos
-    # owners que a box serve (advoq org runner).
+    # (CI Router fail em 9s, acme#1423 2026-07-09). Re-cria stubs vazios dos
+    # owners que a box serve (acme org runner).
     $remote = @'
 rm -rf ~/.cache/* 2>/dev/null
 rm -rf ~/actions-runner*/_diag/* 2>/dev/null
@@ -306,7 +359,7 @@ for w in ~/actions-runner*/_work; do
   [ -d "$w" ] || continue
   find "$w" -maxdepth 1 -mindepth 1 ! -name _tool -exec rm -rf {} + 2>/dev/null
   # stubs para hooks do runner (cwd deve existir antes do job-started)
-  mkdir -p "$w/advoq/advoq" 2>/dev/null || true
+  mkdir -p "$w/acme/app" 2>/dev/null || true
 done
 sudo journalctl --vacuum-size=50M >/dev/null 2>&1
 sudo rm -rf /tmp/* /var/tmp/* 2>/dev/null
@@ -328,7 +381,7 @@ function Invoke-GuestReapRuns {
 set -a
 [ -f /etc/civm/run-reaper.env ] && . /etc/civm/run-reaper.env
 set +a
-repos="${CIVM_REAPER_REPOS:-advoq/advoq}"
+repos="${CIVM_REAPER_REPOS:-acme/app}"
 civmctl reap-runs --execute --repos="$repos" 2>&1 | tail -8
 '@
     $out = Invoke-GuestSsh -Command $remote

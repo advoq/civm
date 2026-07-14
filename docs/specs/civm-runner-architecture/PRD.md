@@ -27,8 +27,8 @@ issues: []
 
 O box civm é UMA VM Hyper-V (12 vCPU, **7 GB RAM** + 4 GB swap, guest `/` 108 GB
 em VHDX dinâmico, host `V:` 120 GB NTFS) que hospeda **8 self-hosted runners de 7
-projetos** (advoq ×2, civm, advoqwhatsappapi, chatwoot-realtime, n8n-engine,
-typebot-runtime, vitae) — **todos no mesmo `$HOME` do user `emdev`**, persistente
+projetos** (acme ×2, civm, service-a, service-b, service-c,
+service-d, peer) — **todos no mesmo `$HOME` do user `emdev`**, persistente
 e compartilhado. Esse box sofreu uma saga de incidentes (corrupção de cache que
 custou 4 camadas de remediação, wedge de `sshd` sob carga, death-spiral de disco)
 que foram, cada um, tratados por um spec separado.

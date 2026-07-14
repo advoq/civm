@@ -58,8 +58,8 @@ func TestIntegrationReapOrphanFreesRealPort(t *testing.T) {
 	})
 
 	// Sobe o "órfão": busybox dormindo, com a host port fixa publicada e o label
-	// com.docker.compose.project começando com "advoq" — exatamente o que um stack
-	// do advoq deixado por um run/runner anterior carregaria. Assim o reaper o
+	// com.docker.compose.project começando com "acme" — exatamente o que um stack
+	// do acme deixado por um run/runner anterior carregaria. Assim o reaper o
 	// pega tanto pelo sinal primário (label) quanto pela defesa em profundidade
 	// (porta fixa).
 	publish := fmt.Sprintf("127.0.0.1:%d:80", port)
@@ -105,8 +105,8 @@ func TestIntegrationReapOrphanFreesRealPort(t *testing.T) {
 // TestIntegrationReapOrphanRemovesRealLabeledContainer prova o EFEITO REAL de
 // detecção+remoção do reaper contra um daemon docker REAL, sem depender de
 // publicação de porta. Sobe um container com o label
-// com.docker.compose.project começando com "advoq" (o sinal PRIMÁRIO do reaper —
-// exatamente o que um stack do advoq deixado por um run/runner anterior carrega),
+// com.docker.compose.project começando com "acme" (o sinal PRIMÁRIO do reaper —
+// exatamente o que um stack do acme deixado por um run/runner anterior carrega),
 // roda o reaper com o docker REAL e afirma que o container REALMENTE sumiu.
 //
 // Por que existe separado do teste de porta: a publicação de porta exige a stack
@@ -157,7 +157,7 @@ func TestIntegrationReapOrphanRemovesRealLabeledContainer(t *testing.T) {
 		t.Fatalf("reaper must not error against a real labeled orphan: %+v", actions[0])
 	}
 
-	// EFEITO REAL: o container com label advoq* foi de fato removido pelo reaper.
+	// EFEITO REAL: o container com label acme* foi de fato removido pelo reaper.
 	if containerExists(ctx, name) {
 		t.Fatalf("labeled orphan %q still exists after reap; warning=%q", name, actions[0].Warning)
 	}

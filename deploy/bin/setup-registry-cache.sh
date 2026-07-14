@@ -15,7 +15,7 @@
 # Idempotente: rodar de novo reconcilia o estado, nunca duplica.
 #
 # Uso:
-#   ./setup-registry-cache.sh [--repo /caminho/advoq] [--warm]
+#   ./setup-registry-cache.sh [--repo /caminho/acme] [--warm]
 #   DOCKERHUB_USER=... DOCKERHUB_TOKEN=... ./setup-registry-cache.sh --warm
 set -euo pipefail
 
@@ -100,7 +100,7 @@ warm_images() {
   local imgs=()
   if [ -n "$REPO" ] && [ -f "$REPO/infra/docker-compose.yml" ]; then
     log "derivando warm set de $REPO (compose image: + Dockerfile FROM)"
-    mapfile -t comp < <(grep -hoE '^\s*image:\s*\S+' "$REPO"/infra/docker-compose*.yml 2>/dev/null | sed -E 's/^\s*image:\s*//' | grep -vE '^advoq/' | sort -u)
+    mapfile -t comp < <(grep -hoE '^\s*image:\s*\S+' "$REPO"/infra/docker-compose*.yml 2>/dev/null | sed -E 's/^\s*image:\s*//' | grep -vE '^acme/' | sort -u)
     mapfile -t froms < <(grep -rhoE '^FROM\s+\S+' "$REPO"/infra/Dockerfile.* "$REPO"/services/*/Dockerfile "$REPO"/web/Dockerfile 2>/dev/null | awk '{print $2}' | grep -vE '^(scratch|\$\{)' | grep -E '[:/]' | sort -u)
     imgs=("${comp[@]}" "${froms[@]}")
   else

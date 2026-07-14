@@ -224,7 +224,7 @@ só se a action exigir, decidido no SPEC.
   (`volume prune -f`) — RF-4 (alinhado a `vm-disk-budget`).
 - **Action de cache (workflows dos peers):** substitui `cache:false` +
   `GOCACHE/YARN_CACHE_FOLDER=$HOME/.cache/...-$GITHUB_JOB` por uma action de fork
-  apontada para o backend LOCAL. Mudança nos REPOS peer (advoq), não no civm — o
+  apontada para o backend LOCAL. Mudança nos REPOS peer (acme), não no civm — o
   civm provê o backend + a config de runner.
 
 ## Dependências e riscos
@@ -233,7 +233,7 @@ só se a action exigir, decidido no SPEC.
   RF-5 — sem ele o wipe-por-job mata sibling e o lock não pode sair.
 - **Riscos:**
   - `volume prune -f` mal-calibrado remove dado de volume legítimo desanexado →
-    mitigação: par #13 (volume vivo sobrevive) + os 11 containers advoq up há 12 h
+    mitigação: par #13 (volume vivo sobrevive) + os 11 containers acme up há 12 h
     mantêm refcount>0.
   - Footprint de cache multiplicado por-runner antes da mitigação → medir o `V:`
     após o split; `cachetrim`/`vm-disk-budget` (NÃO redesenhados) são o backstop.
@@ -266,7 +266,7 @@ só se a action exigir, decidido no SPEC.
   re-pull/re-warm por job é inviável no orçamento de 7 GB/108 GB. É item de
   rollback trigger do `MULTI-PROJECT-RUNNER.md`, não esta entrega.
 - **F3** (working-set ativo > capacidade do disco): limite de hardware; mitigação
-  é disco maior ou menos concorrência de CI (repo advoq).
+  é disco maior ou menos concorrência de CI (repo acme).
 - **Isolamento de DAEMON Docker** (project-name/portas ephemeral): outro problema
   (`multi-project-isolation`); este PRD aposenta o lock SÓ no eixo cache.
 - **Subir o teto de concorrência:** é RAM-bound; o efêmero não muda 2 jobs heavy.

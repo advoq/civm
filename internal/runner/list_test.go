@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-const fakeSystemctlOutput = `  actions.runner.advoq-civm.civm-1.service        loaded active running GitHub Actions Runner (advoq-civm.civm-1)
-  actions.runner.advoq-advoq.civm-cmpx.service loaded active running GitHub Actions Runner (advoq-advoq.civm-cmpx)
-  actions.runner.emersonbusson-vitae.civm-vitae.service    loaded active running GitHub Actions Runner (emersonbusson-vitae.civm-vitae)
+const fakeSystemctlOutput = `  actions.runner.acme-civm.civm-1.service        loaded active running GitHub Actions Runner (acme-civm.civm-1)
+  actions.runner.acme-app.civm-cmpx.service      loaded active running GitHub Actions Runner (acme-app.civm-cmpx)
+  actions.runner.other-peer.civm-peer.service    loaded active running GitHub Actions Runner (other-peer.civm-peer)
 `
 
 func TestList_ParsesAllThree(t *testing.T) {
@@ -28,9 +28,9 @@ func TestList_ParsesAllThree(t *testing.T) {
 		t.Fatalf("len = %d, want 3", len(items))
 	}
 	wantRepos := map[string]string{
-		"civm-1":     "advoq/civm",
-		"civm-cmpx":  "advoq/advoq",
-		"civm-vitae": "emersonbusson/vitae",
+		"civm-1":     "acme/civm",
+		"civm-cmpx":  "acme/app",
+		"civm-peer": "other/peer",
 	}
 	for _, s := range items {
 		if want := wantRepos[s.Name]; want != s.Repo {
@@ -105,8 +105,8 @@ func TestParseRunnerUnit(t *testing.T) {
 		wantName string
 	}{
 		{
-			"actions.runner.advoq-civm.civm-1.service",
-			"advoq/civm",
+			"actions.runner.acme-civm.civm-1.service",
+			"acme/civm",
 			"civm-1",
 		},
 		{

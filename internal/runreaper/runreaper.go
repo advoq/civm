@@ -43,7 +43,7 @@ import (
 // the list API that surfaced it as a reap candidate still reports
 // status=queued/in_progress. This is a known GitHub-side staleness (a run
 // cancelled/finished weeks ago can outlive its "queued" listing indefinitely
-// — confirmed live against advoq/advoq run 26423751663/26423751642, created
+// — confirmed live against acme/app run 26423751663/26423751642, created
 // 2026-05-25, still listed queued today though `gh run cancel` already
 // answered "Cannot cancel a run that is completed" on 2026-06-17). The
 // reaper's job here is already done — GitHub agrees the run isn't running —

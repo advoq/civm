@@ -128,18 +128,18 @@ func TestCheckPopulatesDockerHeavyLockActive(t *testing.T) {
 	r := Check(context.Background(), Options{
 		StatfsFn:     func(string) (uint64, uint64, error) { return 100, 50, nil },
 		RunFn:        func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
-		LockActiveFn: func() (bool, string, error) { return true, "docker-heavy advoq/advoq#42", nil },
-		PortBlocksFn: func() map[string]int { return map[string]int{"cmpx": 20000, "advoq": 20064} },
+		LockActiveFn: func() (bool, string, error) { return true, "docker-heavy acme/app#42", nil },
+		PortBlocksFn: func() map[string]int { return map[string]int{"cmpx": 20000, "acme": 20064} },
 	})
-	if !r.DockerHeavyLockActive || r.DockerHeavyLockHolder != "docker-heavy advoq/advoq#42" {
+	if !r.DockerHeavyLockActive || r.DockerHeavyLockHolder != "docker-heavy acme/app#42" {
 		t.Fatalf("lock fields not populated: %+v", r)
 	}
-	if r.RunnerPortBlocks["advoq"] != 20064 {
+	if r.RunnerPortBlocks["acme"] != 20064 {
 		t.Fatalf("port blocks not populated: %+v", r.RunnerPortBlocks)
 	}
 	var buf bytes.Buffer
 	RenderText(&buf, r)
-	if !strings.Contains(buf.String(), "Docker-heavy lock: held by docker-heavy advoq/advoq#42") {
+	if !strings.Contains(buf.String(), "Docker-heavy lock: held by docker-heavy acme/app#42") {
 		t.Fatalf("text missing lock holder: %q", buf.String())
 	}
 }

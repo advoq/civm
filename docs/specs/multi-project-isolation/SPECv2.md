@@ -74,7 +74,7 @@ Sem código para "HOLD expirado" — por DT-v2-1 não há force-kill; HOLD só m
 
 ## Rollback trigger v2 — fecha DT-v2-6 / DT-v2-1 contexto
 
-Avaliado sobre o **primeiro conjunto de 5 runs consecutivos de CADA peer (advoq, vitae) nas primeiras 48h** após o deploy do binário. Reverter a slice ofensora (`self-upgrade` versão anterior + `rm /var/lib/civm/port-blocks.json`) se **qualquer**:
+Avaliado sobre o **primeiro conjunto de 5 runs consecutivos de CADA peer (acme, peer) nas primeiras 48h** após o deploy do binário. Reverter a slice ofensora (`self-upgrade` versão anterior + `rm /var/lib/civm/port-blocks.json`) se **qualquer**:
 
 - **Colisão de container:** `docker ps --format '{{.Names}}' | sort | uniq -d` retorna ≥1 cross-runner; OU
 - **Colisão de porta:** bind falha com `EADDRINUSE` em `[20000,32000)` no journal; OU

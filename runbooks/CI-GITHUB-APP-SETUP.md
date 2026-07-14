@@ -147,7 +147,7 @@ Substituir o passo atual (chamada a `civmctl billing-status`) por:
 APP_ID=12345
 INSTALLATION_ID=67890
 PEM_FILE=/path/to/key.pem
-OWNER=emersonbusson
+OWNER=other
 
 # Generate JWT (use uma lib ou comando openssl como no workflow)
 # ...

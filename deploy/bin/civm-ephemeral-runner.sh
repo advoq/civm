@@ -14,8 +14,8 @@
 #
 # Config vem de /etc/civm/ephemeral-<slot>.env (chmod 600):
 #   GH_PAT              token com escopo organization_self_hosted_runners:write
-#   GH_ORG              org dona do runner (ex.: advoq)
-#   RUNNER_DIR          dir do runner instalado (ex.: /home/emdev/actions-runner-advoq-org)
+#   GH_ORG              org dona do runner (ex.: acme)
+#   RUNNER_DIR          dir do runner instalado (ex.: /home/emdev/actions-runner-acme-org)
 #   LABELS              labels CUSTOM, CSV (default: civm) — self-hosted/Linux/X64 sao auto
 #   RUNNER_GROUP_ID     grupo do runner (default: 1 = Default)
 #   RUNNER_NAME_PREFIX  prefixo do nome JIT (default: civm-<slot>-eph)

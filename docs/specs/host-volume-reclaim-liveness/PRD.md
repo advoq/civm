@@ -15,7 +15,7 @@ crítico) para evitar `PausedCritical`.
 
 ## Problema (incidente 2026-06-15)
 
-O `V:` bateu no piso crítico e o runner **recusou TODOS os jobs** do PR advoq
+O `V:` bateu no piso crítico e o runner **recusou TODOS os jobs** do PR acme
 #1155 (13/30 jobs exit 75). Investigação ao vivo (host + logs) revelou **duas
 falhas de liveness do reclaim**, ambas instâncias da disciplina Kahneman #16 (o
 mecanismo de cura não pode morrer com o recurso que cura):
@@ -99,15 +99,15 @@ escopo, documentado).
 2. Sob carga concorrente que dirija `V:` ao WARN, com slack reclamável → o
    reclaim drena, reclama e religa; `V:` volta acima do WARN; **nenhum job
    recusado por exit 75**.
-3. Re-run completo do CI advoq #1155 com a nova lógica deployada → sem falha de
+3. Re-run completo do CI acme #1155 com a nova lógica deployada → sem falha de
    disco (assumido slack reclamável suficiente; F3 fora de escopo).
 
 ## Fora de escopo
 
 - F3 (working set ativo > capacidade do disco) — é limite de hardware; mitigação
   é disco maior ou menor concorrência de CI, ambos fora deste PRD.
-- Mudanças no footprint do CI advoq (concorrência de jobs) — pertencem ao repo
-  advoq, não ao civm.
+- Mudanças no footprint do CI acme (concorrência de jobs) — pertencem ao repo
+  acme, não ao civm.
 
 ## Reuso antes de criação (regra dura SSDV3)
 

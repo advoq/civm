@@ -35,10 +35,10 @@ aplicada nas duas direções.
 | MPI / `runner-isolation` (portblock) | **shipped** | `internal/portblock` grava `/var/lib/civm/port-blocks.json` atômico; `install.go:167-178` aloca bloco por runner e escreve `CIVM_RUNNER_SLOT`/`CIVM_PORT_BASE`/`COMPOSE_PROJECT_NAME` no `.env`. OQ-3 resolvido. |
 | gate self-heal (devctl + ci-router) | **shipped** | `run.go:787,800` (`yarnInstallResilient`/`installWithCacheRecovery`); `ci-router.yml` go-vet + yarn clean+retry; `applyCivmBoxBuildDefaults` `NEXT_BUILD_CPUS=1` (`run.go:98-102`). |
 | ephemeral-ci spine (post-job + cron) | **shipped (spine)** | `internal/hook` job-completed (`hook.go:244-332`) mata órfãos, apaga `_work` velho, trima caches, `dockerPruneSafe` (só dangling); `internal/cleanup` cron com host-busy deferral; `diskwatchdog` horário; `safedelete`. Prune agressivo / trim per-job named-dir / hook de job-cancel: **deferidos**. |
-| `dockerlock` | **shipped (não aposentado)** | `internal/dockerlock` (553 linhas) + `cmd/civmctl/lock.go` + ci-guard R4 + advoq `web.yml:182` em produção. Aposentadoria é **planejada** (SPECv3 DT-v3-8), **não executada**. O desenho deve parar de tratar ITEM-5 como deleção no-op. |
+| `dockerlock` | **shipped (não aposentado)** | `internal/dockerlock` (553 linhas) + `cmd/civmctl/lock.go` + ci-guard R4 + acme `web.yml:182` em produção. Aposentadoria é **planejada** (SPECv3 DT-v3-8), **não executada**. O desenho deve parar de tratar ITEM-5 como deleção no-op. |
 | disk-budget / threshold-pct | **shipped (sem bug)** | `--threshold-pct=0` já clampa para 60 (`diskwatchdog.go:135-137` → `civm.go:37,39`); guest-prune RF-3 shipado (#122, liberou ~17.5GB). **Não há bug.** Ver D2 (rejeitado). |
 | cachetrim atômico (3 modos + caps backstop) | **partial → GAP** | Implementado e testado em `fix/cachetrim-hard-ceiling` (#124), **ausente do main** (`dbb18ff` ainda tem trim por arquivo, caps 5GB/3GB). É **D1**. |
-| per-runner cache slot | **GAP → fechado nesta rodada** | `CIVM_RUNNER_SLOT` existe no `.env` mas não era usado no path do cache; o cache advoq era per-JOB (`yarn-advoq-$GITHUB_JOB`). Fechado em advoq `5dd2113eb` (ver D-slot). |
+| per-runner cache slot | **GAP → fechado nesta rodada** | `CIVM_RUNNER_SLOT` existe no `.env` mas não era usado no path do cache; o cache acme era per-JOB (`yarn-acme-$GITHUB_JOB`). Fechado em acme `5dd2113eb` (ver D-slot). |
 
 ## Delta mínimo confirmado (escopo do IMPL — Day-0, GO)
 
@@ -66,12 +66,12 @@ que originou toda a saga. O branch traz `DefaultCacheGoBuildMaxGB=12` /
 ### D-slot — per-runner cache slot (resíduo aceito do SPECv2, agora fechado)
 
 O SPECv2 (linha 100) marcou per-runner cache slot como follow-up / resíduo
-aceito. A evidência viva do advoq #1155 promoveu-o a delta confirmado: dois jobs
+aceito. A evidência viva do acme #1155 promoveu-o a delta confirmado: dois jobs
 `web` de PRs distintos, em runners diferentes da box, escreviam a MESMA pasta
-`yarn-advoq-web` e partiam o pacote multi-arquivo `next` (`yarn lint`:
+`yarn-acme-web` e partiam o pacote multi-arquivo `next` (`yarn lint`:
 "Cannot find module 'next/dist/compiled/babel/eslint-parser'").
 
-- Implementado em advoq `5dd2113eb`: sufixo `${CIVM_RUNNER_SLOT:+-$CIVM_RUNNER_SLOT}`
+- Implementado em acme `5dd2113eb`: sufixo `${CIVM_RUNNER_SLOT:+-$CIVM_RUNNER_SLOT}`
   em toda pasta de cache (`web.yml`, `go.yml`, `ci-router.yml`,
   `security-scans.yml`). Um runner roda um job por vez → a pasta vira privada do
   runner → nunca há escrita concorrente. Fora da box (slot vazio) o path fica
@@ -137,9 +137,9 @@ Uma auditoria multi-agente com verificação adversarial (15 agents, 47 achados,
   ignora o MinProtect → podia deletar o working-set de um install vivo. Fix:
   `Options.InFlightFloor` pula dirs com escrita < 15min (só no emergency path).
   civm **#126**, com teste FS-real que fecha o buraco `GlobFn→nil` (#13).
-- **`admit` é SHIPPED mas INERTE para advoq (#13: existência ≠ função).** O motor
+- **`admit` é SHIPPED mas INERTE para acme (#13: existência ≠ função).** O motor
   (`MaxHeavy=2`, cgroup `MemoryMax`) é real e validado, mas é **opt-in** e nenhum
-  dos 17 workflows advoq o chama (`grep CIVM_JOB_WEIGHT|civmctl admit` = 0). O
+  dos 17 workflows acme o chama (`grep CIVM_JOB_WEIGHT|civmctl admit` = 0). O
   hook do runner (`JOB_STARTED`/`JOB_COMPLETED`, sem `STEP_*`) **não consegue**
   envelopar o comando de um step. Como as mortes do #1155 não eram OOM, gatear a
   RAM é **enhancement futuro**, não o fix atual — e o único caminho viável é
@@ -152,7 +152,7 @@ Uma auditoria multi-agente com verificação adversarial (15 agents, 47 achados,
 | --- | --- | --- | --- |
 | D1 | civm | `internal/cachetrim/*`, `internal/civm/civm.go` (#124) | branch pronto; merge+deploy pendente |
 | D1 unblock | civm | `.golangci.yml` (`827829e`) | shipado no branch |
-| D-slot | advoq | `web.yml`/`go.yml`/`ci-router.yml`/`security-scans.yml` (`5dd2113eb`) | shipado; validando #1155 |
+| D-slot | acme | `web.yml`/`go.yml`/`ci-router.yml`/`security-scans.yml` (`5dd2113eb`) | shipado; validando #1155 |
 | D3 | civm | este SPECv4 + banners | esta entrega |
 | D2 | — | — | rejeitado (sem ação) |
 
@@ -166,7 +166,7 @@ Uma auditoria multi-agente com verificação adversarial (15 agents, 47 achados,
 
 ## Evidência de implementação (loop vivo)
 
-- advoq `5dd2113eb` (per-runner cache slot) empurrado → #1155 re-rodando; o
+- acme `5dd2113eb` (per-runner cache slot) empurrado → #1155 re-rodando; o
   critério de sucesso é o job `web` passar com a pasta per-runner fresca (`next`
   íntegro, `yarn lint` verde).
 - civm `827829e` (misspell allowlist) empurrado → #124 re-rodando; o critério é

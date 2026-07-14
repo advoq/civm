@@ -27,7 +27,7 @@ qualquer um orfana a entrada e o `go vet` (modo "vet only, no build") quebra com
 nem por arquivo nem por diretório é seguro → só o wipe do dir inteiro acima do cap é
 atômico (WipeWhole). npm/pnpm são content-addressed (cada blob é uma unidade
 completa) — uma ausência é detectada por integridade e re-baixada → seguros por
-arquivo. (O advoq usa yarn v1 + go-build + golangci; não há `_cacache`/`.pnpm-store`
+arquivo. (O acme usa yarn v1 + go-build + golangci; não há `_cacache`/`.pnpm-store`
 no guest.)
 
 **Generalização (robustez a outros managers):** três modos, escolhidos por cache —
@@ -87,7 +87,7 @@ atomicamente é inócuo. Sem ação.
 - **RF-6** (core, civm — fix do A2): cap de cache regenerável é BACKSTOP, não cap
   contínuo. yarn 3→12GB (go-build já 12GB). O working-set fica sob o cap → o
   disk-watchdog/EmergencyBypass nunca o trima durante um job → elimina o race.
-- **RF-5** (superseded por RF-6): reverter `yarn-advoq-audit` virou desnecessário —
+- **RF-5** (superseded por RF-6): reverter `yarn-acme-audit` virou desnecessário —
   com o backstop cap, 4 dirs yarn (3GB/dir) ficam todos sob o cap.
 - **RF-4** (validação): rebuild + deploy civmctl → limpar caches → re-run dos jobs
   `web`/`gates`/`tenant-isolation`/`audit` do #1155 todos verdes.

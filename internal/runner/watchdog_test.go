@@ -20,14 +20,14 @@ func baseWatchdogOptions(t *testing.T) WatchdogOptions {
 	t.Helper()
 	opts := DefaultWatchdogOptions()
 	opts.Execute = true
-	opts.Repos = []string{"advoq/civm"}
+	opts.Repos = []string{"acme/civm"}
 	opts.InferRepos = false
 	opts.NetworkFn = func(context.Context, time.Duration) error { return nil }
 	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
 	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
 		return []Status{{
-			UnitName:    "actions.runner.advoq-civm.civm-self.service",
-			Repo:        "advoq/civm",
+			UnitName:    "actions.runner.acme-civm.civm-self.service",
+			Repo:        "acme/civm",
 			Name:        "civm-self",
 			ActiveState: "active",
 			SubState:    "running",
@@ -35,7 +35,7 @@ func baseWatchdogOptions(t *testing.T) WatchdogOptions {
 	}
 	opts.GitHubRunnersFn = func(context.Context, string) ([]WatchdogGitHubRunner, error) {
 		return []WatchdogGitHubRunner{{
-			Repo:   "advoq/civm",
+			Repo:   "acme/civm",
 			Name:   "civm-self",
 			Status: "online",
 			Labels: []string{"self-hosted", "civm"},
@@ -66,7 +66,7 @@ func TestWatchdogNetworkDownDoesNotMutate(t *testing.T) {
 		return hook.InstallResult{}
 	}
 	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if name == "sudo" && strings.Join(args, " ") == "systemctl restart actions.runner.advoq-civm.civm-self.service" {
+		if name == "sudo" && strings.Join(args, " ") == "systemctl restart actions.runner.acme-civm.civm-self.service" {
 			restartCalls++
 		}
 		return []byte("active\n"), nil
@@ -95,8 +95,8 @@ func TestWatchdogBusyHostDoesNotMutate(t *testing.T) {
 	opts.RerunNetworkFailures = true
 	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
 		return []Status{{
-			UnitName:    "actions.runner.advoq-civm.civm-self.service",
-			Repo:        "advoq/civm",
+			UnitName:    "actions.runner.acme-civm.civm-self.service",
+			Repo:        "acme/civm",
 			Name:        "civm-self",
 			ActiveState: "failed",
 			SubState:    "failed",
@@ -231,8 +231,8 @@ func sentinelLine(now time.Time, workRoot string) string {
 
 func brokenRunnerSystemd() []Status {
 	return []Status{
-		{UnitName: "actions.runner.advoq-org.civm-advoq-org.service", Name: "civm-advoq-org", WorkingDirectory: "/home/emdev/actions-runner-advoq-org"},
-		{UnitName: "actions.runner.vitae.civm-vitae.service", Name: "civm-vitae", WorkingDirectory: "/home/emdev/actions-runner-vitae"},
+		{UnitName: "actions.runner.acme-org.civm-acme-org.service", Name: "civm-acme-org", WorkingDirectory: "/home/emdev/actions-runner-acme-org"},
+		{UnitName: "actions.runner.other-peer.civm-peer.service", Name: "civm-peer", WorkingDirectory: "/home/emdev/actions-runner-peer"},
 	}
 }
 
@@ -240,11 +240,11 @@ func TestDetectBrokenRunnerRestartsCorrectUnit(t *testing.T) {
 	t.Parallel()
 	now := testWatchdogNow
 	io := newDetectIO()
-	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now.Add(-5*time.Minute), "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now.Add(-5*time.Minute), "/home/emdev/actions-runner-acme-org/_work") + "\n")
 	var report WatchdogReport
 	detectBrokenRunner(context.Background(), io.opts(now), brokenRunnerSystemd(), &report)
-	if len(io.restarted) != 1 || io.restarted[0] != "actions.runner.advoq-org.civm-advoq-org.service" {
-		t.Fatalf("restarted = %v, want only the advoq-org unit (deterministic WorkRoot map)", io.restarted)
+	if len(io.restarted) != 1 || io.restarted[0] != "actions.runner.acme-org.civm-acme-org.service" {
+		t.Fatalf("restarted = %v, want only the acme-org unit (deterministic WorkRoot map)", io.restarted)
 	}
 	if !hasWatchdogEvent(report, "runner-auto-restarted") {
 		t.Fatalf("events = %+v, want runner-auto-restarted", report.Events)
@@ -256,7 +256,7 @@ func TestDetectBrokenRunnerNoSentinelNoRestart(t *testing.T) {
 	now := testWatchdogNow
 	io := newDetectIO()
 	// job-completed with a CLEAN work_root action (no error) — not a sentinel.
-	io.files["/var/log/civm/hooks.jsonl"] = []byte(`{"time":"` + now.Format(time.RFC3339) + `","decision":"ok","work_root":"/home/emdev/actions-runner-advoq-org/_work","actions":[{"name":"work_root","executed":true}]}` + "\n")
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(`{"time":"` + now.Format(time.RFC3339) + `","decision":"ok","work_root":"/home/emdev/actions-runner-acme-org/_work","actions":[{"name":"work_root","executed":true}]}` + "\n")
 	var report WatchdogReport
 	detectBrokenRunner(context.Background(), io.opts(now), brokenRunnerSystemd(), &report)
 	if len(io.restarted) != 0 {
@@ -268,7 +268,7 @@ func TestDetectBrokenRunnerStaleSentinelIgnored(t *testing.T) {
 	t.Parallel()
 	now := testWatchdogNow
 	io := newDetectIO()
-	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now.Add(-3*time.Hour), "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now.Add(-3*time.Hour), "/home/emdev/actions-runner-acme-org/_work") + "\n")
 	var report WatchdogReport
 	detectBrokenRunner(context.Background(), io.opts(now), brokenRunnerSystemd(), &report)
 	if len(io.restarted) != 0 {
@@ -296,9 +296,9 @@ func TestDetectBrokenRunnerRateCapSkips(t *testing.T) {
 	t.Parallel()
 	now := testWatchdogNow
 	io := newDetectIO()
-	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now, "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now, "/home/emdev/actions-runner-acme-org/_work") + "\n")
 	// Pre-seed the marker at the cap for this unit in the current hour.
-	io.files["/var/lib/civm/marker.json"] = []byte(`{"reruns":{},"auto_restarts":{"actions.runner.advoq-org.civm-advoq-org.service":{"count":3,"window_start":"` + now.Format(time.RFC3339) + `"}}}`)
+	io.files["/var/lib/civm/marker.json"] = []byte(`{"reruns":{},"auto_restarts":{"actions.runner.acme-org.civm-acme-org.service":{"count":3,"window_start":"` + now.Format(time.RFC3339) + `"}}}`)
 	var report WatchdogReport
 	detectBrokenRunner(context.Background(), io.opts(now), brokenRunnerSystemd(), &report)
 	if len(io.restarted) != 0 {
@@ -314,7 +314,7 @@ func TestDetectBrokenRunnerRestartErrorExits2(t *testing.T) {
 	now := testWatchdogNow
 	io := newDetectIO()
 	io.restartErr = errors.New("systemctl restart failed")
-	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now, "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now, "/home/emdev/actions-runner-acme-org/_work") + "\n")
 	var report WatchdogReport
 	detectBrokenRunner(context.Background(), io.opts(now), brokenRunnerSystemd(), &report)
 	if report.Exit != 2 {
@@ -328,7 +328,7 @@ func TestDetectBrokenRunnerDryRunCandidateOnly(t *testing.T) {
 	io := newDetectIO()
 	opts := io.opts(now)
 	opts.Execute = false
-	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now, "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now, "/home/emdev/actions-runner-acme-org/_work") + "\n")
 	var report WatchdogReport
 	detectBrokenRunner(context.Background(), opts, brokenRunnerSystemd(), &report)
 	if len(io.restarted) != 0 {
@@ -343,10 +343,10 @@ func TestUnitForWorkRootRejectsPrefixCollision(t *testing.T) {
 	t.Parallel()
 	systemd := []Status{
 		{UnitName: "actions.runner.bare.civm-bare.service", WorkingDirectory: "/home/emdev/actions-runner"},
-		{UnitName: "actions.runner.advoq.civm-advoq.service", WorkingDirectory: "/home/emdev/actions-runner-advoq"},
+		{UnitName: "actions.runner.acme.civm-app.service", WorkingDirectory: "/home/emdev/actions-runner-acme"},
 	}
-	if got := unitForWorkRoot("/home/emdev/actions-runner-advoq/_work", systemd); got != "actions.runner.advoq.civm-advoq.service" {
-		t.Fatalf("got %q, want the -advoq unit (no prefix collision with bare actions-runner)", got)
+	if got := unitForWorkRoot("/home/emdev/actions-runner-acme/_work", systemd); got != "actions.runner.acme.civm-app.service" {
+		t.Fatalf("got %q, want the -acme unit (no prefix collision with bare actions-runner)", got)
 	}
 	if got := unitForWorkRoot("/home/emdev/actions-runner/_work", systemd); got != "actions.runner.bare.civm-bare.service" {
 		t.Fatalf("got %q, want the bare unit", got)
@@ -360,7 +360,7 @@ func TestDetectBrokenRunnerMarkerWriteFailureFailsClosed(t *testing.T) {
 	t.Parallel()
 	now := testWatchdogNow
 	io := newDetectIO()
-	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now, "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now, "/home/emdev/actions-runner-acme-org/_work") + "\n")
 	opts := io.opts(now)
 	// Persistent marker-write failure (correlated with the disk fault that wedges
 	// the runner). The cap must hold: NO restart without persisting the slot.
@@ -381,7 +381,7 @@ func TestDetectBrokenRunnerDedupesSameSentinelAcrossTicks(t *testing.T) {
 	t.Parallel()
 	now := testWatchdogNow
 	io := newDetectIO()
-	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now.Add(-2*time.Minute), "/home/emdev/actions-runner-advoq-org/_work") + "\n")
+	io.files["/var/log/civm/hooks.jsonl"] = []byte(sentinelLine(now.Add(-2*time.Minute), "/home/emdev/actions-runner-acme-org/_work") + "\n")
 	opts := io.opts(now)
 	// The same sentinel line persists in the log across ticks; it must restart
 	// the runner exactly ONCE (dedup), not once per tick up to the cap.
@@ -427,8 +427,8 @@ func TestWatchdogRestartsFailedSystemdRunner(t *testing.T) {
 	opts.RestartDelay = 0
 	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
 		return []Status{{
-			UnitName:    "actions.runner.advoq-civm.civm-self.service",
-			Repo:        "advoq/civm",
+			UnitName:    "actions.runner.acme-civm.civm-self.service",
+			Repo:        "acme/civm",
 			Name:        "civm-self",
 			ActiveState: "failed",
 			SubState:    "failed",
@@ -451,28 +451,28 @@ func TestWatchdogRestartsFailedSystemdRunner(t *testing.T) {
 	if !hasWatchdogEvent(report, "runner-restarted") {
 		t.Fatalf("events = %+v, want runner-restarted", report.Events)
 	}
-	assertWatchdogCall(t, calls, "sudo systemctl restart actions.runner.advoq-civm.civm-self.service")
+	assertWatchdogCall(t, calls, "sudo systemctl restart actions.runner.acme-civm.civm-self.service")
 }
 
 // TestWatchdogDoesNotResurrectRedundantRepoRunner prova a defesa de
-// serialização: um runner por-repo (civm-advoq) já parado (inactive/dead, o
+// serialização: um runner por-repo (civm-app) já parado (inactive/dead, o
 // estado pós-`systemctl disable`) NÃO pode ser reativado pelo watchdog enquanto
-// o runner org (civm-advoq-org) existe — senão a colisão do #1184 volta a cada
+// o runner org (civm-acme-org) existe — senão a colisão do #1184 volta a cada
 // tick de 2min. O watchdog declina o restart e emite runner-restart-skipped.
 func TestWatchdogDoesNotResurrectRedundantRepoRunner(t *testing.T) {
 	t.Parallel()
 	opts := baseWatchdogOptions(t)
 	opts.RestartDelay = 0
-	opts.Repos = []string{"advoq/advoq"}
-	const redundantUnit = "actions.runner.advoq-advoq.civm-advoq.service"
+	opts.Repos = []string{"acme/app"}
+	const redundantUnit = "actions.runner.acme-app.civm-app.service"
 	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
 		return []Status{
-			{UnitName: "actions.runner.advoq.civm-advoq-org.service", Repo: "advoq", Name: "civm-advoq-org", ActiveState: "active", SubState: "running"},
-			{UnitName: redundantUnit, Repo: "advoq/advoq", Name: "civm-advoq", ActiveState: "inactive", SubState: "dead"},
+			{UnitName: "actions.runner.acme.civm-acme-org.service", Repo: "acme", Name: "civm-acme-org", ActiveState: "active", SubState: "running"},
+			{UnitName: redundantUnit, Repo: "acme/app", Name: "civm-app", ActiveState: "inactive", SubState: "dead"},
 		}, nil
 	}
 	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]WatchdogGitHubRunner, error) {
-		return []WatchdogGitHubRunner{{Repo: repo, Name: "civm-advoq-org", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
+		return []WatchdogGitHubRunner{{Repo: repo, Name: "civm-acme-org", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
 	}
 	var calls []string
 	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -515,7 +515,7 @@ func TestWatchdogMarkerPreventsDuplicateRerun(t *testing.T) {
 	opts := baseWatchdogOptions(t)
 	opts.RerunNetworkFailures = true
 	opts.ReadFileFn = func(string) ([]byte, error) {
-		return []byte(`{"reruns":{"77/abc":{"repo":"advoq/civm","run_id":77,"head_sha":"abc","rerun_at":"2026-05-19T12:00:00Z"}}}`), nil
+		return []byte(`{"reruns":{"77/abc":{"repo":"acme/civm","run_id":77,"head_sha":"abc","rerun_at":"2026-05-19T12:00:00Z"}}}`), nil
 	}
 	rerunCalls := 0
 	opts.ListRunsFn = func(context.Context, string, int) ([]WatchdogRun, error) {
@@ -574,7 +574,7 @@ func TestWatchdogTriggersNetworkRerunAndWritesMarker(t *testing.T) {
 		return "Run actions/checkout@v5\nRPC failed; curl 92 HTTP/2 stream was not closed cleanly: CANCEL\n", nil
 	}
 	opts.RerunFn = func(_ context.Context, repo string, runID int64) error {
-		if repo != "advoq/civm" {
+		if repo != "acme/civm" {
 			t.Fatalf("repo = %q", repo)
 		}
 		reruns = append(reruns, runID)
@@ -819,19 +819,19 @@ func TestApplyWatchdogDefaultsInstallsCommandBackedFunctions(t *testing.T) {
 			if name == "systemctl" && strings.Join(args, " ") == "list-units --type=service --no-pager --no-legend --all actions.runner.*" {
 				return []byte(fakeSystemctlOutput), nil
 			}
-			if name == "gh" && strings.Join(args, " ") == "api /repos/advoq/civm/actions/runners" {
+			if name == "gh" && strings.Join(args, " ") == "api /repos/acme/civm/actions/runners" {
 				return []byte(`{"runners":[{"id":1,"name":"civm-self","status":"online","busy":false,"labels":[{"name":"self-hosted"},{"name":"civm"}]}]}`), nil
 			}
-			if name == "gh" && strings.Join(args, " ") == "api /repos/advoq/civm/actions/runs?per_page=20&status=completed" {
+			if name == "gh" && strings.Join(args, " ") == "api /repos/acme/civm/actions/runs?per_page=20&status=completed" {
 				return []byte(`{"workflow_runs":[{"id":8,"head_sha":"abc","status":"completed","conclusion":"failure","created_at":"2026-05-19T12:00:00Z","html_url":"https://github.com/advoq/civm/actions/runs/8","pull_requests":[{"number":7}]}]}`), nil
 			}
-			if name == "gh" && strings.Join(args, " ") == "api /repos/advoq/civm/pulls/7" {
+			if name == "gh" && strings.Join(args, " ") == "api /repos/acme/civm/pulls/7" {
 				return []byte(`{"number":7,"state":"open","mergeable_state":"clean"}`), nil
 			}
-			if name == "gh" && strings.Join(args, " ") == "run view 8 --repo advoq/civm --log-failed" {
+			if name == "gh" && strings.Join(args, " ") == "run view 8 --repo acme/civm --log-failed" {
 				return []byte("Run actions/checkout@v5\nfatal: early EOF\n"), nil
 			}
-			if name == "gh" && strings.Join(args, " ") == "run rerun 8 --repo advoq/civm --failed" {
+			if name == "gh" && strings.Join(args, " ") == "run rerun 8 --repo acme/civm --failed" {
 				return []byte(""), nil
 			}
 			return nil, errors.New("unexpected call: " + name + " " + strings.Join(args, " "))
@@ -849,35 +849,35 @@ func TestApplyWatchdogDefaultsInstallsCommandBackedFunctions(t *testing.T) {
 	if len(statuses) != 3 {
 		t.Fatalf("statuses=%d, want 3", len(statuses))
 	}
-	runners, err := opts.GitHubRunnersFn(context.Background(), "advoq/civm")
+	runners, err := opts.GitHubRunnersFn(context.Background(), "acme/civm")
 	if err != nil {
 		t.Fatalf("GitHubRunnersFn error: %v", err)
 	}
 	if len(runners) != 1 || runners[0].Name != "civm-self" || !hasWatchdogLabel(runners[0].Labels, "civm") {
 		t.Fatalf("runners=%+v, want civm runner with label", runners)
 	}
-	runs, err := opts.ListRunsFn(context.Background(), "advoq/civm", opts.RunLimit)
+	runs, err := opts.ListRunsFn(context.Background(), "acme/civm", opts.RunLimit)
 	if err != nil {
 		t.Fatalf("ListRunsFn error: %v", err)
 	}
 	if len(runs) != 1 || runs[0].ID != 8 || len(runs[0].PullRequests) != 1 {
 		t.Fatalf("runs=%+v, want parsed run with PR", runs)
 	}
-	pr, err := opts.PullRequestFn(context.Background(), "advoq/civm", 7)
+	pr, err := opts.PullRequestFn(context.Background(), "acme/civm", 7)
 	if err != nil {
 		t.Fatalf("PullRequestFn error: %v", err)
 	}
 	if pr.State != "open" || pr.MergeableState != "clean" {
 		t.Fatalf("pr=%+v, want open clean", pr)
 	}
-	log, err := opts.RunLogFn(context.Background(), "advoq/civm", 8)
+	log, err := opts.RunLogFn(context.Background(), "acme/civm", 8)
 	if err != nil {
 		t.Fatalf("RunLogFn error: %v", err)
 	}
 	if !strings.Contains(log, "early EOF") {
 		t.Fatalf("log=%q, want checkout failure", log)
 	}
-	if err := opts.RerunFn(context.Background(), "advoq/civm", 8); err != nil {
+	if err := opts.RerunFn(context.Background(), "acme/civm", 8); err != nil {
 		t.Fatalf("RerunFn error: %v", err)
 	}
 }
@@ -888,13 +888,13 @@ func TestWatchdogCLIParsersRejectInvalidJSON(t *testing.T) {
 		return []byte(`{`), nil
 	}
 
-	if _, err := listWatchdogGitHubRunners(context.Background(), "advoq/civm", runFn); err == nil {
+	if _, err := listWatchdogGitHubRunners(context.Background(), "acme/civm", runFn); err == nil {
 		t.Fatal("listWatchdogGitHubRunners error=nil, want parse error")
 	}
-	if _, err := listWatchdogRuns(context.Background(), "advoq/civm", 5, runFn); err == nil {
+	if _, err := listWatchdogRuns(context.Background(), "acme/civm", 5, runFn); err == nil {
 		t.Fatal("listWatchdogRuns error=nil, want parse error")
 	}
-	if _, err := getWatchdogPullRequest(context.Background(), "advoq/civm", 7, runFn); err == nil {
+	if _, err := getWatchdogPullRequest(context.Background(), "acme/civm", 7, runFn); err == nil {
 		t.Fatal("getWatchdogPullRequest error=nil, want parse error")
 	}
 }
@@ -917,7 +917,7 @@ func TestValidateWatchdogOptionsRejectsInvalidValues(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			opts := WatchdogOptions{
-				Repos:          []string{"advoq/civm"},
+				Repos:          []string{"acme/civm"},
 				NetworkTimeout: time.Second,
 				RestartDelay:   0,
 				MaxRunAge:      time.Hour,
@@ -936,12 +936,12 @@ func TestWatchdogReportRenderers(t *testing.T) {
 	t.Parallel()
 	report := WatchdogReport{
 		Executed:     true,
-		Repos:        []string{"advoq/civm"},
+		Repos:        []string{"acme/civm"},
 		RunnerOnline: true,
 		Metrics:      WatchdogMetrics{RunsConsidered: 2, RerunsTriggered: 1, RerunsSkipped: 1},
 		Events: []WatchdogEvent{
-			{Event: "runner-online", Severity: "info", Repo: "advoq/civm", Runner: "civm-self", Online: true},
-			{Event: "rerun-triggered", Severity: "info", Repo: "advoq/civm", RunID: 8, Reason: "network-checkout", Detail: "signature=early eof"},
+			{Event: "runner-online", Severity: "info", Repo: "acme/civm", Runner: "civm-self", Online: true},
+			{Event: "rerun-triggered", Severity: "info", Repo: "acme/civm", RunID: 8, Reason: "network-checkout", Detail: "signature=early eof"},
 		},
 		Exit: 0,
 	}
@@ -961,7 +961,7 @@ func TestWatchdogReportRenderers(t *testing.T) {
 	var textBuf bytes.Buffer
 	report.Render(&textBuf)
 	out := textBuf.String()
-	for _, want := range []string{"EXECUTE", "runner_online=true", "Repos: advoq/civm", "rerun-triggered", "network-checkout: signature=early eof"} {
+	for _, want := range []string{"EXECUTE", "runner_online=true", "Repos: acme/civm", "rerun-triggered", "network-checkout: signature=early eof"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("Render output missing %q:\n%s", want, out)
 		}

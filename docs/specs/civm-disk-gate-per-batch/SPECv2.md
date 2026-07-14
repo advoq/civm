@@ -51,7 +51,7 @@ issues: []
 
 **Fora agora:** o `switch` continua chamando `Invoke-StopAndCompact` (reuso); a
 medição guest-side do Off-path (inalterada); serialização do docker-heavy/workflow
-advoq; pré-build/pull.
+acme; pré-build/pull.
 
 **Dependências prontas (reuso):** `Invoke-StopAndCompact`, `civm-reclaim-gate.ps1`
 (`Test-OptimizeSlack`, lock `V:\civm-reclaim.lock`), `Get-VFreeGB`, `Get-State`/

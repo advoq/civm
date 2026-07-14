@@ -25,7 +25,7 @@ func TestAppendLogIncludesWorkRootIdentifier(t *testing.T) {
 	res := Result{
 		Event:    EventJobCompleted,
 		Decision: DecisionError,
-		WorkRoot: "/home/emdev/actions-runner-advoq-org/_work",
+		WorkRoot: "/home/emdev/actions-runner-acme-org/_work",
 		Actions:  []Action{{Name: "work_root", Error: "wrapper rm failed: boom"}},
 	}
 	if err := appendLog(opts, res); err != nil {
@@ -37,7 +37,7 @@ func TestAppendLogIncludesWorkRootIdentifier(t *testing.T) {
 	}
 	// The shared hooks.jsonl must carry the runner identity so the watchdog can
 	// map a broken-runner sentinel to the right unit (RF-6 / ITEM-10 #74).
-	if !strings.Contains(string(data), `"work_root":"/home/emdev/actions-runner-advoq-org/_work"`) {
+	if !strings.Contains(string(data), `"work_root":"/home/emdev/actions-runner-acme-org/_work"`) {
 		t.Fatalf("hook record missing work_root runner identifier:\n%s", data)
 	}
 }
@@ -310,9 +310,9 @@ func TestJobStartedPreservesActiveWorkspaceUnderDiskPressure(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("RUNNER_TEMP", "")
-	workRoot := "/home/civm-test/actions-runner-advoq/_work"
-	t.Setenv("GITHUB_WORKSPACE", workRoot+"/advoq/advoq")
-	t.Setenv("GITHUB_REPOSITORY", "advoq/advoq")
+	workRoot := "/home/civm-test/actions-runner-acme/_work"
+	t.Setenv("GITHUB_WORKSPACE", workRoot+"/acme/app")
+	t.Setenv("GITHUB_REPOSITORY", "acme/app")
 	t.Setenv("GITHUB_RUN_ID", "1")
 
 	var removed []string
@@ -335,7 +335,7 @@ func TestJobStartedPreservesActiveWorkspaceUnderDiskPressure(t *testing.T) {
 			fakeDirEntry("_tool"),
 			fakeDirEntry("_actions"),
 			fakeDirEntry("_temp"),
-			fakeDirEntry("advoq"),
+			fakeDirEntry("acme"),
 			fakeDirEntry("stale-repo"),
 		}, nil
 	}
@@ -343,8 +343,8 @@ func TestJobStartedPreservesActiveWorkspaceUnderDiskPressure(t *testing.T) {
 	Run(context.Background(), opts)
 
 	joined := strings.Join(removed, "\n")
-	if strings.Contains(joined, filepath.Join(workRoot, "advoq")) {
-		t.Fatalf("disk-pressure cleanup apagou o workspace ativo %q — quebra o job iniciando; removed=%v", filepath.Join(workRoot, "advoq"), removed)
+	if strings.Contains(joined, filepath.Join(workRoot, "acme")) {
+		t.Fatalf("disk-pressure cleanup apagou o workspace ativo %q — quebra o job iniciando; removed=%v", filepath.Join(workRoot, "acme"), removed)
 	}
 	if strings.Contains(joined, filepath.Join(workRoot, "_temp")) {
 		t.Fatalf("job-started apagou _temp do job ativo (file commands save_state/set_output); removed=%v", removed)
@@ -543,7 +543,7 @@ func TestEnsureWorkspaceStubFromRepository(t *testing.T) {
 	var made []string
 	opts := Options{
 		Execute:    true,
-		Repository: "advoq/advoq",
+		Repository: "acme/app",
 		MkdirAllFn: func(path string, _ os.FileMode) error {
 			made = append(made, path)
 			return nil
@@ -556,7 +556,7 @@ func TestEnsureWorkspaceStubFromRepository(t *testing.T) {
 	if a.Name != "workspace_stub" {
 		t.Fatalf("name=%q want workspace_stub", a.Name)
 	}
-	want := "/home/x/actions-runner/_work/advoq/advoq"
+	want := "/home/x/actions-runner/_work/acme/app"
 	if a.Path != want {
 		t.Fatalf("path=%q want %q", a.Path, want)
 	}
@@ -585,9 +585,9 @@ func TestEnsureWorkspaceStubFromGitHubWorkspace(t *testing.T) {
 	}
 }
 
-func TestEnsureWorkspaceStubDefaultsToAdvoq(t *testing.T) {
-	// Full clean no guest nao deixa env de repo; fallback advoq/advoq
-	// cobre o org runner (CI Router fail 2026-07-09).
+func TestEnsureWorkspaceStubDefaultsGeneric(t *testing.T) {
+	// Full clean no guest nao deixa env de repo; fallback generico
+	// cobre o org runner (sem GITHUB_REPOSITORY no boot).
 	var made []string
 	opts := Options{
 		Execute: true,
@@ -597,7 +597,7 @@ func TestEnsureWorkspaceStubDefaultsToAdvoq(t *testing.T) {
 		},
 	}
 	a := ensureWorkspaceStub(opts, "/home/x/actions-runner/_work")
-	want := "/home/x/actions-runner/_work/advoq/advoq"
+	want := "/home/x/actions-runner/_work/workspace/job"
 	if a.Path != want || len(made) != 1 || made[0] != want {
 		t.Fatalf("path=%q made=%v want %s", a.Path, made, want)
 	}
@@ -607,7 +607,7 @@ func TestEnsureWorkspaceStubDryRunSkipsMkdir(t *testing.T) {
 	called := false
 	opts := Options{
 		Execute:    false,
-		Repository: "advoq/advoq",
+		Repository: "acme/app",
 		MkdirAllFn: func(string, os.FileMode) error {
 			called = true
 			return nil
@@ -632,7 +632,7 @@ func TestEnsureWorkspaceStubRejectsUnsafeRoot(t *testing.T) {
 func TestEnsureWorkspaceStubPropagatesMkdirError(t *testing.T) {
 	opts := Options{
 		Execute:    true,
-		Repository: "advoq/advoq",
+		Repository: "acme/app",
 		MkdirAllFn: func(string, os.FileMode) error { return fmt.Errorf("EACCES") },
 	}
 	a := ensureWorkspaceStub(opts, "/home/x/actions-runner/_work")
@@ -646,7 +646,7 @@ func TestCleanupIncludesWorkspaceStubAfterClean(t *testing.T) {
 	// falha no Process.Start do hook (cwd ausente).
 	opts := Options{
 		Execute:    true,
-		Repository: "advoq/advoq",
+		Repository: "acme/app",
 		WorkRoot:   "/home/x/actions-runner/_work",
 		ReadDirFn:  func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist },
 		MkdirAllFn: func(string, os.FileMode) error { return nil },
@@ -671,7 +671,7 @@ func TestCleanupIncludesWorkspaceStubAfterClean(t *testing.T) {
 	if stub == nil {
 		t.Fatalf("cleanup missing workspace_stub; got names: %v", names)
 	}
-	if stub.Path != "/home/x/actions-runner/_work/advoq/advoq" {
+	if stub.Path != "/home/x/actions-runner/_work/acme/app" {
 		t.Fatalf("stub path=%q", stub.Path)
 	}
 }
@@ -761,7 +761,7 @@ func TestAppendLogWritesSlogJSON(t *testing.T) {
 	}
 	res := Result{
 		Event: EventJobStarted, Decision: DecisionOK,
-		Repository: "advoq/civm", RunID: "12345",
+		Repository: "acme/civm", RunID: "12345",
 		DiskUsedPct: 42,
 	}
 	if err := appendLog(opts, res); err != nil {
@@ -825,7 +825,7 @@ func TestSafeWorkRoot(t *testing.T) {
 	// over-tight guard that re-wedges every runner (testing.md: pair refusal
 	// with its positive).
 	for _, root := range []string{
-		"/home/emdev/actions-runner-advoq/_work",
+		"/home/emdev/actions-runner-acme/_work",
 		"/home/runner/actions-runner/_work",
 		"//home//emdev//actions-runner//_work", // cleans to the canonical shape
 	} {
@@ -1265,10 +1265,10 @@ func TestRunWithTimeoutCancelsHungCommand(t *testing.T) {
 }
 
 // TestCacheCapsGlobsNamedDirsAndDividesFamilyBudget é a regressão do incidente
-// 2026-06 (VHDX -> PausedCritical): os workflows do advoq apontam GOCACHE/yarn
-// cache-folder para dirs NOMEADOS (~/.cache/go-build-advoq-services, ...) que o
+// 2026-06 (VHDX -> PausedCritical): os workflows do acme apontam GOCACHE/yarn
+// cache-folder para dirs NOMEADOS (~/.cache/go-build-acme-services, ...) que o
 // cap antigo (path fixo ~/.cache/go-build) NÃO casava — então cresciam sem
-// limite (go-build-advoq-services chegou a 13GB num cap de 5GB). cacheCaps agora
+// limite (go-build-acme-services chegou a 13GB num cap de 5GB). cacheCaps agora
 // faz glob das variantes e divide o budget da família entre os dirs achados.
 func TestCacheCapsGlobsNamedDirsAndDividesFamilyBudget(t *testing.T) {
 	home := t.TempDir()
@@ -1281,9 +1281,9 @@ func TestCacheCapsGlobsNamedDirsAndDividesFamilyBudget(t *testing.T) {
 		return p
 	}
 	// dois dirs go-build nomeados (dividem o budget), um yarn nomeado, lint, npm, pnpm.
-	gb1 := mk(".cache", "go-build-advoq-services")
-	gb2 := mk(".cache", "go-build-advoq-devctl")
-	yarnNamed := mk(".cache", "yarn-advoq-web")
+	gb1 := mk(".cache", "go-build-acme-services")
+	gb2 := mk(".cache", "go-build-acme-devctl")
+	yarnNamed := mk(".cache", "yarn-acme-web")
 	lint := mk(".cache", "golangci-lint")
 	npm := mk(".npm", "_cacache")
 	pnpm := mk(".pnpm-store")
@@ -1549,7 +1549,7 @@ func TestJobStartedReclaimsWorkspaceOwnership(t *testing.T) {
 	t.Setenv("RUNNER_TEMP", "")
 	t.Setenv("GITHUB_REPOSITORY", "")
 	t.Setenv("GITHUB_RUN_ID", "")
-	ws := "/home/emdev/actions-runner-advoq/_work/advoq/advoq"
+	ws := "/home/emdev/actions-runner-acme/_work/acme/app"
 	t.Setenv("GITHUB_WORKSPACE", ws)
 
 	var chowned []string
@@ -1574,7 +1574,7 @@ func TestJobStartedReclaimsWorkspaceOwnership(t *testing.T) {
 
 	res := Run(context.Background(), opts)
 
-	want := "/home/emdev/actions-runner-advoq/_work/advoq"
+	want := "/home/emdev/actions-runner-acme/_work/acme"
 	found := false
 	for _, p := range chowned {
 		if p == want {
@@ -1599,10 +1599,8 @@ func TestJobStartedReclaimsWorkspaceOwnership(t *testing.T) {
 }
 
 // TestIsCIOrphan cobre o predicado puro do reaper de órfão: project começando com
-// o prefixo ("advoq") OU publicando uma porta fixa de CI conhecida classifica como
-// órfão; qualquer outra coisa não. O sinal do label é o primário; a porta é a
-// defesa em profundidade. Crucial p/ a disciplina #13: o critério tem que casar a
-// doc — "começa com advoq" é por PREFIXO, e "<no value>" (sem label) nunca casa.
+// o prefixo ("civm-run") OU publicando uma porta fixa de CI conhecida classifica
+// como órfão. Prefixo por PREFIXO; "<no value>" (sem label) nunca casa.
 func TestIsCIOrphan(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1610,17 +1608,16 @@ func TestIsCIOrphan(t *testing.T) {
 		hostPorts []string
 		want      bool
 	}{
-		{"project advoq exato", "advoq", nil, true},
-		{"project advoq-org-1184 (slot-runid do devctl)", "advoq-org-1184", nil, true},
-		{"project advoq-local (dev fallback)", "advoq-local", nil, true},
-		{"project ADVOQ uppercase (case-insensitive)", "ADVOQ-Org-9", nil, true},
+		{"project civm-run exato", "civm-run", nil, true},
+		{"project civm-run-1184 (slot-runid)", "civm-run-1184", nil, true},
+		{"project CIVM-RUN uppercase (case-insensitive)", "CIVM-RUN-Org-9", nil, true},
 		{"porta fixa minio 9020 sem label", "<no value>", []string{"9020"}, true},
 		{"porta fixa nginx 81 sem label", "", []string{"81"}, true},
 		{"porta fixa entre outras não-fixas", "<no value>", []string{"40000", "9100", "40001"}, true},
 		{"sem label e sem porta fixa => não órfão", "<no value>", []string{"40000"}, false},
 		{"label vazio e porta vazia => não órfão", "", nil, false},
-		{"project de OUTRO produto não casa o prefixo", "harmya-org-3", []string{"40000"}, false},
-		{"prefixo só no meio do nome não casa", "my-advoq-stack", []string{"40000"}, false},
+		{"project de OUTRO produto não casa o prefixo", "other-org-3", []string{"40000"}, false},
+		{"prefixo só no meio do nome não casa", "my-civm-run-stack", []string{"40000"}, false},
 		{"porta não-numérica é ignorada (não panica)", "<no value>", []string{"abc", "9020"}, true},
 	}
 	for _, tt := range tests {
@@ -1637,14 +1634,14 @@ func TestIsCIOrphan(t *testing.T) {
 // são puladas sem panicar, e a ordem de entrada é preservada.
 func TestOrphanIDsFromInspect(t *testing.T) {
 	out := strings.Join([]string{
-		"aaa111|advoq-org-1184|9020 9021 ", // órfão por project
+		"aaa111|civm-run-1184|9020 9021 ", // órfão por project
 		"bbb222|<no value>|81 ",            // órfão por porta fixa (nginx)
 		"ccc333|<no value>|40000 ",         // NÃO órfão (porta não-fixa, sem label)
-		"ddd444|harmya-org-2|40001 ",       // NÃO órfão (outro produto)
+		"ddd444|other-org-2|40001 ",        // NÃO órfão (outro produto)
 		"",                                 // linha vazia → pulada
 		"malformed-line-without-pipes",     // sem '|' → pulada
-		"eee555|advoq|",                    // órfão por project, sem portas
-		"|advoq-org-7|9100 ",               // id vazio → pulada apesar do match
+		"eee555|civm-run|",                 // órfão por project, sem portas
+		"|civm-run-7|9100 ",               // id vazio → pulada apesar do match
 	}, "\n")
 	got := orphanIDsFromInspect(out)
 	want := []string{"aaa111", "bbb222", "eee555"}
@@ -1673,7 +1670,7 @@ func TestReapOrphanCIContainersStopsAndRemoves(t *testing.T) {
 				return []byte("aaa111\nbbb222\nccc333\n"), nil
 			case name == "docker" && len(args) >= 1 && args[0] == "inspect":
 				// aaa=órfão(project), bbb=não-órfão, ccc=órfão(porta fixa minio).
-				return []byte("aaa111|advoq-org-5|40000 \n" +
+				return []byte("aaa111|civm-run-5|40000 \n" +
 					"bbb222|<no value>|40001 \n" +
 					"ccc333|<no value>|9020 \n"), nil
 			}
@@ -1751,7 +1748,7 @@ func TestReapOrphanCIContainersBestEffort(t *testing.T) {
 				case "ps":
 					return []byte("aaa111\n"), nil
 				case "inspect":
-					return []byte("aaa111|advoq-org-1|\n"), nil
+					return []byte("aaa111|civm-run-1|\n"), nil
 				case "rm":
 					return nil, fmt.Errorf("device or resource busy")
 				}
@@ -1855,7 +1852,7 @@ func TestReapOrphanCIContainersBestEffort(t *testing.T) {
 				case "ps":
 					return []byte("aaa111\n"), nil
 				case "inspect":
-					return []byte("aaa111|advoq-org-1|\n"), nil
+					return []byte("aaa111|civm-run-1|\n"), nil
 				case "stop":
 					return nil, fmt.Errorf("stop timeout")
 				case "rm":
@@ -1908,7 +1905,7 @@ func TestJobStartedRunsOrphanReaper(t *testing.T) {
 			case "ps":
 				return []byte("dead001\n"), nil
 			case "inspect":
-				return []byte("dead001|advoq-org-1186|9020 \n"), nil
+				return []byte("dead001|civm-run-1186|9020 \n"), nil
 			case "rm":
 				reapedID = "dead001"
 			}
@@ -1961,7 +1958,7 @@ func TestCIFixedHostPortsCoverIncidentPort(t *testing.T) {
 // fuzzer constructs may escape the runner work-root whitelist.
 func FuzzSafeWorkRoot(f *testing.F) {
 	seeds := []string{
-		"/home/emdev/actions-runner-advoq/_work",
+		"/home/emdev/actions-runner-acme/_work",
 		"/home/runner/actions-runner-1/_work",
 		"/home/emdev/actions-runner/_work/../../etc",
 		"/home/../home/runner/actions-runner/_work",

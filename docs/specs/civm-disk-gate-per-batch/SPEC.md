@@ -33,7 +33,7 @@ issues: []
 - O `switch` executor (`civm-vm-orchestrator.ps1`) — **não muda**: a ação
   `boundary_compact` já mapeia para `Invoke-StopAndCompact` (reuso total).
 - Medição guest-side (`GuestFreeGB` do host-metrics) — já existe e é consumida.
-- Serialização transparente de docker-heavy (lock) e workflow advoq — outro item.
+- Serialização transparente de docker-heavy (lock) e workflow acme — outro item.
 - Pré-build/pull; cache durável.
 
 **Dependências já prontas (reuso):** `Invoke-StopAndCompact` (limpa-tudo +

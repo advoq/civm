@@ -6,16 +6,16 @@ import (
 )
 
 // orgRunnerNameSuffix marca um runner registrado no nível da ORGANIZAÇÃO.
-// Convenção do box (PRD civm-runner-reliability): o runner org do advoq se
-// chama "civm-advoq-org", contra gitHubUrl https://github.com/advoq, e atende
-// TODOS os repos da org (advoq/advoq + advoq/civm) num único processo. Os
+// Convenção do box (PRD civm-runner-reliability): o runner org do acme se
+// chama "civm-acme-org", contra gitHubUrl https://github.com/acme, e atende
+// TODOS os repos da org (acme/app + acme/civm) num único processo. Os
 // runners por-repo seguem "civm-<repo>" sem o sufixo.
 const orgRunnerNameSuffix = "-org"
 
 // gateRunnerNameSuffix identifica runners do pool "civm-gate" — jobs leves de
 // polling que aguardam a vez de um PR na fila FIFO sem jamais executar
 // Docker/disco. Runners desse pool são registrados com `--labels civm-gate` e
-// nomeados com o sufixo "-gate" (ex.: "civm-advoq-gate"). Não são candidatos
+// nomeados com o sufixo "-gate" (ex.: "civm-app-gate"). Não são candidatos
 // à colisão porque:
 //   - Atendem somente a jobs `runs-on: [self-hosted, civm-gate]`; nenhum job
 //     `[self-hosted, civm]` pode aterrissar num runner gate.
@@ -40,18 +40,18 @@ const gateRunnerNameSuffix = "-gate"
 // sobrevivente canônico (1 processo serializa a org inteira em fila FIFO).
 type Collision struct {
 	// RepoUnit é a unit systemd do runner por-repo redundante a ser removida
-	// (ex.: "actions.runner.advoq-advoq.civm-advoq.service").
+	// (ex.: "actions.runner.acme-app.civm-app.service").
 	RepoUnit string
-	// RepoName é o nome do runner por-repo (ex.: "civm-advoq").
+	// RepoName é o nome do runner por-repo (ex.: "civm-app").
 	RepoName string
-	// Repo é o owner/repo servido pelo runner redundante (ex.: "advoq/advoq").
+	// Repo é o owner/repo servido pelo runner redundante (ex.: "acme/app").
 	Repo string
-	// Owner é a organização dona, derivada do runner org (ex.: "advoq").
+	// Owner é a organização dona, derivada do runner org (ex.: "acme").
 	Owner string
 	// OrgUnit é a unit do runner org que torna o por-repo redundante
-	// (ex.: "actions.runner.advoq.civm-advoq-org.service").
+	// (ex.: "actions.runner.acme.civm-acme-org.service").
 	OrgUnit string
-	// OrgName é o nome do runner org sobrevivente (ex.: "civm-advoq-org").
+	// OrgName é o nome do runner org sobrevivente (ex.: "civm-acme-org").
 	OrgName string
 	// RepoActive indica se o runner redundante ainda está active/running.
 	// Um por-repo só DISABLED (mas loaded) continua sendo colisão: o
@@ -63,7 +63,7 @@ type Collision struct {
 // confiável é o sufixo "-org" no nome do runner (Status.Name vem do unit name,
 // não da config remota), combinado com o segmento de repo sem barra — um runner
 // org tem gitHubUrl https://github.com/<org>, então parseRunnerUnit extrai o
-// login da org puro (ex.: "advoq"), nunca "owner/repo".
+// login da org puro (ex.: "acme"), nunca "owner/repo".
 func isOrgRunner(s Status) bool {
 	if !strings.HasSuffix(s.Name, orgRunnerNameSuffix) {
 		return false
@@ -90,7 +90,7 @@ func orgOwner(s Status) string {
 	return s.Repo
 }
 
-// repoOwner extrai o owner ("advoq") de um runner por-repo ("advoq/advoq").
+// repoOwner extrai o owner ("acme") de um runner por-repo ("acme/app").
 // Devolve "" se o Status não tiver a forma owner/repo.
 func repoOwner(s Status) string {
 	idx := strings.Index(s.Repo, "/")

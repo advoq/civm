@@ -1,6 +1,6 @@
 # Runbook — peer adoption checklist (manual, per-repo)
 
-> Use este checklist quando um peer repo (vitae, advoq, futuro repo X)
+> Use este checklist quando um peer repo (peer, acme, futuro repo X)
 > for adotar o padrão civm. Cada peer commita independentemente em
 > branch isolada.
 
@@ -40,12 +40,12 @@ Termos que não podem sobreviver em docs ativas, exceto em arquivo
 histórico/migração explicitamente marcado:
 
 - `ci-vm`
-- `vitae-ci`
+- `legacy-ci`
 - `ci-result`
 - `make ci-vm`
 - `CI_VM_HOST`, `CI_VM_USER`, `CI_VM_PASSWORD`
-- `~/.config/advoq/ci-vm.env`
-- `advoq-ci-vm-autoclean.timer`
+- `~/.config/acme/ci-vm.env`
+- `acme-ci-vm-autoclean.timer`
 - wrappers shell customizados em hooks de job; o contrato atual usa
   scripts `.sh` gerenciados por `civmctl hook install`
 
@@ -170,12 +170,12 @@ for f in CLAUDE.md AGENTS.md CODEX.md; do
   grep -qF "<!-- COMMUNICATION-STYLE:BEGIN -->" "$f" && echo "OK: $f" || echo "FAIL: $f"
 done
 [ -f .github/workflows/ci.yml ] && python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))" && echo "ci.yml OK"
-rg -n "vitae-ci|ci-result|make ci-vm|CI_VM_|advoq-ci-vm|ci-vm" README.md AGENTS.md CLAUDE.md CODEX.md docs .github/workflows
+rg -n "legacy-ci|ci-result|make ci-vm|CI_VM_|acme-ci-vm|ci-vm" README.md AGENTS.md CLAUDE.md CODEX.md docs .github/workflows
 civmctl peer-status --repos=owner/a,owner/b --workflow=ci.yml
 ```
 
 ## Histórico
 
-- **2026-05-10** — primeira versão. Criada após advoq adoption ser
+- **2026-05-10** — primeira versão. Criada após acme adoption ser
   bloqueada por classifier de auto-mode (73 uncommitted files). Este
   checklist permite adoção manual sem risco de perder WIP.

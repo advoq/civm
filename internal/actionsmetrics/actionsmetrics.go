@@ -73,7 +73,7 @@ type Report struct {
 
 // Options controla a coleta.
 type Options struct {
-	Organization    string   // ex: "advoq"
+	Organization    string   // ex: "acme"
 	Repos           []string // owner/repo; vazio + InferRepos descobre via systemd
 	InferRepos      bool
 	StartDate       string // ISO YYYY-MM-DD

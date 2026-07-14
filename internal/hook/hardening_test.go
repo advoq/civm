@@ -135,7 +135,7 @@ func TestKillWorkRootContainersKillsOnlyOrphansUnderRoot(t *testing.T) {
 		// ccc: prefix collision (_work-evil) — must NOT be killed.
 		// ddd: no mounts.
 		inspectOut: strings.Join([]string{
-			"aaa " + root + "/advoq/advoq/web /var/lib/docker/volumes/x",
+			"aaa " + root + "/acme/app/web /var/lib/docker/volumes/x",
 			"bbb /home/civm-test/actions-runner-other/_work/repo",
 			"ccc " + root + "-evil/repo",
 			"ddd",

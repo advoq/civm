@@ -63,7 +63,7 @@ working-set mutável compartilhado. Cada uma aponta para a mesma raiz:
 
 | Camada | Arquivo | O que protege | Por que existe (a raiz) |
 | --- | --- | --- | --- |
-| backstop cap family-wide | `internal/cachetrim` + `civm.go:74-85` | cap por-família dos caches nomeados | os workflows apontam GOCACHE/yarn p/ dirs nomeados (`go-build-advoq-services` chegou a 13 GB num cap de 5) que cresciam SEM LIMITE no `$HOME` compartilhado |
+| backstop cap family-wide | `internal/cachetrim` + `civm.go:74-85` | cap por-família dos caches nomeados | os workflows apontam GOCACHE/yarn p/ dirs nomeados (`go-build-acme-services` chegou a 13 GB num cap de 5) que cresciam SEM LIMITE no `$HOME` compartilhado |
 | trim atômico | `cachetrim` PackageDepth/WipeWhole | trim que não corrompe pacote parcial | yarn v1 (dir-pacote) e go-build (par `-a`/`-d` ref-cruzado) **corromperam sob trim concorrente** no FS mutável |
 | hooks job-started/completed | `internal/hook/hook.go` | chown não-destrutivo + wipe gated por disco | leftover root-owned de Docker-as-root no `_work` compartilhado; wipe não pode ser total senão mata sibling |
 | gate self-heal | `host-volume-reclaim-liveness` | reclaim não morre/starva | VHDX inflado pelo working-set compartilhado drena o `V:` |
@@ -115,7 +115,7 @@ corrupção. **PORÉM o backend do GitHub é inviável aqui:**
 | `DefaultAdmitMaxHeavy` | 2 | `civm.go:152` |
 | `DefaultAdmitHostReserveMB` | 2048 | `civm.go:155` |
 | MemoryMax efetivo/heavy | (7168−2048)/2 = **2560 MB** | derivado |
-| pico RSS de job pesado advoq | ~2.0-3.5 GB | inferido (go test -race testcontainers / compose up) |
+| pico RSS de job pesado acme | ~2.0-3.5 GB | inferido (go test -race testcontainers / compose up) |
 | 8 runners × ~0.3 GB RSS | ~2.4 GB | inferido |
 
 **Consequência dura:** o gargalo deste box é RAM (7 GB), não lock nem disco.

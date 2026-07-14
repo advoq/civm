@@ -152,7 +152,7 @@ A partir de 2026-05-10, **provisionamento e cleanup são automatizados** via
 # Numa VM Ubuntu 24.04 LTS limpa, como root:
 
 # 1. Build civmctl (uma vez; precisa Go ≥ 1.26 instalado manualmente OU
-#    rodar bootstrap do advoq que ja tem Go).
+#    rodar bootstrap do acme que ja tem Go).
 git clone https://github.com/advoq/civm.git /opt/civm
 cd /opt/civm && go build -o /usr/local/bin/civmctl ./cmd/civmctl
 
@@ -400,7 +400,7 @@ docker compose --project-name "${GITHUB_REPOSITORY##*/}-${GITHUB_RUN_ID}" up -d
 ```
 
 Um peer cujo ci.yml **não roda docker compose** (ex.: integration usando
-stack serverless externo) tem risco zero. Para vitae/advoq <!-- invariant-waive:#11 -- runbook lista projetos peer no runner -->, **se
+stack serverless externo) tem risco zero. Para peer/acme <!-- invariant-waive:#11 -- runbook lista projetos peer no runner -->, **se
 precisarem docker**, exigir essa convenção em cada step que invoca
 compose.
 
@@ -475,12 +475,12 @@ Ver §"Disk hygiene" abaixo para automacao.
 prefixo `ACTIONS_RUNNER_HOOK_*` (DT-v2-8); as chaves de `extra` são
 reanexadas em ordem alfabética após os dois hooks.
 
-> **Nota para o advoq (consumidor):** o `COMPOSE_PROJECT_NAME` injetado
-> é só o `slot`. O advoq **sobrepõe em runtime** com
-> `projectName() = sanitize(CIVM_RUNNER_SLOT|advoq) + "-" + sanitize(GITHUB_RUN_ID|local)`
-> para garantir unicidade **por-run** que o slot puro não dá (advoq
+> **Nota para o acme (consumidor):** o `COMPOSE_PROJECT_NAME` injetado
+> é só o `slot`. O acme **sobrepõe em runtime** com
+> `projectName() = sanitize(CIVM_RUNNER_SLOT|acme) + "-" + sanitize(GITHUB_RUN_ID|local)`
+> para garantir unicidade **por-run** que o slot puro não dá (acme
 > SPECv2 DT-v2-1). O `CIVM_PORT_BASE` injetado vira `CIVM_*_PORT =
-> base+0..10` e as URLs do `web/.env` (advoq SPECv2 §Mapa de portas).
+> base+0..10` e as URLs do `web/.env` (acme SPECv2 §Mapa de portas).
 
 ### Bloco de portas — janela `[20000,32000)`
 
@@ -571,9 +571,9 @@ linha significativa; waiver que não casa nenhum finding → WARN
 
 ### Gating do runner `civm-e2e` (consumidor)
 
-Peers que precisam do bring-up docker-heavy completo (ex.: advoq E2E)
+Peers que precisam do bring-up docker-heavy completo (ex.: acme E2E)
 usam o label opcional `civm-e2e`, gateado por GitHub variable para não
-enfileirar para sempre quando o label ainda não está vivo (advoq SPECv2
+enfileirar para sempre quando o label ainda não está vivo (acme SPECv2
 DT-v2-8):
 
 ```yaml
@@ -801,9 +801,9 @@ find /home/*/actions-runner-*/_work/_temp -mtime +7 -delete
 
 (Legado. Em VM civm atual, usar `civmctl-cleanup.timer` em vez de cron.)
 
-## Como vitae e advoq adotam o padrão router <!-- invariant-waive:#11 -- secao operacional descreve adocao por repos peer -->
+## Como peer e acme adotam o padrão router <!-- invariant-waive:#11 -- secao operacional descreve adocao por repos peer -->
 
-O `.github/workflows/ci.yml` do advoq é o template de referência.
+O `.github/workflows/ci.yml` do acme é o template de referência.
 Estrutura mínima:
 
 1. Job `ci-router` em `runs-on: [self-hosted, civm]` que classifica
@@ -814,7 +814,7 @@ Estrutura mínima:
 4. `permissions: { actions: read, contents: read }` no topo.
 5. `concurrency:` block escopado por `github.workflow + github.ref`.
 
-Para o detector heurístico, vitae/advoq podem escolher entre 3 tiers <!-- invariant-waive:#11 -- repos peer -->
+Para o detector heurístico, peer/acme podem escolher entre 3 tiers <!-- invariant-waive:#11 -- repos peer -->
 (em ordem de preferência operacional):
 
 - **Tier 1 — detector via civmctl (rota mais deterministica):** chamar
@@ -838,10 +838,10 @@ extra. Tier 3 é o único que funciona mesmo se o token estiver indisponível
 
 ## Checklist de adoção (por repo)
 
-Para cada repo (vitae, advoq) que vai usar civm: <!-- invariant-waive:#11 -- checklist enumera repos peer -->
+Para cada repo (peer, acme) que vai usar civm: <!-- invariant-waive:#11 -- checklist enumera repos peer -->
 
 - [ ] Runner registrado e online (verificar via `gh api repos/<owner>/<repo>/actions/runners`)
-- [ ] Workflow `ci.yml` adota router pattern (template do advoq)
+- [ ] Workflow `ci.yml` adota router pattern (template do acme)
 - [ ] `civmctl billing-status` chamavel no workflow
 - [ ] Branch protection rule de `main`:
   - [ ] `Require status checks to pass before merging` habilitado
@@ -882,7 +882,7 @@ Heurística inicial:
 | Repos ativos | Workflows típicos | Runners recomendados |
 |---|---|---|
 | 1 | 1 PR/dia | 1-2 |
-| 2 (vitae + advoq) | 3-5 PR/dia, alguns simultâneos | 3-5 | <!-- invariant-waive:#11 -- linha de capacity planning lista repos peer -->
+| 2 (peer + acme) | 3-5 PR/dia, alguns simultâneos | 3-5 | <!-- invariant-waive:#11 -- linha de capacity planning lista repos peer -->
 | 5+ | dezenas de PR | 5-10 + monitoramento de queue |
 
 Métrica de stress: `gh run list --status queued --jq 'length'` retornar
@@ -907,7 +907,7 @@ Cada caso reabre este runbook + atualiza secão Capacity planning.
 ## Histórico
 
 - **2026-05-10** — Primeira versão. Criada após pedido de unificar
-  CI de vitae + advoq no mesmo runner self-hosted. <!-- invariant-waive:#11 -- entrada de historico explicita escopo de adocao -->
+  CI de peer + acme no mesmo runner self-hosted. <!-- invariant-waive:#11 -- entrada de historico explicita escopo de adocao -->
   Companion da Camada 1 entregue em ci.yml refactor (commit `7e5835e`).
 
 ## Hooks de job e contrato de integração

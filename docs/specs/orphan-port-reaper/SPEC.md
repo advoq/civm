@@ -15,8 +15,8 @@ issues: []
 
 ## Problema (incidente 2026-06-19)
 
-A box civm tem 1 runner self-hosted servindo o advoq. Jobs de CI sobem um stack
-docker-compose (`advoq: infra/docker-compose.yml` + override) com **portas FIXAS
+A box civm tem 1 runner self-hosted servindo o acme. Jobs de CI sobem um stack
+docker-compose (`acme: infra/docker-compose.yml` + override) com **portas FIXAS
 de host** publicadas em `127.0.0.1` (minio API em `:9020`, nginx em `:81`,
 postgres em `:5443`, etc.).
 
@@ -40,9 +40,9 @@ Isso matou tenant-isolation no #1184 e #1186.
    root nem existe mais — então **nenhum** hook vivo o reapa.
 2. `docker container prune -f` (no cleanup do hook) só remove containers
    **PARADOS**. O órfão do incidente estava **RODANDO**, segurando a porta.
-3. `advoq/infra/ci/preclean-stack.sh` remove só containers com o prefixo de
+3. `acme/infra/ci/preclean-stack.sh` remove só containers com o prefixo de
    project **do slot atual** (`<slot>-`). O órfão de outro slot/runner, ou o stack
-   com project `advoq` puro, escapa desse filtro.
+   com project `acme` puro, escapa desse filtro.
 
 ## Decisão
 
@@ -53,14 +53,14 @@ Codificar um **reaper de órfão NÃO escopado a um único `_work` root**, na fr
 Numa box de 1 runner, na fronteira job-started, qualquer container **RODANDO** que:
 
 - **(a)** publique uma host port FIXA de CI conhecida (`civm.DefaultCIFixedHostPorts`), OU
-- **(b)** tenha `com.docker.compose.project` começando com `civm.DefaultCIOrphanProjectPrefix` (`advoq`)
+- **(b)** tenha `com.docker.compose.project` começando com `civm.DefaultCIOrphanProjectPrefix` (`acme`)
 
 é **órfão por definição** → `docker stop --time 5` + `docker rm -f`.
 
 O sinal **(b) é o primário** (pega o stack inteiro independente das portas, e é o
 único que pega o órfão de outro runner); **(a) é defesa em profundidade** para um
 container que segure a porta sem o label esperado. A lista de portas fixas espelha
-os defaults do compose committed do advoq (mesma disciplina do schema-contract: se
+os defaults do compose committed do acme (mesma disciplina do schema-contract: se
 um default mudar lá, atualiza-se a lista aqui).
 
 ### Invariante de segurança (não mata o stack do JOB ATUAL)
@@ -81,16 +81,16 @@ o reap falhar e a porta seguir presa, o bring-up subsequente reexpõe a colisão
 reaper não inventa um sucesso (#13 existe≠função). Idempotente (#16): rodar o
 reaper 2× = rodar 1× (nada para remover na 2ª).
 
-## Classificador de falha (peer advoq — `tools/devctl/internal/ci/failure.go`)
+## Classificador de falha (peer acme — `tools/devctl/internal/ci/failure.go`)
 
 Com o reaper no lugar, a colisão de porta **não deve mais chegar** ao classificador
-de falha do advoq. Decisão (#14 retry calibrado): **NÃO** adicionar assinatura
+de falha do acme. Decisão (#14 retry calibrado): **NÃO** adicionar assinatura
 transitória de "port is already allocated" / "Bind for". Um retry de colisão de
 porta sem reap entre as tentativas roda o MESMO `make up-local` e re-encontra a
 mesma porta presa (retry-sem-reap, #16). Se a colisão AINDA aparecer pós-reaper, é
 bug real → fica **determinística** (`SigUnknown → KindDeterministic`, falha rápido)
 para o problema aparecer, não ser mascarado como flake. O raciocínio fica
-documentado num comentário no catálogo do `failure.go` (mudança no repo advoq,
+documentado num comentário no catálogo do `failure.go` (mudança no repo acme,
 commit/PR separado).
 
 ## Validação por efeito (#13)
@@ -105,7 +105,7 @@ commit/PR separado).
     a porta foi **LIBERADA** (o efeito real). Self-skip quando o bridge/iptables do
     host não suporta publicar porta (ex.: alguns WSL2) → gate real no self-hosted.
   - `TestIntegrationReapOrphanRemovesRealLabeledContainer` — sobe um container REAL
-    com label `com.docker.compose.project=advoq-*` (sem porta, `--network none`),
+    com label `com.docker.compose.project=acme-*` (sem porta, `--network none`),
     roda o reaper contra o daemon REAL, e afirma que o container **sumiu**. Cobre o
     sinal primário (label) onde o bridge é indisponível.
 

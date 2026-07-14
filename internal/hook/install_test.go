@@ -398,7 +398,7 @@ func TestRunnerSlot(t *testing.T) {
 		"/home/runner/actions-runner-cmpx": "cmpx",
 		"/home/runner/actions-runner":      "actions-runner",
 		"/srv/ci/my-runner":                "my-runner",
-		"actions-runner-advoq":             "advoq",
+		"actions-runner-acme":             "acme",
 	}
 	for dir, want := range cases {
 		if got := runnerSlot(dir); got != want {

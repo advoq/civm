@@ -1,18 +1,18 @@
-# advoq-ci-router.yml.template — fallback workflow para advoq
+# acme-ci-router.yml.template — fallback workflow para acme
 #
 # Coexiste com go.yml e web.yml existentes. Não os modifica.
 # Adiciona um aggregator "Gates (civm fallback)" que sempre roda
 # em self-hosted, completando mesmo quando billing-hosted está bloqueado.
 #
 # Adoção:
-#   cp ~/codespace/civm/templates/advoq-ci-router.yml.template \
-#      ~/codespace/advoq/.github/workflows/ci-router.yml
+#   cp ~/codespace/civm/templates/acme-ci-router.yml.template \
+#      ~/codespace/acme/.github/workflows/ci-router.yml
 #
 # Branch protection: marcar "Gates (civm fallback)" como required
 # OU manter go.yml/web.yml required com este como informativo.
 #
-# Pré-req: runner civm-advoq online em emersonbusson/advoq (via
-# `civmctl runner add --repo=emersonbusson/advoq --short=advoq --execute`).
+# Pré-req: runner civm-app online em other/acme (via
+# `civmctl runner add --repo=other/acme --short=acme --execute`).
 # Ver runbooks/ADVOQ-ADOPTION.md.
 #
 # Seguranca: usar apenas para PR confiavel/same-repo. Evitar
@@ -102,7 +102,7 @@ jobs:
         # Substitua/expanda com builds reais conforme adotar gradualmente.
         # Pattern matrix igual go.yml services job, mas leve.
         run: |
-          # Check go.work existe (advoq usa workspace mode)
+          # Check go.work existe (acme usa workspace mode)
           if [ -f go.work ]; then
             echo "go.work present, vetting local workspace modules..."
             go work edit -json | node -e '
@@ -128,7 +128,7 @@ jobs:
           if [ -d web ]; then
             cd web
             if [ -f package.json ]; then
-              # Use existing yarn lock (advoq usa yarn 1.22.22)
+              # Use existing yarn lock (acme usa yarn 1.22.22)
               yarn install --frozen-lockfile --prefer-offline
               yarn typecheck
             fi
@@ -157,6 +157,6 @@ jobs:
             --sha="${{ github.sha }}" \
             --state="$state" \
             --context="civm fallback" \
-            --description="advoq smoke + go vet multi-module + web typecheck on civm runner" \
+            --description="acme smoke + go vet multi-module + web typecheck on civm runner" \
             --target-url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             || echo "ci local-report falhou (warning, gates ja decidiram)"

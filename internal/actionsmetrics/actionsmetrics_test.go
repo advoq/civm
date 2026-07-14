@@ -35,25 +35,25 @@ func scriptedRunFn(table map[string]string, errs map[string]error) func(ctx cont
 func TestCollectAggregatesBillingAndRuns(t *testing.T) {
 	billing := `{
 		"usageItems": [
-			{"date":"2026-05-01T00:00:00Z","product":"actions","sku":"Actions Linux","quantity":3156,"unitType":"Minutes","organizationName":"advoq","repositoryName":"advoq"},
-			{"date":"2026-05-01T00:00:00Z","product":"actions","sku":"Actions Linux","quantity":2019,"unitType":"Minutes","organizationName":"advoq","repositoryName":"orador-fluido"},
-			{"date":"2026-05-01T00:00:00Z","product":"actions","sku":"Actions storage","quantity":0.5,"unitType":"GigabyteHours","organizationName":"advoq","repositoryName":"civm"},
-			{"date":"2026-05-01T00:00:00Z","product":"copilot","sku":"Copilot Business","quantity":1,"unitType":"User","organizationName":"advoq","repositoryName":""}
+			{"date":"2026-05-01T00:00:00Z","product":"actions","sku":"Actions Linux","quantity":3156,"unitType":"Minutes","organizationName":"acme","repositoryName":"app"},
+			{"date":"2026-05-01T00:00:00Z","product":"actions","sku":"Actions Linux","quantity":2019,"unitType":"Minutes","organizationName":"acme","repositoryName":"sample-repo"},
+			{"date":"2026-05-01T00:00:00Z","product":"actions","sku":"Actions storage","quantity":0.5,"unitType":"GigabyteHours","organizationName":"acme","repositoryName":"civm"},
+			{"date":"2026-05-01T00:00:00Z","product":"copilot","sku":"Copilot Business","quantity":1,"unitType":"User","organizationName":"acme","repositoryName":""}
 		]
 	}`
 	runsAdvoq := `{"total_count": 4436}`
 	runsCivm := `{"total_count": 121}`
 
 	opts := DefaultOptions()
-	opts.Organization = "advoq"
-	opts.Repos = []string{"advoq/advoq", "advoq/civm"}
+	opts.Organization = "acme"
+	opts.Repos = []string{"acme/app", "acme/civm"}
 	opts.StartDate = "2026-05-01"
 	opts.EndDate = "2026-05-23"
 	opts.Now = fixedNow
 	opts.RunFn = scriptedRunFn(map[string]string{
-		"organizations/advoq/settings/billing/usage": billing,
-		"repos/advoq/advoq/actions/runs":             runsAdvoq,
-		"repos/advoq/civm/actions/runs":              runsCivm,
+		"organizations/acme/settings/billing/usage": billing,
+		"repos/acme/app/actions/runs":             runsAdvoq,
+		"repos/acme/civm/actions/runs":              runsCivm,
 	}, nil)
 
 	r, err := Collect(context.Background(), opts)
@@ -83,18 +83,18 @@ func TestCollectAggregatesBillingAndRuns(t *testing.T) {
 	if len(r.ByRepo) != 2 {
 		t.Fatalf("ByRepo len = %d, want 2", len(r.ByRepo))
 	}
-	if r.ByRepo[0].Repo != "advoq/advoq" || r.ByRepo[0].HostedMinutes != 3156 {
-		t.Errorf("ByRepo[0] = %+v, want advoq/advoq 3156min", r.ByRepo[0])
+	if r.ByRepo[0].Repo != "acme/app" || r.ByRepo[0].HostedMinutes != 3156 {
+		t.Errorf("ByRepo[0] = %+v, want acme/app 3156min", r.ByRepo[0])
 	}
 }
 
 func TestCollectInferReposFromSystemd(t *testing.T) {
 	opts := DefaultOptions()
-	opts.Organization = "advoq"
+	opts.Organization = "acme"
 	opts.InferRepos = true
 	opts.Now = fixedNow
 	opts.RunFn = scriptedRunFn(map[string]string{
-		"organizations/advoq/settings/billing/usage": `{"usageItems": []}`,
+		"organizations/acme/settings/billing/usage": `{"usageItems": []}`,
 		"repos/owner/repo1/actions/runs":             `{"total_count": 10}`,
 	}, nil)
 	opts.SystemRunnersFn = func(_ context.Context) ([]runner.Status, error) {
@@ -118,16 +118,16 @@ func TestCollectInferReposFromSystemd(t *testing.T) {
 
 func TestCollectBillingErrorMarksExitNonZero(t *testing.T) {
 	opts := DefaultOptions()
-	opts.Organization = "advoq"
-	opts.Repos = []string{"advoq/civm"}
+	opts.Organization = "acme"
+	opts.Repos = []string{"acme/civm"}
 	opts.Now = fixedNow
 	opts.RunFn = scriptedRunFn(
 		map[string]string{
-			"organizations/advoq/settings/billing/usage": `{"message":"forbidden"}`,
-			"repos/advoq/civm/actions/runs":              `{"total_count": 5}`,
+			"organizations/acme/settings/billing/usage": `{"message":"forbidden"}`,
+			"repos/acme/civm/actions/runs":              `{"total_count": 5}`,
 		},
 		map[string]error{
-			"organizations/advoq/settings/billing/usage": errors.New("forbidden"),
+			"organizations/acme/settings/billing/usage": errors.New("forbidden"),
 		},
 	)
 	r, err := Collect(context.Background(), opts)
@@ -145,7 +145,7 @@ func TestCollectBillingErrorMarksExitNonZero(t *testing.T) {
 
 func TestCollectInvalidDateRejected(t *testing.T) {
 	opts := DefaultOptions()
-	opts.Organization = "advoq"
+	opts.Organization = "acme"
 	opts.StartDate = "not-a-date"
 	opts.EndDate = "2026-05-23"
 	_, err := Collect(context.Background(), opts)
@@ -165,7 +165,7 @@ func TestCollectInvalidOrgRejected(t *testing.T) {
 
 func TestCollectInvalidRepoRejected(t *testing.T) {
 	opts := DefaultOptions()
-	opts.Organization = "advoq"
+	opts.Organization = "acme"
 	opts.Repos = []string{"bad repo"}
 	_, err := Collect(context.Background(), opts)
 	if err == nil {
@@ -177,7 +177,7 @@ func TestCollectRunsConcurrently(t *testing.T) {
 	delay := 80 * time.Millisecond
 	var maxInFlight, inFlight atomic.Int32
 	opts := DefaultOptions()
-	opts.Organization = "advoq"
+	opts.Organization = "acme"
 	opts.Repos = []string{"a/b", "c/d", "e/f", "g/h"}
 	opts.Now = fixedNow
 	opts.Concurrency = 4
@@ -261,11 +261,11 @@ func TestRenderJSONRoundTrip(t *testing.T) {
 		CollectedAt:  testNow,
 		StartDate:    "2026-05-01",
 		EndDate:      "2026-05-23",
-		Organization: "advoq",
+		Organization: "acme",
 		TotalMinutes: 5175,
 		TotalRuns:    4557,
 		BySKU:        []SKUTotal{{SKU: "Actions Linux", Minutes: 5175, UnitType: "Minutes"}},
-		ByRepo:       []RepoMetric{{Repo: "advoq/advoq", HostedMinutes: 3156, RunsTotal: 4436}},
+		ByRepo:       []RepoMetric{{Repo: "acme/app", HostedMinutes: 3156, RunsTotal: 4436}},
 	}
 	var buf bytes.Buffer
 	if err := r.RenderJSON(&buf); err != nil {
@@ -284,16 +284,16 @@ func TestRenderHumanShowsTotals(t *testing.T) {
 	r := Report{
 		StartDate:    "2026-05-01",
 		EndDate:      "2026-05-23",
-		Organization: "advoq",
+		Organization: "acme",
 		TotalMinutes: 5175,
 		TotalRuns:    4557,
 		BySKU:        []SKUTotal{{SKU: "Actions Linux", Minutes: 5175, UnitType: "Minutes"}},
-		ByRepo:       []RepoMetric{{Repo: "advoq/advoq", HostedMinutes: 3156, RunsTotal: 4436}},
+		ByRepo:       []RepoMetric{{Repo: "acme/app", HostedMinutes: 3156, RunsTotal: 4436}},
 	}
 	var buf bytes.Buffer
 	r.Render(&buf)
 	out := buf.String()
-	for _, want := range []string{"advoq", "5175", "4557", "Actions Linux", "3156"} {
+	for _, want := range []string{"acme", "5175", "4557", "Actions Linux", "3156"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Render missing %q\noutput:\n%s", want, out)
 		}
@@ -307,7 +307,7 @@ func TestValidOrgRejectsMaliciousInput(t *testing.T) {
 			t.Errorf("validOrg(%q) returned true; should reject", s)
 		}
 	}
-	good := []string{"advoq", "advoq-corp", "ABC", "a1", "x"}
+	good := []string{"acme", "acme-corp", "ABC", "a1", "x"}
 	for _, s := range good {
 		if !validOrg(s) {
 			t.Errorf("validOrg(%q) returned false; should accept", s)

@@ -9,7 +9,7 @@ import (
 
 func TestValidateRepo(t *testing.T) {
 	t.Parallel()
-	for _, repo := range []string{"advoq/civm", "owner/repo.name"} {
+	for _, repo := range []string{"acme/civm", "owner/repo.name"} {
 		if err := ValidateRepo(repo); err != nil {
 			t.Fatalf("ValidateRepo(%q) err = %v", repo, err)
 		}

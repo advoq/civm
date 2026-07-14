@@ -25,43 +25,43 @@ func TestClassifyRunner(t *testing.T) {
 	}{
 		{
 			name: "canonical",
-			runner: GitHubRunner{Repo: "emersonbusson/vitae", Name: "civm-vitae",
+			runner: GitHubRunner{Repo: "other/peer", Name: "civm-peer",
 				Status: "online", Labels: []string{"self-hosted", "civm"}},
 			class: "canonical", sev: SeverityOK,
 		},
 		{
 			name: "legacy offline",
-			runner: GitHubRunner{Repo: "emersonbusson/vitae", ID: 123, Name: "vitae-ci-1",
-				Status: "offline", Labels: []string{"self-hosted", "vitae-ci"}},
+			runner: GitHubRunner{Repo: "other/peer", ID: 123, Name: "legacy-ci-1",
+				Status: "offline", Labels: []string{"self-hosted", "legacy-ci"}},
 			class: "legacy_stale", sev: SeverityWarning,
 		},
 		{
 			name: "online without civm label",
-			runner: GitHubRunner{Repo: "emersonbusson/vitae", Name: "custom",
+			runner: GitHubRunner{Repo: "other/peer", Name: "custom",
 				Status: "online", Labels: []string{"self-hosted"}},
 			class: "ambiguous", sev: SeverityWarning,
 		},
 		{
 			name: "busy canonical",
-			runner: GitHubRunner{Repo: "emersonbusson/vitae", Name: "civm-vitae",
+			runner: GitHubRunner{Repo: "other/peer", Name: "civm-peer",
 				Status: "online", Busy: true, Labels: []string{"self-hosted", "civm"}},
 			class: "canonical", sev: SeverityWarning,
 		},
 		{
 			name: "compatible civm label with noncanonical name",
-			runner: GitHubRunner{Repo: "emersonbusson/vitae", Name: "custom-vm",
+			runner: GitHubRunner{Repo: "other/peer", Name: "custom-vm",
 				Status: "online", Labels: []string{"self-hosted", "civm"}},
 			class: "compatible", sev: SeverityOK,
 		},
 		{
 			name: "offline generic",
-			runner: GitHubRunner{Repo: "emersonbusson/vitae", Name: "custom-vm",
+			runner: GitHubRunner{Repo: "other/peer", Name: "custom-vm",
 				Status: "offline", Labels: []string{"self-hosted", "civm"}},
 			class: "offline", sev: SeverityWarning,
 		},
 		{
 			name: "unknown state",
-			runner: GitHubRunner{Repo: "emersonbusson/vitae", Name: "custom-vm",
+			runner: GitHubRunner{Repo: "other/peer", Name: "custom-vm",
 				Status: "draining", Labels: []string{"self-hosted", "civm"}},
 			class: "unknown", sev: SeverityWarning,
 		},
@@ -73,7 +73,7 @@ func TestClassifyRunner(t *testing.T) {
 			if got.Classification != tt.class || got.Severity != tt.sev {
 				t.Fatalf("got class=%s severity=%s, want class=%s severity=%s", got.Classification, got.Severity, tt.class, tt.sev)
 			}
-			if tt.class == "legacy_stale" && !strings.Contains(got.ManualRemoveCommand, "/repos/emersonbusson/vitae/actions/runners/123") {
+			if tt.class == "legacy_stale" && !strings.Contains(got.ManualRemoveCommand, "/repos/other/peer/actions/runners/123") {
 				t.Fatalf("manual remove command missing runner id: %+v", got)
 			}
 		})
@@ -87,13 +87,13 @@ func TestListGitHubRunnersParsesLabels(t *testing.T) {
 			t.Fatalf("name = %q, want gh", name)
 		}
 		gotArgs := strings.Join(args, " ")
-		if gotArgs != "api /repos/emersonbusson/vitae/actions/runners" {
+		if gotArgs != "api /repos/other/peer/actions/runners" {
 			t.Fatalf("args = %q", gotArgs)
 		}
 		return []byte(`{
 			"runners": [{
 				"id": 123,
-				"name": "civm-vitae",
+				"name": "civm-peer",
 				"status": "online",
 				"busy": true,
 				"labels": [{"name": "self-hosted"}, {"name": "civm"}]
@@ -101,11 +101,11 @@ func TestListGitHubRunnersParsesLabels(t *testing.T) {
 		}`), nil
 	}
 
-	got, err := listGitHubRunners(context.Background(), "emersonbusson/vitae", runFn)
+	got, err := listGitHubRunners(context.Background(), "other/peer", runFn)
 	if err != nil {
 		t.Fatalf("listGitHubRunners err = %v", err)
 	}
-	if len(got) != 1 || got[0].ID != 123 || got[0].Repo != "emersonbusson/vitae" || !got[0].Busy {
+	if len(got) != 1 || got[0].ID != 123 || got[0].Repo != "other/peer" || !got[0].Busy {
 		t.Fatalf("runners = %+v", got)
 	}
 	if strings.Join(got[0].Labels, ",") != "self-hosted,civm" {
@@ -115,7 +115,7 @@ func TestListGitHubRunnersParsesLabels(t *testing.T) {
 
 func TestListGitHubRunnersErrors(t *testing.T) {
 	t.Parallel()
-	_, err := listGitHubRunners(context.Background(), "emersonbusson/vitae",
+	_, err := listGitHubRunners(context.Background(), "other/peer",
 		func(context.Context, string, ...string) ([]byte, error) {
 			return nil, errors.New("network")
 		})
@@ -123,7 +123,7 @@ func TestListGitHubRunnersErrors(t *testing.T) {
 		t.Fatalf("run error = %v", err)
 	}
 
-	_, err = listGitHubRunners(context.Background(), "emersonbusson/vitae",
+	_, err = listGitHubRunners(context.Background(), "other/peer",
 		func(context.Context, string, ...string) ([]byte, error) {
 			return []byte(`{bad-json`), nil
 		})
@@ -134,11 +134,11 @@ func TestListGitHubRunnersErrors(t *testing.T) {
 
 func TestClassifyRepoMissingAndUnknown(t *testing.T) {
 	t.Parallel()
-	missing := ClassifyRepo("advoq/advoq", nil, nil)
+	missing := ClassifyRepo("acme/app", nil, nil)
 	if missing.Severity != SeverityWarning || missing.Runners[0].Classification != "missing" {
 		t.Fatalf("missing = %+v", missing)
 	}
-	unknown := ClassifyRepo("advoq/advoq", nil, errors.New("gh auth"))
+	unknown := ClassifyRepo("acme/app", nil, errors.New("gh auth"))
 	if unknown.Severity != SeverityWarning || unknown.Runners[0].Classification != "unknown" {
 		t.Fatalf("unknown = %+v", unknown)
 	}
@@ -147,7 +147,7 @@ func TestClassifyRepoMissingAndUnknown(t *testing.T) {
 func TestCollectAndRenderJSON(t *testing.T) {
 	t.Parallel()
 	opts := DefaultOptions()
-	opts.Repos = []string{"advoq/civm", "emersonbusson/vitae"}
+	opts.Repos = []string{"acme/civm", "other/peer"}
 	opts.HealthFn = func(context.Context) health.Report {
 		return health.Report{Checks: []health.Check{
 			{Name: "DISK", Detail: "50 GB free", Status: health.StatusOK},
@@ -155,14 +155,14 @@ func TestCollectAndRenderJSON(t *testing.T) {
 		}}
 	}
 	opts.SystemRunnersFn = func(context.Context) ([]runner.Status, error) {
-		return []runner.Status{{UnitName: "actions.runner.emersonbusson-vitae.civm-vitae.service", Repo: "emersonbusson/vitae", Name: "civm-vitae", ActiveState: "active", SubState: "running"}}, nil
+		return []runner.Status{{UnitName: "actions.runner.other-peer.civm-peer.service", Repo: "other/peer", Name: "civm-peer", ActiveState: "active", SubState: "running"}}, nil
 	}
 	stubHookContractOK(&opts)
 	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]GitHubRunner, error) {
-		if repo == "advoq/civm" {
+		if repo == "acme/civm" {
 			return []GitHubRunner{{Repo: repo, Name: "civm-self", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
 		}
-		return []GitHubRunner{{Repo: repo, Name: "vitae-ci-1", Status: "offline", Labels: []string{"self-hosted", "vitae-ci"}}}, nil
+		return []GitHubRunner{{Repo: repo, Name: "legacy-ci-1", Status: "offline", Labels: []string{"self-hosted", "legacy-ci"}}}, nil
 	}
 	report, err := Collect(context.Background(), opts)
 	if err != nil {
@@ -190,7 +190,7 @@ func TestCollectAndRenderJSON(t *testing.T) {
 func TestCollectReportsHookContractFailures(t *testing.T) {
 	t.Parallel()
 	opts := DefaultOptions()
-	opts.Repos = []string{"advoq/civm"}
+	opts.Repos = []string{"acme/civm"}
 	opts.HealthFn = func(context.Context) health.Report {
 		return health.Report{Checks: []health.Check{
 			{Name: "DISK", Detail: "50 GB free", Status: health.StatusOK},
@@ -198,8 +198,8 @@ func TestCollectReportsHookContractFailures(t *testing.T) {
 	}
 	opts.SystemRunnersFn = func(context.Context) ([]runner.Status, error) {
 		return []runner.Status{
-			{UnitName: "actions.runner.advoq-civm.civm-self.service", Repo: "advoq/civm", Name: "civm-self", ActiveState: "active", SubState: "running"},
-			{UnitName: "actions.runner.emersonbusson-vitae.civm-vitae.service", Repo: "emersonbusson/vitae", Name: "civm-vitae", ActiveState: "inactive", SubState: "dead"},
+			{UnitName: "actions.runner.acme-civm.civm-self.service", Repo: "acme/civm", Name: "civm-self", ActiveState: "active", SubState: "running"},
+			{UnitName: "actions.runner.other-peer.civm-peer.service", Repo: "other/peer", Name: "civm-peer", ActiveState: "inactive", SubState: "dead"},
 		}, nil
 	}
 	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]GitHubRunner, error) {
@@ -254,7 +254,7 @@ func TestCollectReportsHookContractFailures(t *testing.T) {
 func TestCollectFlagsRunnerSerializationCollision(t *testing.T) {
 	t.Parallel()
 	opts := DefaultOptions()
-	opts.Repos = []string{"advoq/advoq"}
+	opts.Repos = []string{"acme/app"}
 	opts.HealthFn = func(context.Context) health.Report {
 		return health.Report{Checks: []health.Check{
 			{Name: "DISK", Detail: "50 GB free", Status: health.StatusOK},
@@ -262,19 +262,19 @@ func TestCollectFlagsRunnerSerializationCollision(t *testing.T) {
 	}
 	opts.SystemRunnersFn = func(context.Context) ([]runner.Status, error) {
 		return []runner.Status{
-			{UnitName: "actions.runner.advoq.civm-advoq-org.service", Repo: "advoq", Name: "civm-advoq-org", ActiveState: "active", SubState: "running"},
-			{UnitName: "actions.runner.advoq-advoq.civm-advoq.service", Repo: "advoq/advoq", Name: "civm-advoq", ActiveState: "active", SubState: "running"},
+			{UnitName: "actions.runner.acme.civm-acme-org.service", Repo: "acme", Name: "civm-acme-org", ActiveState: "active", SubState: "running"},
+			{UnitName: "actions.runner.acme-app.civm-app.service", Repo: "acme/app", Name: "civm-app", ActiveState: "active", SubState: "running"},
 		}, nil
 	}
 	stubHookContractOK(&opts)
 	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]GitHubRunner, error) {
-		return []GitHubRunner{{Repo: repo, Name: "civm-advoq-org", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
+		return []GitHubRunner{{Repo: repo, Name: "civm-acme-org", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
 	}
 	report, err := Collect(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("Collect err = %v", err)
 	}
-	assertHookCheck(t, report, "RUNNER_SERIALIZATION", SeverityCritical, "civm-advoq")
+	assertHookCheck(t, report, "RUNNER_SERIALIZATION", SeverityCritical, "civm-app")
 	assertHookCheck(t, report, "RUNNER_SERIALIZATION", SeverityCritical, "civmctl runner remove")
 	if report.Exit != 2 {
 		t.Fatalf("Exit = %d, want critical 2 (serialização); hook_checks=%+v", report.Exit, report.HookChecks)
@@ -286,18 +286,18 @@ func TestCollectFlagsRunnerSerializationCollision(t *testing.T) {
 func TestCollectRunnerSerializationOKWhenOrgOnly(t *testing.T) {
 	t.Parallel()
 	opts := DefaultOptions()
-	opts.Repos = []string{"advoq/advoq"}
+	opts.Repos = []string{"acme/app"}
 	opts.HealthFn = func(context.Context) health.Report {
 		return health.Report{Checks: []health.Check{{Name: "DISK", Detail: "50 GB free", Status: health.StatusOK}}}
 	}
 	opts.SystemRunnersFn = func(context.Context) ([]runner.Status, error) {
 		return []runner.Status{
-			{UnitName: "actions.runner.advoq.civm-advoq-org.service", Repo: "advoq", Name: "civm-advoq-org", ActiveState: "active", SubState: "running"},
+			{UnitName: "actions.runner.acme.civm-acme-org.service", Repo: "acme", Name: "civm-acme-org", ActiveState: "active", SubState: "running"},
 		}, nil
 	}
 	stubHookContractOK(&opts)
 	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]GitHubRunner, error) {
-		return []GitHubRunner{{Repo: repo, Name: "civm-advoq-org", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
+		return []GitHubRunner{{Repo: repo, Name: "civm-acme-org", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil
 	}
 	report, err := Collect(context.Background(), opts)
 	if err != nil {
@@ -346,11 +346,11 @@ func TestRenderHumanIncludesManualLegacyCleanup(t *testing.T) {
 		WorkflowFile: "ci.yml",
 		HostChecks:   []HostCheck{{Name: "DISK", Severity: "ok", Detail: "50 GB free"}},
 		GitHubRepos: []RepoDiagnosis{{
-			Repo: "emersonbusson/vitae", Severity: SeverityWarning,
+			Repo: "other/peer", Severity: SeverityWarning,
 			Runners: []RunnerDiagnosis{{
-				Repo: "emersonbusson/vitae", ID: 55, Name: "vitae-ci-1", Status: "offline",
+				Repo: "other/peer", ID: 55, Name: "legacy-ci-1", Status: "offline",
 				Classification: "legacy_stale", Severity: SeverityWarning,
-				ManualRemoveCommand: "gh api -X DELETE /repos/emersonbusson/vitae/actions/runners/55",
+				ManualRemoveCommand: "gh api -X DELETE /repos/other/peer/actions/runners/55",
 			}},
 		}},
 		Exit: 1,
@@ -494,12 +494,12 @@ func TestCheckAdmitRAMInvariant(t *testing.T) {
 func TestCollectIncludesAdmitHostChecks(t *testing.T) {
 	t.Parallel()
 	opts := DefaultOptions()
-	opts.Repos = []string{"advoq/civm"}
+	opts.Repos = []string{"acme/civm"}
 	opts.HealthFn = func(context.Context) health.Report {
 		return health.Report{Checks: []health.Check{{Name: "DISK", Detail: "ok", Status: health.StatusOK}}}
 	}
 	opts.SystemRunnersFn = func(context.Context) ([]runner.Status, error) {
-		return []runner.Status{{UnitName: "actions.runner.advoq-civm.civm-self.service", Repo: "advoq/civm", Name: "civm-self", ActiveState: "active", SubState: "running"}}, nil
+		return []runner.Status{{UnitName: "actions.runner.acme-civm.civm-self.service", Repo: "acme/civm", Name: "civm-self", ActiveState: "active", SubState: "running"}}, nil
 	}
 	opts.GitHubRunnersFn = func(_ context.Context, repo string) ([]GitHubRunner, error) {
 		return []GitHubRunner{{Repo: repo, Name: "civm-self", Status: "online", Labels: []string{"self-hosted", "civm"}}}, nil

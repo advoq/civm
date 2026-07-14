@@ -34,7 +34,7 @@ func mkRuns(now time.Time, durations []time.Duration, conclusions []string) []by
 
 func validOpts() Options {
 	o := DefaultOptions()
-	o.Repo = "emersonbusson/test"
+	o.Repo = "other/test"
 	return o
 }
 

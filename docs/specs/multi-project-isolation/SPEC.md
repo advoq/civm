@@ -26,7 +26,7 @@ issues: []
 **Fica fora agora:**
 
 - dockerd rootless / `DOCKER_HOST` por runner (isolamento real de daemon) — deferido atrás de gate de expansão de disco/RAM.
-- Implementação do lado advoq (#1006) — consumidor, vira slice fina separada no repo advoq.
+- Implementação do lado acme (#1006) — consumidor, vira slice fina separada no repo acme.
 - Reescrita de billing/release/parity/drift do civm.
 
 **Dependências assumidas prontas:**
@@ -80,7 +80,7 @@ issues: []
 | ITEM-3/ITEM-6 (porta por runner) | #5 Availability heuristic | `disciplines/KAHNEMAN-DISCIPLINES.md` §"As 12 disciplinas" #5 | A janela [20000,32000) colide com algum default de peer OU com a faixa ephemeral do kernel? | `go test` provando blocos disjuntos + grep dos defaults de porta dos peers fora da janela + `cat /proc/sys/net/ipv4/ip_local_port_range` ≥ 32768 | Qualquer bloco sobrepor outro runner, um default de peer, ou a faixa ephemeral |
 | ITEM-4/ITEM-10/ITEM-11/ITEM-12 (lock vs cleanup) | #5 Availability heuristic | idem #5 | Um lock segurado por bring-up de ~40 min ainda starva o disk-watchdog até 90%? | Teste com lock fresco (cleanup adia) e lock vencido (cleanup reclama) + evento `deferred-by-docker-heavy-lock`/`reclaimed-stale-lock` em `hooks.jsonl` | Cleanup podar sob lock **fresco**, ou disco atingir 90% sob lock sem evento |
 | ITEM-4 (lock primitivo) | #2 Counterfactual obrigatório | idem #2 | Qual sinal numérico reverte o lock? | Rollback trigger numérico registrado (abaixo) + teste de stale-lock (PID morto) sem deadlock | lock-wait p95 causar cancelamento por `timeout-minutes` em algum peer |
-| ITEM-5 (ci-guard enforce) | #5 + #12 Priming | idem #5/#12 | Quantos falso-positivos o enforce gera nos repos peer reais? | Rodar `ci-guard --mode=report` contra advoq/vitae e contar findings antes de enforce | Falso-positivo bloqueante não-allowlistado em repo conforme |
+| ITEM-5 (ci-guard enforce) | #5 + #12 Priming | idem #5/#12 | Quantos falso-positivos o enforce gera nos repos peer reais? | Rodar `ci-guard --mode=report` contra acme/peer e contar findings antes de enforce | Falso-positivo bloqueante não-allowlistado em repo conforme |
 | ITEM-1 (baseline) | #3 Número não adjetivo | idem #3 | "~8 slots", "~40 min", "128GB" são medidos ou herdados de texto? | `civmctl capacity --json` do box vivo + profiling colado | Avançar sem medir o baseline |
 
 **Rollback trigger numérico (fecha o PRD §9):** reverter a slice ofensora se, sobre **5 runs consecutivos** pós-deploy de cada peer: colisão de project-name/porta > 0; OU lock-wait p95 > 10 min; OU `ci-guard --mode=enforce` produzir ≥1 falso-positivo bloqueante não-waivable; OU disco atingir `DefaultHardFailPct` (90%) com lock docker-heavy fresco ativo.
@@ -309,16 +309,16 @@ issues: []
 | --- | --- | --- |
 | `runbooks/MULTI-PROJECT-RUNNER.md` | Alterar | §"Riscos compartilhados" (imperativos) → §"Isolamento fornecido pelo civm": as 3 chaves de `.env`, path do lock, exit codes, contrato do `ci-guard`, label `civm-e2e` |
 | `templates/CIVM-USAGE.md` | Alterar | consumo de `CIVM_PORT_BASE`/`COMPOSE_PROJECT_NAME` + `civmctl lock` + `civmctl ci-guard` |
-| `templates/advoq-ci-router.yml.template`, `templates/ci-router.yml.template` | Alterar | step `ci-guard` no pré-flight + wrap docker-heavy em `civmctl lock --exec` |
-| `runbooks/PEER-ADOPTION-CHECKLIST.md`, `runbooks/ADVOQ-ADOPTION.md` | Alterar | passos de adoção do primitivo |
+| `templates/acme-ci-router.yml.template`, `templates/ci-router.yml.template` | Alterar | step `ci-guard` no pré-flight + wrap docker-heavy em `civmctl lock --exec` |
+| `runbooks/PEER-ADOPTION-CHECKLIST.md`, `runbooks/ORG-RUNNER-ADOPTION.md` | Alterar | passos de adoção do primitivo |
 | `cmd/civmctl/main.go` `printHelp` | Alterar | comandos `lock`/`ci-guard` |
 | `disciplines/KAHNEMAN-DISCIPLINES.md` | N/A | sem nova disciplina/âncora |
 | `docs/INDEX.md` | Regenerar | `npm run docs:index` (novo spec) |
 | `AGENTS.md` / `CODEX.md` | Alterar | se mudar boundary "civm fornece isolamento" (regra de trabalho) |
-| `docs/config-reference.json` | N/A | civm não usa esse arquivo (é do advoq) |
+| `docs/config-reference.json` | N/A | civm não usa esse arquivo (é do acme) |
 | `docs/openapi/*`, SDK, eventos Redis | N/A | sem contrato de produto |
 
-**Lado consumidor (repo advoq, fora deste PR):** `docs/specs/M48/1006-...`, `.claude/rules/civm.md`, `docs/CIVM.md`, `infra/docker-compose*.yml`, `tools/devctl`.
+**Lado consumidor (repo acme, fora deste PR):** `docs/specs/M48/1006-...`, `.claude/rules/civm.md`, `docs/CIVM.md`, `infra/docker-compose*.yml`, `tools/devctl`.
 
 ## Ordem de implementação
 
@@ -334,7 +334,7 @@ issues: []
 10. **ITEM-10/11/12 — lock-aware** cleanup/watchdog/job-started + testes.
 11. **ITEM-13/13b — `doctor` check + runner label** docs.
 12. **ITEM-14 — docs vivas** (runbook/templates/checklist) + `npm run docs:index`.
-13. **Prova:** rodar `ci-guard --mode=report` contra advoq/vitae; adotar no advoq#1006 (slice separada).
+13. **Prova:** rodar `ci-guard --mode=report` contra acme/peer; adotar no acme#1006 (slice separada).
 
 ## Plano de testes
 
@@ -361,7 +361,7 @@ issues: []
 
 - `civmctl capacity --json` do box vivo (baseline ITEM-1) colado no IMPL.
 - `cat /proc/sys/net/ipv4/ip_local_port_range` ≥ 32768 (DT-2) + grep dos defaults de porta dos peers fora de [20000,32000).
-- `civmctl ci-guard --mode=report` contra advoq/vitae: contagem de findings antes de habilitar enforce.
+- `civmctl ci-guard --mode=report` contra acme/peer: contagem de findings antes de habilitar enforce.
 
 ## Checklist de validação
 

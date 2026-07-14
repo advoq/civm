@@ -1,12 +1,10 @@
 {
   "schemaVersion": 2,
-  "description": "Source-of-truth manifest for the Kahneman discipline pattern across peer repos. Consumed by scripts/check-kahneman-consistency.sh and the kahneman-sync-audit workflow. When a new fork is authorized, add it here.",
+  "description": "Source-of-truth manifest for the Kahneman discipline pattern. Consumed by scripts/check-kahneman-consistency.sh and the kahneman-sync-audit workflow. Public/default tree only audits this repository; operators may extend the list locally for private fleets.",
   "title_patterns": {
     "canonical": "# Kahneman disciplines — hygiene para decisões de IA",
-    "vitae_specific": "# Kahneman disciplines — higiene de decisão no Vitae",
-    "civm_template": "# Kahneman disciplines — template portátil de higiene de decisão",
-    "chatwoot_standalone": "# Kahneman disciplines — local decision hygiene",
-    "advoqwhatsapp_noaccent": "# Kahneman Disciplines — Higiene Para Decisoes De IA"
+    "peer_specific": "# Kahneman disciplines — higiene de decisão no peer",
+    "civm_template": "# Kahneman disciplines — template portátil de higiene de decisão"
   },
   "rule5_patterns": {
     "en_canonical": "New lib needs explicit justification",
@@ -24,28 +22,6 @@
   },
   "repos": [
     {
-      "name": "advoq",
-      "path": "advoq",
-      "git_url": "https://github.com/advoq/advoq.git",
-      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
-      "title": "canonical",
-      "surfaces": [
-        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "en_canonical" },
-        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "en_canonical" }
-      ]
-    },
-    {
-      "name": "vitae",
-      "path": "vitae",
-      "git_url": "https://github.com/emersonbusson/vitae.git",
-      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
-      "title": "vitae_specific",
-      "surfaces": [
-        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_generic" },
-        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "pt_generic" }
-      ]
-    },
-    {
       "name": "civm",
       "path": "civm",
       "git_url": "https://github.com/advoq/civm.git",
@@ -53,115 +29,6 @@
       "title": "civm_template",
       "surfaces": [
         { "file": "AGENTS.md", "style": "h2_top5", "rule5": "pt_generic" }
-      ]
-    },
-    {
-      "name": "harmya",
-      "path": "harmya",
-      "git_url": "https://github.com/advoq/harmya.git",
-      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
-      "title": "canonical",
-      "surfaces": [
-        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "en_canonical" },
-        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "en_canonical" }
-      ]
-    },
-    {
-      "name": "menu-orders",
-      "path": "menu-orders",
-      "git_url": "https://github.com/advoq/menu-orders.git",
-      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
-      "title": "canonical",
-      "surfaces": [
-        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "en_canonical" },
-        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "en_canonical" }
-      ]
-    },
-    {
-      "name": "orador-fluido",
-      "path": "orador-fluido",
-      "git_url": "https://github.com/advoq/orador-fluido.git",
-      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
-      "title": "canonical",
-      "surfaces": [
-        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "en_canonical" },
-        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "en_canonical" }
-      ]
-    },
-    {
-      "name": "barbershop",
-      "path": "barbershop",
-      "git_url": "https://github.com/advoq/barbershop.git",
-      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
-      "title": "canonical",
-      "surfaces": [
-        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "en_canonical" },
-        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "en_canonical" }
-      ]
-    },
-    {
-      "name": "salon",
-      "path": "salon",
-      "git_url": "https://github.com/advoq/salon.git",
-      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
-      "title": "canonical",
-      "surfaces": [
-        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "en_canonical" },
-        { "file": "AGENTS.md", "style": "h2_top5", "rule5": "en_canonical" }
-      ]
-    },
-    {
-      "name": "n8n-engine",
-      "path": "n8n-engine",
-      "git_url": "https://github.com/emersonbusson/n8n-engine.git",
-      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
-      "title": "canonical",
-      "surfaces": [
-        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_libraries" },
-        { "file": "AGENTS.md", "style": "inline_bold" }
-      ]
-    },
-    {
-      "name": "typebot-runtime",
-      "path": "typebot-runtime",
-      "git_url": "https://github.com/emersonbusson/typebot-runtime.git",
-      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
-      "title": "canonical",
-      "surfaces": [
-        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_libraries" },
-        { "file": "AGENTS.md", "style": "inline_bold" }
-      ]
-    },
-    {
-      "name": "chatwoot-realtime",
-      "path": "chatwoot-realtime",
-      "git_url": "https://github.com/emersonbusson/chatwoot-realtime.git",
-      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
-      "title": "chatwoot_standalone",
-      "surfaces": [
-        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_libraries" },
-        { "file": "AGENTS.md", "style": "inline_bold" }
-      ]
-    },
-    {
-      "name": "advoqwhatsappapi",
-      "path": "advoqwhatsappapi",
-      "git_url": "https://github.com/emersonbusson/advoqwhatsappapi.git",
-      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
-      "title": "advoqwhatsapp_noaccent",
-      "surfaces": [
-        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_libraries" },
-        { "file": "AGENTS.md", "style": "inline_bold" }
-      ]
-    },
-    {
-      "name": "super-view-project",
-      "path": "super-view-project",
-      "git_url": "https://github.com/emersonbusson/super-view-project.git",
-      "doc_path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
-      "title": "canonical",
-      "surfaces": [
-        { "file": "CLAUDE.md", "style": "h2_top5", "rule5": "pt_generic" }
       ]
     }
   ]

@@ -9,7 +9,7 @@ issues: []
 
 > Tipo: capacidade de plataforma do runner (`civmctl` guest + componente Windows host + sudoers/tmpfiles deploy + runbook). Sem schema de banco, endpoint de produto ou evento de domínio.
 > Política Day-0: o civm não tem produção viva com dados legados obrigatórios; backfill = N/A. Solução primária única, sem dual-path "disciplina-OU-primitivo".
-> Origem: o box civm (host Windows Hyper-V `EMEDEV` + guest `gha-ubuntu-2404`) é o **único** runner self-hosted gratuito que substitui os GitHub-hosted runners para **todos** os repos do usuário (`advoq/advoq`, `advoq/civm`, `emersonbusson/{vitae,chatwoot-realtime,n8n-engine,typebot-runtime,advoqwhatsappapi}` — 8 serviços: `civm-advoq`, `civm-advoq-org`, `civm-advoqwhatsappapi`, `civm-chatwoot-realtime`, `civm-self`, `civm-n8n-engine`, `civm-typebot-runtime`, `civm-vitae`). Ele **precisa** se comportar como "GitHub-hosted Actions" porque o usuário não pode pagar runners hospedados. O diagnóstico de 2026-05-29 (verificado contra código-fonte E box vivo) encontrou modos de falha que tiram runners do ar em silêncio e os deixam quebrados para **todos** os jobs subsequentes. Este PRD os substitui por primitivos civm corretos, seguros e auto-curáveis.
+> Origem: o box civm (host Windows Hyper-V `EMEDEV` + guest `gha-ubuntu-2404`) é o **único** runner self-hosted gratuito que substitui os GitHub-hosted runners para **todos** os repos do usuário (`acme/app`, `acme/civm`, `other/{peer,service-b,service-c,service-d,service-a}` — 8 serviços: `civm-app`, `civm-acme-org`, `civm-service-a`, `civm-service-b`, `civm-self`, `civm-service-c`, `civm-service-d`, `civm-peer`). Ele **precisa** se comportar como "GitHub-hosted Actions" porque o usuário não pode pagar runners hospedados. O diagnóstico de 2026-05-29 (verificado contra código-fonte E box vivo) encontrou modos de falha que tiram runners do ar em silêncio e os deixam quebrados para **todos** os jobs subsequentes. Este PRD os substitui por primitivos civm corretos, seguros e auto-curáveis.
 
 ---
 
@@ -17,7 +17,7 @@ issues: []
 
 O civm precisa ser um **GitHub Actions gratuito que não falha em silêncio**. O diagnóstico encontrou três famílias de falha que quebram essa promessa, todas verificadas contra o código E o box vivo (logs em `/var/log/civm/hooks.jsonl`, `systemctl`, `powershell.exe`):
 
-1. **Lixo root-owned no `_work` derruba o hook `job-completed` (EACCES) e quebra o runner inteiro — o killer de confiabilidade #1, repo-agnóstico.** Confirmado vivo: `hooks.jsonl` tem **34 eventos fatais**, todos em `advoq/advoq`, com a mensagem predita: `work_root: unlinkat /home/emdev/actions-runner-advoq/_work/advoq/advoq/docs/events-catalog.json: permission denied`. Um passo CI containerizado roda como root e escreve `docs/events-catalog.json` / `config-reference.json` no `_work` montado; o runner (usuário `emdev`) então **não consegue deletar** → `os.RemoveAll` retorna EACCES → hook `job-completed` retorna exit 1 → o passo "Complete runner" do GitHub falha → o runner para de processar jobs (janela observada de ~11 min com retries). Não há caminho de escalada de privilégio no código (`grep` por `chown`/`Chown`/`Geteuid` no cleanup retorna nada; os únicos `sudo` no hook são `apt`/`journalctl`/`fstrim`, todos best-effort). Day-0, qualquer repo com passo containerizado que escreve como root está a um job de brickar seu runner.
+1. **Lixo root-owned no `_work` derruba o hook `job-completed` (EACCES) e quebra o runner inteiro — o killer de confiabilidade #1, repo-agnóstico.** Confirmado vivo: `hooks.jsonl` tem **34 eventos fatais**, todos em `acme/app`, com a mensagem predita: `work_root: unlinkat /home/emdev/actions-runner-acme/_work/acme/app/docs/events-catalog.json: permission denied`. Um passo CI containerizado roda como root e escreve `docs/events-catalog.json` / `config-reference.json` no `_work` montado; o runner (usuário `emdev`) então **não consegue deletar** → `os.RemoveAll` retorna EACCES → hook `job-completed` retorna exit 1 → o passo "Complete runner" do GitHub falha → o runner para de processar jobs (janela observada de ~11 min com retries). Não há caminho de escalada de privilégio no código (`grep` por `chown`/`Chown`/`Geteuid` no cleanup retorna nada; os únicos `sudo` no hook são `apt`/`journalctl`/`fstrim`, todos best-effort). Day-0, qualquer repo com passo containerizado que escreve como root está a um job de brickar seu runner.
 
 2. **O disco do host (VHDX) enche sem alarme nem auto-cura — o pipeline de reclamação automático não existe na prática.** Confirmado vivo: o guest `/var/lib/civm/host-metrics.json` está **ausente** (`civmctl host-disk` → `level=crit stale=true v_free=0GB`); as **três** Scheduled Tasks do host (`civm-host-metrics`, `civm-vhdx-optimize`, `civm-vhdx-optimize-watchdog`) **não estão registradas** (`Get-ScheduledTask` = NOT REGISTERED). Os scripts existem em `deploy/windows/` mas nunca rodaram `Register-ScheduledTask`. Além disso, o mecanismo descrito como **primário** na SPEC `host-volume-reclamation` (online SCSI+discard → `fstrim` encolhe o VHDX) é **empiricamente falso neste box**: BlockSize de 32 MB + Hyper-V **não honra UNMAP/discard online**, então `fstrim`+`Optimize-VHD` recuperaram ~nada (≈4 GB mesmo com zero-fill). A única remediação que funcionou foi **`Convert-VHD -BlockSizeBytes 1MB`** (V: 3 GB → 51 GB livres) + **`Optimize-VHD` OFFLINE** num VHDX de bloco 1 MB — e esse mecanismo está **ausente de todos os scripts** (`grep` por `BlockSizeBytes`/`1MB`/`1048576` retorna zero). Combinado com o gap buildx-125 (build-cache nunca reclamado), o disco do guest **não tem nenhuma reclamação automática funcionando**.
 
@@ -46,12 +46,12 @@ Valor: o runner para de morrer em silêncio por arquivo root-owned ou disco chei
 ```
 Windows host (EMEDEV)  ── Hyper-V ──> VM Linux "gha-ubuntu-2404" (guest)
   V: (119,2 GB NTFS SSD)                /dev/sda2 ext4  ← 8 runners + civmctl
-   └─ gha-ubuntu-2404.vhdx (dinâmico,   ├─ actions-runner-advoq/_work/...
-      pós-Convert 1MB BlockSize;        ├─ actions-runner-advoq-org/_work/...
-      45,4 GB livres pós-remediação)    ├─ ...(8 slots: advoq, advoq-org,
-  3 Scheduled Tasks (NÃO registradas):  │     advoqwhatsappapi, chatwoot-realtime,
-   ├─ civm-host-metrics  (/mo 10)       │     self, n8n-engine, typebot-runtime,
-   ├─ civm-vhdx-optimize (onstart)      │     vitae)
+   └─ gha-ubuntu-2404.vhdx (dinâmico,   ├─ actions-runner-acme/_work/...
+      pós-Convert 1MB BlockSize;        ├─ actions-runner-acme-org/_work/...
+      45,4 GB livres pós-remediação)    ├─ ...(8 slots: acme, acme-org,
+  3 Scheduled Tasks (NÃO registradas):  │     service-a, service-b,
+   ├─ civm-host-metrics  (/mo 10)       │     self, service-c, service-d,
+   ├─ civm-vhdx-optimize (onstart)      │     peer)
    └─ ...-watchdog       (/mo 5)        └─ civmctl-*.timer (cleanup/watchdog/metrics)
   WSL (operador) ── powershell.exe + ssh gha-ubuntu-2404 ──> guest
 ```
@@ -68,7 +68,7 @@ Windows host (EMEDEV)  ── Hyper-V ──> VM Linux "gha-ubuntu-2404" (guest)
 - `EventJobCompleted` (`hook.go:146`): `firstActionError()` promove **qualquer** Action com `Error` não-vazio a `errorResult` → `ExitCode 1` → "Complete runner" falha.
 - `isIgnorableCacheDeleteRace` (`hook.go:534`): só demote para `a.Name ∈ {cache, cache_trim}` **E** erro contém "directory not empty". `work_root` nunca é demotável; "permission denied" nunca é demotável. O demote (`onlyIgnorableCacheDeleteRaces`) só está cabeado no branch `job-started`, **não** no `job-completed`.
 - Nenhum `Geteuid`/`chown`/`sudo rm` no caminho de remoção (`grep` confirma; só mocks em testes).
-- **Vivo:** 34 eventos fatais hoje em `hooks.jsonl`, todos `advoq/advoq`, exatamente `docs/events-catalog.json` root-owned. 68 referências `unlinkat` a esse arquivo; run_id 26671037619 falhou 3+ vezes seguidas no "Complete runner". O box mostra 0 arquivos root-owned agora só porque rebootou ~1h atrás mid-job; o modo recorre a cada passo containerizado root.
+- **Vivo:** 34 eventos fatais hoje em `hooks.jsonl`, todos `acme/app`, exatamente `docs/events-catalog.json` root-owned. 68 referências `unlinkat` a esse arquivo; run_id 26671037619 falhou 3+ vezes seguidas no "Complete runner". O box mostra 0 arquivos root-owned agora só porque rebootou ~1h atrás mid-job; o modo recorre a cada passo containerizado root.
 
 **Família 2 — disco do host (HIGH):**
 
@@ -86,7 +86,7 @@ Windows host (EMEDEV)  ── Hyper-V ──> VM Linux "gha-ubuntu-2404" (guest)
 - `internal/runner/watchdog.go:274` e `restart.go:93` têm `sudo systemctl restart <unit>` prontos, mas **nada** liga "runner quebrou / Complete-runner falhou repetidamente" a um restart automático da unidade `civm-*` afetada.
 - `cleanup.go:128` defere a docker-heavy lock (`LockActiveFn`), mas o **hook** `job-completed` roda `docker_*_prune` incondicionalmente, mesmo com sibling job mid `compose up --build`/`docker pull` em outro dos 8 runners.
 - `cleanWorkRoot` (`os.RemoveAll`) e `trimCacheByAge` (`WalkDir`) **não têm timeout** (só os comandos externos têm `DefaultRoutineCleanupCmdTimeoutSecs=120s`). Nada observa `hooks.jsonl`; um runner pode entrar em estado quebrado e ficar lá até alguém notar.
-- `/run/civm` **ausente** no box (perdido no reboot; `/run` é tmpfs); `/var/lib/civm/port-blocks.json` ausente. A lock docker-heavy de `multi-project-isolation` não tem onde materializar; o isolamento depende só de `COMPOSE_PROJECT_NAME` (funcionando — containers `advoq-26661232043-ms-chat-1` etc.). 13 volumes docker órfãos (608 MB, 100% reclaimable) persistem.
+- `/run/civm` **ausente** no box (perdido no reboot; `/run` é tmpfs); `/var/lib/civm/port-blocks.json` ausente. A lock docker-heavy de `multi-project-isolation` não tem onde materializar; o isolamento depende só de `COMPOSE_PROJECT_NAME` (funcionando — containers `acme-26661232043-ms-chat-1` etc.). 13 volumes docker órfãos (608 MB, 100% reclaimable) persistem.
 
 ### Confirmado na documentação oficial (Hyper-V/VHDX)
 
@@ -221,7 +221,7 @@ Runbook novo + reconciliação das SPECs vizinhas + `deploy/` docs.
 
 ### Performance
 
-- Alvo primário: **zero jobs falhos por lixo root-owned no `_work`** (hoje: 34 eventos fatais/dia em advoq). Métrica: `job-completed` com `decision=error` por motivo de filesystem → 0 sustentado.
+- Alvo primário: **zero jobs falhos por lixo root-owned no `_work`** (hoje: 34 eventos fatais/dia em acme). Métrica: `job-completed` com `decision=error` por motivo de filesystem → 0 sustentado.
 - Alvo de disco: **host `V:` ≥ 30 GB livres** em operação normal, com reclamação efetiva (Optimize offline num VHDX 1 MB recupera ≈o esperado; baseline a registrar em RF-4/DT-v2-19). Buildx-prune passa a reclamar cache (RF-5) — `docker system df` antes/depois.
 - `safedelete`/escalada são segundos; o `sudo chown -R`/`rm -rf` é escopado ao job dir, não ao `_work` inteiro.
 
@@ -434,7 +434,7 @@ Slice 0 (baseline: `hooks.jsonl` count, `docker system df`, `disk-doctor`, `Get-
 | Expandir fisicamente o `V:`/disco como solução única | Capex; mitigação estrutural, não a solução (BlockSize resolve a granularidade) |
 | Online SCSI+discard como mecanismo primário de reclamação | Empiricamente refutado neste box; demovido a "verificar-mas-não-confiar" (RF-4) |
 | Multi-project isolation (lock/porta/project-name) em si | Coberto por `docs/specs/multi-project-isolation/`; aqui só materializamos `/run/civm` (RF-8) |
-| Mudança em produto de peer (advoq/vitae/etc.) | Puramente plataforma de runner |
+| Mudança em produto de peer (acme/peer/etc.) | Puramente plataforma de runner |
 
 ## 13. Critérios de aceitação
 
@@ -466,7 +466,7 @@ Slice 0 (baseline: `hooks.jsonl` count, `docker system df`, `disk-doctor`, `Get-
 
 | Decisão crítica | Disciplina | Pergunta | Evidência (número/observação) | Abort-trigger (counterfactual numérico) |
 | --- | --- | --- | --- | --- |
-| **Escalada `sudo` no `_work` é o fix do killer #1 (RF-1)** | #1, #3 | Escalar privilégio na remoção em vez de pedir disciplina aos repos resolve a raiz? | 34 eventos fatais/dia em `hooks.jsonl`, todos `advoq/advoq`, `unlinkat ... events-catalog.json: permission denied`; nenhum `chown`/`Geteuid` no código | Se `job-completed decision=error` por filesystem **não** cair a 0 em 3 dias de jobs root-writing após RF-1 → reverter e reabrir diagnóstico |
+| **Escalada `sudo` no `_work` é o fix do killer #1 (RF-1)** | #1, #3 | Escalar privilégio na remoção em vez de pedir disciplina aos repos resolve a raiz? | 34 eventos fatais/dia em `hooks.jsonl`, todos `acme/app`, `unlinkat ... events-catalog.json: permission denied`; nenhum `chown`/`Geteuid` no código | Se `job-completed decision=error` por filesystem **não** cair a 0 em 3 dias de jobs root-writing após RF-1 → reverter e reabrir diagnóstico |
 | **`sudo` escopado estritamente a `_work` validado (RF-1)** | #5 | A escalada pode apagar fora do `_work` no pior caso? | `safeWorkRoot()` já valida path; sudoers limita a `/home/*/actions-runner*/_work/*` | Se a escalada tocar **1** path fora de `_work` (teste ou auditoria) → CRITICAL, reverter imediato |
 | **`job-completed` fail-open para hygiene (RF-2)** | #5 | Tornar não-fatal esconde disco cheio? | `HardFailPct=90%` no `job-started` continua o gate de rejeição; só erro não-disco é demovido | Se um job for aceito com disco `>= HardFailPct` após RF-2 → bug, reverter o demote |
 | **NOPASSWD escopado é load-bearing → doctor CRITICAL (RF-1)** | #1, #5 | E se o sudoers faltar num dos 8 hosts? | probe: `emdev` tem NOPASSWD ALL hoje, mas provisioning é manual por-host | Se um host sem sudoers escopado não for flagueado CRITICAL pelo doctor → o self-check está furado |

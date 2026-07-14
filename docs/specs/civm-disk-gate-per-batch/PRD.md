@@ -43,7 +43,7 @@ Hoje isso só é garantido no cold-start (`reclaim_before_admit`, VM-Off + fila,
 elevando o gate a invariante de **todo** início de batch.
 
 Valor: cada PR/re-run começa com disco previsível e suficiente (paridade com o
-pago), **sem** o workflow advoq precisar de qualquer step de disco — a conformidade
+pago), **sem** o workflow acme precisar de qualquer step de disco — a conformidade
 é 100% da box.
 
 ---
@@ -110,7 +110,7 @@ Por que esta opção:
   novo prestes a iniciar com `Running==0`".
 - **Reusa** `Invoke-StopAndCompact` + gate de 2 fases; muda só a **condição de
   disparo** na decisão pura + casos na decision-table — superfície mínima.
-- **Transparente** ao workflow advoq (paridade): nada muda no consumidor.
+- **Transparente** ao workflow acme (paridade): nada muda no consumidor.
 - Mantém `panic_compact` (`<18`, mata job) como fallback de emergência e
   `warn_clean` (`<28`, online, sem stop) como alívio **com job rodando**
   (`Running>0`) — entre batches (`Running==0`) o próprio gate compacta até 51.
@@ -199,7 +199,7 @@ Reverter = restaurar a condição anterior (`boundary_compact` @40 + `reclaim_be
 ## 10. Fora de escopo
 
 - Serialização transparente de docker-heavy (lock) — relacionado à paridade do
-  **workflow advoq**, item à parte.
+  **workflow acme**, item à parte.
 - Pré-build/pull de imagens; cache durável.
 - Frescor TOTAL por job (clean-slate real) — só com VM-por-job (🧱,
   `PAID-CI-PARITY.md` §5).

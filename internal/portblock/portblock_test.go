@@ -11,8 +11,8 @@ import (
 
 const (
 	slotCmpx  = "cmpx"
-	slotVitae = "vitae"
-	slotAdvoq = "advoq"
+	slotPeer = "peer"
+	slotApp = "acme"
 )
 
 // noopFlock is a stand-in for syscall.Flock so unit tests never touch a real
@@ -36,16 +36,16 @@ func TestAllocateDistinctSlotsGetDisjointBases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Allocate(%q): %v", slotCmpx, err)
 	}
-	baseVitae, err := Allocate(opts, slotVitae)
+	basePeer, err := Allocate(opts, slotPeer)
 	if err != nil {
-		t.Fatalf("Allocate(%q): %v", slotVitae, err)
+		t.Fatalf("Allocate(%q): %v", slotPeer, err)
 	}
-	baseAdvoq, err := Allocate(opts, slotAdvoq)
+	baseApp, err := Allocate(opts, slotApp)
 	if err != nil {
-		t.Fatalf("Allocate(%q): %v", slotAdvoq, err)
+		t.Fatalf("Allocate(%q): %v", slotApp, err)
 	}
 
-	bases := []int{baseCmpx, baseVitae, baseAdvoq}
+	bases := []int{baseCmpx, basePeer, baseApp}
 	seen := map[int]string{}
 	for i, base := range bases {
 		if base < opts.BlockStart || base+opts.BlockSize > opts.WindowEnd {
@@ -64,11 +64,11 @@ func TestAllocateDistinctSlotsGetDisjointBases(t *testing.T) {
 	if baseCmpx != opts.BlockStart {
 		t.Fatalf("first base = %d, want %d", baseCmpx, opts.BlockStart)
 	}
-	if baseVitae != opts.BlockStart+opts.BlockSize {
-		t.Fatalf("second base = %d, want %d", baseVitae, opts.BlockStart+opts.BlockSize)
+	if basePeer != opts.BlockStart+opts.BlockSize {
+		t.Fatalf("second base = %d, want %d", basePeer, opts.BlockStart+opts.BlockSize)
 	}
-	if baseAdvoq != opts.BlockStart+2*opts.BlockSize {
-		t.Fatalf("third base = %d, want %d", baseAdvoq, opts.BlockStart+2*opts.BlockSize)
+	if baseApp != opts.BlockStart+2*opts.BlockSize {
+		t.Fatalf("third base = %d, want %d", baseApp, opts.BlockStart+2*opts.BlockSize)
 	}
 }
 
@@ -77,9 +77,9 @@ func slotForIndex(i int) string {
 	case 0:
 		return slotCmpx
 	case 1:
-		return slotVitae
+		return slotPeer
 	default:
-		return slotAdvoq
+		return slotApp
 	}
 }
 
@@ -92,7 +92,7 @@ func TestAllocateSameSlotIsSticky(t *testing.T) {
 	}
 	// Allocate a different slot in between to prove stickiness is by stored
 	// base, not by call order.
-	if _, err := Allocate(opts, slotVitae); err != nil {
+	if _, err := Allocate(opts, slotPeer); err != nil {
 		t.Fatalf("interleaved Allocate: %v", err)
 	}
 	second, err := Allocate(opts, slotCmpx)
@@ -114,10 +114,10 @@ func TestAllocateWindowExhausted(t *testing.T) {
 	if _, err := Allocate(opts, slotCmpx); err != nil {
 		t.Fatalf("Allocate first: %v", err)
 	}
-	if _, err := Allocate(opts, slotVitae); err != nil {
+	if _, err := Allocate(opts, slotPeer); err != nil {
 		t.Fatalf("Allocate second: %v", err)
 	}
-	_, err := Allocate(opts, slotAdvoq)
+	_, err := Allocate(opts, slotApp)
 	if !errors.Is(err, ErrPortWindowExhausted) {
 		t.Fatalf("third Allocate err = %v, want ErrPortWindowExhausted", err)
 	}
@@ -127,7 +127,7 @@ func TestAllocateRoundTripJSON(t *testing.T) {
 	opts := tempOptions(t)
 
 	want := map[string]int{}
-	for _, slot := range []string{slotCmpx, slotVitae, slotAdvoq} {
+	for _, slot := range []string{slotCmpx, slotPeer, slotApp} {
 		base, err := Allocate(opts, slot)
 		if err != nil {
 			t.Fatalf("Allocate(%q): %v", slot, err)
@@ -171,7 +171,7 @@ func TestAllocateRoundTripJSON(t *testing.T) {
 
 func TestAllocateDeterministicJSONOrder(t *testing.T) {
 	opts := tempOptions(t)
-	for _, slot := range []string{slotVitae, slotAdvoq, slotCmpx} {
+	for _, slot := range []string{slotPeer, slotApp, slotCmpx} {
 		if _, err := Allocate(opts, slot); err != nil {
 			t.Fatalf("Allocate(%q): %v", slot, err)
 		}
@@ -184,7 +184,7 @@ func TestAllocateDeterministicJSONOrder(t *testing.T) {
 	if err := json.Unmarshal(data, &allocations); err != nil {
 		t.Fatalf("unmarshal state: %v", err)
 	}
-	wantOrder := []string{slotAdvoq, slotCmpx, slotVitae} // sorted by slot
+	wantOrder := []string{slotApp, slotCmpx, slotPeer} // sorted by slot
 	if len(allocations) != len(wantOrder) {
 		t.Fatalf("got %d allocations, want %d", len(allocations), len(wantOrder))
 	}

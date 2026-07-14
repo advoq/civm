@@ -18,7 +18,7 @@ import (
 
 // AddOptions controls a single runner installation.
 type AddOptions struct {
-	Repo          string // "emersonbusson/vitae"
+	Repo          string // "other/peer"
 	Token         string // registration token (efêmero ~1h)
 	Short         string // suffix do diretorio: ~/actions-runner-<short>
 	Label         string // CSV de labels (default: "civm")
@@ -36,7 +36,7 @@ type AddOptions struct {
 // Label "civm" alinhado com nome do repo infra (auto-explicativo:
 // `runs-on: [self-hosted, civm]` em qualquer peer aponta pra
 // runner mantido pelo civm). Migracao 2026-05-10 substituiu label
-// legacy "vitae-ci" por "civm" em todos peers + runners.
+// legacy "legacy-ci" por "civm" em todos peers + runners.
 func DefaultOptions() AddOptions {
 	return AddOptions{
 		Label:         "civm",
@@ -88,7 +88,7 @@ func Add(ctx context.Context, opts AddOptions) ([]Result, error) {
 	tarball := fmt.Sprintf("https://github.com/actions/runner/releases/download/v%s/actions-runner-linux-x64-%s.tar.gz",
 		opts.RunnerVersion, opts.RunnerVersion)
 	url := fmt.Sprintf("https://github.com/%s", opts.Repo)
-	// Naming padrao: civm-<short>. Ex: civm-vitae, civm-advoq.
+	// Naming padrao: civm-<short>. Ex: civm-peer, civm-app.
 	// Para o proprio repo civm: convencao --short=self -> civm-self.
 	name := "civm-" + opts.Short
 	steps := []Step{
@@ -139,9 +139,9 @@ func Add(ctx context.Context, opts AddOptions) ([]Result, error) {
 			Description: "config.sh --unattended --labels " + opts.Label + " --name " + name,
 			WouldDo:     fmt.Sprintf("(cd %s && ./config.sh --unattended --url %s --token *** --labels %s --name %s --work _work --replace)", dir, url, opts.Label, name),
 			Apply: func(ctx context.Context) error {
-				_, err := opts.RunFn(ctx, filepath.Join(dir, "config.sh"),
-					"--unattended", "--url", url, "--token", opts.Token,
-					"--labels", opts.Label, "--name", name, "--work", "_work", "--replace")
+				_, err := opts.RunFn(ctx, "sh", "-c", fmt.Sprintf(
+					"cd %q && ./config.sh --unattended --url %q --token %q --labels %q --name %q --work _work --replace",
+					dir, url, opts.Token, opts.Label, name))
 				return err
 			},
 		},
@@ -150,7 +150,7 @@ func Add(ctx context.Context, opts AddOptions) ([]Result, error) {
 			Description: "sudo svc.sh install " + opts.RunAsUser,
 			WouldDo:     fmt.Sprintf("(cd %s && sudo ./svc.sh install %s)", dir, opts.RunAsUser),
 			Apply: func(ctx context.Context) error {
-				_, err := opts.RunFn(ctx, "sudo", filepath.Join(dir, "svc.sh"), "install", opts.RunAsUser)
+				_, err := opts.RunFn(ctx, "sudo", "sh", "-c", fmt.Sprintf("cd %q && ./svc.sh install %q", dir, opts.RunAsUser))
 				return err
 			},
 		},
@@ -159,7 +159,7 @@ func Add(ctx context.Context, opts AddOptions) ([]Result, error) {
 			Description: "sudo svc.sh start",
 			WouldDo:     fmt.Sprintf("(cd %s && sudo ./svc.sh start)", dir),
 			Apply: func(ctx context.Context) error {
-				_, err := opts.RunFn(ctx, "sudo", filepath.Join(dir, "svc.sh"), "start")
+				_, err := opts.RunFn(ctx, "sudo", "sh", "-c", fmt.Sprintf("cd %q && ./svc.sh start", dir))
 				return err
 			},
 		},
@@ -306,7 +306,7 @@ func Remove(ctx context.Context, opts RemoveOptions) ([]Result, error) {
 			Description: "sudo svc.sh uninstall",
 			WouldDo:     fmt.Sprintf("(cd %s && sudo ./svc.sh uninstall)", dir),
 			Apply: func(ctx context.Context) error {
-				_, err := opts.RunFn(ctx, "sudo", filepath.Join(dir, "svc.sh"), "uninstall")
+				_, err := opts.RunFn(ctx, "sudo", "sh", "-c", fmt.Sprintf("cd %q && ./svc.sh uninstall", dir))
 				return err
 			},
 		},
@@ -315,7 +315,7 @@ func Remove(ctx context.Context, opts RemoveOptions) ([]Result, error) {
 			Description: "config.sh remove --token=*** (deregister no GitHub)",
 			WouldDo:     fmt.Sprintf("%s remove --token=***", filepath.Join(dir, "config.sh")),
 			Apply: func(ctx context.Context) error {
-				_, err := opts.RunFn(ctx, filepath.Join(dir, "config.sh"), "remove", "--token", opts.Token)
+				_, err := opts.RunFn(ctx, "sh", "-c", fmt.Sprintf("cd %q && ./config.sh remove --token %q", dir, opts.Token))
 				return err
 			},
 		},

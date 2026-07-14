@@ -13,7 +13,7 @@ import (
 
 // RestartOptions controls a runner restart.
 type RestartOptions struct {
-	Short          string        // suffix curto (ex: cmpx, vitae, advoq)
+	Short          string        // suffix curto (ex: cmpx, peer, acme)
 	Unit           string        // explicit systemd unit name (sobreescreve Short)
 	VerifyDelay    time.Duration // sleep entre restart e is-active check (default 3s)
 	IdleProbeDelay time.Duration

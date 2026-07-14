@@ -17,7 +17,7 @@ permissions:
 jobs:
   changes:
     name: Detect changes
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     outputs:
       full: ${{ steps.filter.outputs.full }}
       docs: ${{ steps.filter.outputs.docs }}
@@ -36,7 +36,7 @@ jobs:
     name: Validate templates and runbooks
     needs: changes
     if: needs.changes.outputs.docs == 'true' || needs.changes.outputs.full == 'true'
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -104,7 +104,7 @@ jobs:
     name: Build + test civmctl
     needs: changes
     if: needs.changes.outputs.full == 'true'
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -127,10 +127,17 @@ jobs:
 
       - name: Secret pattern scan
         run: |
-          if grep -RInE --exclude-dir=.git 'ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}' .; then
+          # High-confidence secret shapes (expand when going public; false positives
+          # must be fixed by redaction, not by weakening the pattern).
+          if grep -RInE --exclude-dir=.git \
+            'ghp_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9_]{20,}|ghu_[A-Za-z0-9_]{20,}|ghs_[A-Za-z0-9_]{20,}|ghr_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}' \
+            .; then
             exit 1
           fi
-          if grep -RInE --exclude-dir=.git -- '-----BEGIN (OPENSSH|RSA|EC|DSA) PRIVATE KEY-----' . | grep -v '`-----BEGIN' | grep -v '.github/workflows/ci.yml:'; then
+          if grep -RInE --exclude-dir=.git -- '-----BEGIN (OPENSSH|RSA|EC|DSA) PRIVATE KEY-----' . \
+            | grep -v '`-----BEGIN' \
+            | grep -v '.github/workflows/ci.yml:' \
+            | grep -v 'runbooks/CI-GITHUB-APP-SETUP.md:'; then
             exit 1
           fi
 
@@ -183,8 +190,11 @@ jobs:
   self-hosted-smoke:
     name: Self-hosted runner smoke (civm)
     needs: changes
-    if: needs.changes.outputs.full == 'true'
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
+    # Optional lab gate: set repository variable CIVM_SELF_HOSTED_SMOKE=true
+    # and register a runner with labels self-hosted,civm. Default off for
+    # public GitHub-hosted free CI.
+    if: needs.changes.outputs.full == 'true' && vars.CIVM_SELF_HOSTED_SMOKE == 'true'
+    runs-on: [self-hosted, civm]
     steps:
       - uses: actions/checkout@v4
 
@@ -292,7 +302,7 @@ jobs:
     name: CI
     needs: [changes, validate-templates, build-civmctl, self-hosted-smoke]
     if: always()
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","civm"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - name: Aggregate
         env:
@@ -360,5 +370,8 @@ jobs:
           fi
 
           require_success build-civmctl "$BUILD_RESULT"
-          require_success self-hosted-smoke "$SMOKE_RESULT"
+          # Optional lab job: only enforce when it actually ran (not skipped).
+          if [ "$SMOKE_RESULT" != "skipped" ] && [ "$SMOKE_RESULT" != "" ]; then
+            require_success self-hosted-smoke "$SMOKE_RESULT"
+          fi
           echo "::notice::CI passed."

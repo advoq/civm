@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	repoCivm  = "advoq/civm"
-	repoVitae = "emersonbusson/vitae"
+	repoCivm  = "acme/civm"
+	repoVitae = "other/peer"
 
-	unitCivm  = "actions.runner.advoq-civm.runner-1.service"
-	unitVitae = "actions.runner.emersonbusson-vitae.runner-2.service"
+	unitCivm  = "actions.runner.acme-civm.runner-1.service"
+	unitVitae = "actions.runner.other-peer.runner-2.service"
 
 	fixedTime = "2026-05-29T12:00:00Z"
 )

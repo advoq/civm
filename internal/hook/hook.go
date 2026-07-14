@@ -315,7 +315,7 @@ func Run(ctx context.Context, opts Options) Result {
 // cacheTrimIsIdle reporta se é seguro trimar os caches compartilhados: true só
 // quando NENHUM outro runner tem atividade. As atividades do próprio runner
 // (Runner.Worker + o build deste job) são excluídas pelo prefixo do runner dir
-// (ownDirs, já com separador final para não casar advoq em advoq-org). Fail-safe:
+// (ownDirs, já com separador final para não casar acme em acme-org). Fail-safe:
 // sem probe, sem como excluir self, ou erro de probe → false (não trima).
 func cacheTrimIsIdle(ctx context.Context, opts Options, ownDirs []string) bool {
 	if opts.ActivityFn == nil || len(ownDirs) == 0 {
@@ -571,8 +571,9 @@ func ensureWorkspaceStub(opts Options, root string) Action {
 	}
 	parts := strings.Split(filepath.ToSlash(repo), "/")
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		// Known org runner default when env is empty after full clean.
-		parts = []string{"advoq", "advoq"}
+		// Generic stub when env is empty after full clean (org runners often
+		// lack GITHUB_REPOSITORY until the job sets it). Not a product name.
+		parts = []string{"workspace", "job"}
 	}
 	path := filepath.Join(root, parts[0], parts[1])
 	a.Path = path
@@ -586,7 +587,7 @@ func ensureWorkspaceStub(opts Options, root string) Action {
 
 // activeWorkspaceEntry returns the top-level entry under root that contains the
 // active GITHUB_WORKSPACE, or "" when workspace is empty or not under root.
-// Example: root=.../_work, ws=.../_work/advoq/advoq -> "advoq". Used at
+// Example: root=.../_work, ws=.../_work/acme/app -> "acme". Used at
 // job-started so disk-pressure cleanup never deletes the workspace the runner
 // just created for the starting job.
 func activeWorkspaceEntry(root, workspace string) string {
@@ -766,9 +767,9 @@ func orphanIDsFromInspect(inspectOut string) []string {
 
 // isCIOrphan é o predicado puro do reaper: um container é órfão de CI quando
 //
-//	(a) seu project compose começa com DefaultCIOrphanProjectPrefix ("advoq")
+//	(a) seu project compose começa com DefaultCIOrphanProjectPrefix ("acme")
 //	    — sinal PRIMÁRIO; o `devctl ci up` nomeia o project "<slot>-<run_id>"
-//	    com fallback "advoq", e o compose committed usa name: advoq, então o stack
+//	    com fallback "acme", e o compose committed usa name: acme, então o stack
 //	    inteiro carrega esse prefixo independente das portas; OU
 //	(b) ele publica uma das host ports FIXAS de CI conhecidas
 //	    (DefaultCIFixedHostPorts) — defesa em profundidade p/ um container que

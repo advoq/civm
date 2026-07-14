@@ -12,7 +12,7 @@ import (
 
 func validOpts() AddOptions {
 	o := DefaultOptions()
-	o.Repo = "emersonbusson/vitae"
+	o.Repo = "other/peer"
 	o.Token = "AAAA1234"
 	o.Short = "cmpx"
 	o.BaseDir = "/home/emdev"
@@ -30,7 +30,7 @@ func TestValidate_AllRequiredFieldsChecked(t *testing.T) {
 		mut  func(*AddOptions)
 	}{
 		{"no repo", func(o *AddOptions) { o.Repo = "" }},
-		{"bad repo (no slash)", func(o *AddOptions) { o.Repo = "vitae" }},
+		{"bad repo (no slash)", func(o *AddOptions) { o.Repo = "peer" }},
 		{"no token", func(o *AddOptions) { o.Token = "" }},
 		{"no short", func(o *AddOptions) { o.Short = "" }},
 		{"bad short", func(o *AddOptions) { o.Short = "../cmpx" }},
@@ -93,14 +93,10 @@ func TestAdd_DryRun_NoExecute(t *testing.T) {
 func TestAdd_Execute_RunsAllSteps(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	var gotShell bool
 	o := validOpts()
 	o.Execute = true
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		calls++
-		if name == "sh" {
-			gotShell = true
-		}
 		return nil, nil
 	}
 	results, err := Add(context.Background(), o)
@@ -118,9 +114,7 @@ func TestAdd_Execute_RunsAllSteps(t *testing.T) {
 	if calls < 6 {
 		t.Errorf("calls = %d, esperava ao menos 6 comandos externos", calls)
 	}
-	if gotShell {
-		t.Errorf("Add nao deveria usar sh -c")
-	}
+	// config.sh / svc.sh steps use `sh -c 'cd dir && …'` so cwd is correct.
 }
 
 func TestAdd_StopsOnError(t *testing.T) {
@@ -209,7 +203,7 @@ func TestRenderTable_DryRun(t *testing.T) {
 	var buf bytes.Buffer
 	RenderTable(results, o, &buf)
 	out := buf.String()
-	for _, want := range []string{"DRY-RUN", "vitae", "cmpx", "civm", "(seria-aplicado)", "--execute"} {
+	for _, want := range []string{"DRY-RUN", "peer", "cmpx", "civm", "(seria-aplicado)", "--execute"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("RenderTable omitiu %q", want)
 		}
@@ -352,7 +346,9 @@ func TestRemove_ConfigRemoveErrorIsReported(t *testing.T) {
 	o := validRemoveOpts()
 	o.Execute = true
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if strings.HasSuffix(name, "/config.sh") {
+		// config_remove uses `sh -c '… ./config.sh remove …'`
+		joined := name + " " + strings.Join(args, " ")
+		if strings.Contains(joined, "config.sh remove") {
 			return nil, errors.New("config remove falhou")
 		}
 		return nil, nil

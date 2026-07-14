@@ -67,8 +67,8 @@ func TestBootstrapEverythingHelpers(t *testing.T) {
 
 func TestSplitCSV(t *testing.T) {
 	t.Parallel()
-	got := splitCSV("advoq/civm, emersonbusson/vitae,,")
-	if len(got) != 2 || got[0] != "advoq/civm" || got[1] != "emersonbusson/vitae" {
+	got := splitCSV("acme/civm, other/peer,,")
+	if len(got) != 2 || got[0] != "acme/civm" || got[1] != "other/peer" {
 		t.Fatalf("splitCSV = %#v", got)
 	}
 }
@@ -83,7 +83,7 @@ func TestConfigureDoctorReposModes(t *testing.T) {
 		{raw: "auto", wantInfer: true},
 		{raw: "none", wantInfer: false, wantRepos: nil},
 		{raw: "", wantInfer: false, wantRepos: nil},
-		{raw: "default", wantInfer: false, wantRepos: []string{"advoq/civm", "emersonbusson/vitae", "advoq/advoq"}},
+		{raw: "default", wantInfer: false, wantRepos: nil},
 		{raw: "acme/api, acme/web", wantInfer: false, wantRepos: []string{"acme/api", "acme/web"}},
 	}
 	for _, c := range cases {
@@ -109,10 +109,10 @@ func TestConfigureRunnerWatchdogReposModes(t *testing.T) {
 	}
 
 	opts = runner.DefaultWatchdogOptions()
-	if err := configureRunnerWatchdogRepos("advoq/civm, emersonbusson/vitae", &opts); err != nil {
+	if err := configureRunnerWatchdogRepos("acme/civm, other/peer", &opts); err != nil {
 		t.Fatalf("list err = %v", err)
 	}
-	if opts.InferRepos || strings.Join(opts.Repos, ",") != "advoq/civm,emersonbusson/vitae" {
+	if opts.InferRepos || strings.Join(opts.Repos, ",") != "acme/civm,other/peer" {
 		t.Fatalf("list = infer=%v repos=%v", opts.InferRepos, opts.Repos)
 	}
 
@@ -176,12 +176,12 @@ func TestHookEventFromArgv0(t *testing.T) {
 func FuzzSplitCSV(f *testing.F) {
 	seeds := []string{
 		"",
-		"advoq/civm",
-		"advoq/civm,vitae/x",
+		"acme/civm",
+		"acme/civm,other/x",
 		",,",
-		" advoq/civm , vitae/x ",
+		" acme/civm , other/x ",
 		"a,,b,,,c",
-		"\tadvoq/civm\n",
+		"\tacme/civm\n",
 		"single-no-slash",
 	}
 	for _, s := range seeds {

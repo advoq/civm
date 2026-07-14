@@ -10,7 +10,7 @@ import (
 // called by each workRoots add(). This is sensitive because it is pure string
 // work in a hot path.
 func BenchmarkSafeWorkRoot(b *testing.B) {
-	valid := "/home/emdev/actions-runner-advoq/_work"
+	valid := "/home/emdev/actions-runner-acme/_work"
 	invalid := "../home/actions-runner/_work"
 	b.ResetTimer()
 	for range b.N {
@@ -72,7 +72,7 @@ func BenchmarkAppendLog(b *testing.B) {
 	}
 	res := Result{
 		Event: EventJobCompleted, Decision: DecisionCleanupApplied,
-		Repository: "advoq/civm", RunID: "12345",
+		Repository: "acme/civm", RunID: "12345",
 		DiskUsedPct: 42,
 		Actions: []Action{
 			{Name: "work_root", Path: "/home/x/actions-runner/_work", Executed: true},
