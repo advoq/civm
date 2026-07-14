@@ -136,27 +136,34 @@ function Get-RunCount {
     return $total
 }
 
-# Get-PrActivity: agrupa os runs de box ATIVOS (queued+in_progress) do acme/app por
-# CONTEXTO — um PR (pr-<num>) ou um push de branch (branch-<ref>). Retorna um hashtable
-# id -> contagem de runs ativos. E o que a fila FIFO agrupa (todos os checks de um
-# contexto antes do proximo). Falha de API -> pula o status (fail-safe; o tick observe so
-# loga). per_page=100 + os 2 status; idade pela atividade (updated_at), igual Get-RunCount.
+# Get-PrActivity: agrupa runs ATIVOS (queued+in_progress) de TODOS os $Repos por
+# CONTEXTO — um PR (pr-<num>) ou um push de branch (branch-<ref>). Retorna hashtable
+# id -> contagem. Falha de API por repo/status -> pula (fail-safe; observe so loga).
 function Get-PrActivity {
     param([int]$MaxAgeHours = 12)
     $cutoff = (Get-Date).ToUniversalTime().AddHours(-$MaxAgeHours)
     $counts = @{}
-    $token = Get-GhTokenForOwner -Owner 'acme'
-    $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'civm-orchestrator'; Accept = 'application/vnd.github+json' }
-    foreach ($status in @('queued', 'in_progress')) {
-        $uri = "https://api.github.com/repos/acme/app/actions/runs?status=$status&per_page=100"
-        try { $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20 } catch { continue }
-        foreach ($run in $resp.workflow_runs) {
-            if ($run.status -ne $status) { continue }
-            $tsRaw = if ($run.updated_at) { $run.updated_at } else { $run.created_at }
-            if ([datetime]::Parse([string]$tsRaw).ToUniversalTime() -lt $cutoff) { continue }
-            $ctx = if ($run.pull_requests -and @($run.pull_requests).Count -gt 0) { 'pr-' + [int]$run.pull_requests[0].number } else { 'branch-' + [string]$run.head_branch }
-            if (-not $counts.ContainsKey($ctx)) { $counts[$ctx] = 0 }
-            $counts[$ctx]++
+    if (-not $Repos -or @($Repos).Count -eq 0) { return $counts }
+    foreach ($repo in $Repos) {
+        $owner = $repo.Split('/')[0]
+        try {
+            $token = Get-GhTokenForOwner -Owner $owner
+        } catch {
+            Write-OrcLog 'pr_activity_token_missing' @{ repo = $repo; error = "$($_.Exception.Message)" } 'WARN'
+            continue
+        }
+        $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'civm-orchestrator'; Accept = 'application/vnd.github+json' }
+        foreach ($status in @('queued', 'in_progress')) {
+            $uri = "https://api.github.com/repos/$repo/actions/runs?status=$status&per_page=100"
+            try { $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20 } catch { continue }
+            foreach ($run in $resp.workflow_runs) {
+                if ($run.status -ne $status) { continue }
+                $tsRaw = if ($run.updated_at) { $run.updated_at } else { $run.created_at }
+                if ([datetime]::Parse([string]$tsRaw).ToUniversalTime() -lt $cutoff) { continue }
+                $ctx = if ($run.pull_requests -and @($run.pull_requests).Count -gt 0) { 'pr-' + [int]$run.pull_requests[0].number } else { 'branch-' + [string]$run.head_branch }
+                if (-not $counts.ContainsKey($ctx)) { $counts[$ctx] = 0 }
+                $counts[$ctx]++
+            }
         }
     }
     return $counts
@@ -172,69 +179,76 @@ function Get-PrActivity {
 function Get-ContextHeadSha {
     param([Parameter(Mandatory)][string]$ContextId)
     if ([string]::IsNullOrWhiteSpace($ContextId)) { return '' }
+    if (-not $Repos -or @($Repos).Count -eq 0) { return '' }
     try {
-        $token = Get-GhTokenForOwner -Owner 'acme'
-        $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'civm-orchestrator'; Accept = 'application/vnd.github+json' }
+        # Try each watched repo until a tip is found (multi-repo lab).
+        foreach ($repo in $Repos) {
+            $owner = $repo.Split('/')[0]
+            try {
+                $token = Get-GhTokenForOwner -Owner $owner
+            } catch {
+                Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; repo = $repo; via = 'token'; error = "$($_.Exception.Message)" } 'WARN'
+                continue
+            }
+            $headers = @{ Authorization = "Bearer $token"; 'User-Agent' = 'civm-orchestrator'; Accept = 'application/vnd.github+json' }
 
-        # actions/runs lista o mais recente primeiro; head_sha e o tip do workflow
-        # daquele PR/branch (mesmo SHA que o reaper de superseded-sha usa).
-        $runsUri = 'https://api.github.com/repos/acme/app/actions/runs?per_page=50'
-        $runsResp = $null
-        try {
-            $runsResp = Invoke-RestMethod -Uri $runsUri -Headers $headers -Method Get -TimeoutSec 20
-        }
-        catch {
-            Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; via = 'actions_runs'; error = "$($_.Exception.Message)" } 'WARN'
-        }
+            # actions/runs: primary (fine-grained PAT usually has actions:read).
+            $runsUri = "https://api.github.com/repos/$repo/actions/runs?per_page=50"
+            $runsResp = $null
+            try {
+                $runsResp = Invoke-RestMethod -Uri $runsUri -Headers $headers -Method Get -TimeoutSec 20
+            }
+            catch {
+                Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; repo = $repo; via = 'actions_runs'; error = "$($_.Exception.Message)" } 'WARN'
+            }
 
-        if ($ContextId -match '^pr-(\d+)$') {
-            $prNum = [int]$Matches[1]
-            if ($null -ne $runsResp) {
-                foreach ($run in @($runsResp.workflow_runs)) {
-                    $matched = $false
-                    foreach ($pr in @($run.pull_requests)) {
-                        if ($null -ne $pr -and [int]$pr.number -eq $prNum) { $matched = $true; break }
+            if ($ContextId -match '^pr-(\d+)$') {
+                $prNum = [int]$Matches[1]
+                if ($null -ne $runsResp) {
+                    foreach ($run in @($runsResp.workflow_runs)) {
+                        $matched = $false
+                        foreach ($pr in @($run.pull_requests)) {
+                            if ($null -ne $pr -and [int]$pr.number -eq $prNum) { $matched = $true; break }
+                        }
+                        if (-not $matched) { continue }
+                        $sha = [string]$run.head_sha
+                        if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
                     }
-                    if (-not $matched) { continue }
-                    $sha = [string]$run.head_sha
+                }
+                try {
+                    $uri = "https://api.github.com/repos/$repo/pulls/$prNum"
+                    $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
+                    $sha = [string]$resp.head.sha
                     if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
                 }
+                catch {
+                    Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; repo = $repo; via = 'pulls'; error = "$($_.Exception.Message)" } 'WARN'
+                }
+                continue
             }
-            # Fallback: PAT com pull_requests:read (gh auth / classic repo scope).
-            try {
-                $uri = "https://api.github.com/repos/acme/app/pulls/$prNum"
-                $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
-                $sha = [string]$resp.head.sha
-                if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
-            }
-            catch {
-                Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; via = 'pulls'; error = "$($_.Exception.Message)" } 'WARN'
-            }
-            return ''
-        }
 
-        if ($ContextId -match '^branch-(.+)$') {
-            $branchName = [string]$Matches[1]
-            if ($null -ne $runsResp) {
-                foreach ($run in @($runsResp.workflow_runs)) {
-                    if ("$($run.head_branch)" -ne $branchName) { continue }
-                    $sha = [string]$run.head_sha
-                    if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
+            if ($ContextId -match '^branch-(.+)$') {
+                $branchName = [string]$Matches[1]
+                if ($null -ne $runsResp) {
+                    foreach ($run in @($runsResp.workflow_runs)) {
+                        if ("$($run.head_branch)" -ne $branchName) { continue }
+                        $sha = [string]$run.head_sha
+                        if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
+                    }
+                }
+                try {
+                    $branch = [uri]::EscapeDataString($branchName)
+                    $uri = "https://api.github.com/repos/$repo/commits?sha=$branch&per_page=1"
+                    $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
+                    if ($resp -and @($resp).Count -gt 0) {
+                        $sha = [string]$resp[0].sha
+                        if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
+                    }
+                }
+                catch {
+                    Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; repo = $repo; via = 'commits'; error = "$($_.Exception.Message)" } 'WARN'
                 }
             }
-            try {
-                $branch = [uri]::EscapeDataString($branchName)
-                $uri = "https://api.github.com/repos/acme/app/commits?sha=$branch&per_page=1"
-                $resp = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20
-                if ($resp -and @($resp).Count -gt 0) {
-                    $sha = [string]$resp[0].sha
-                    if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
-                }
-            }
-            catch {
-                Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; via = 'commits'; error = "$($_.Exception.Message)" } 'WARN'
-            }
-            return ''
         }
     }
     catch {
@@ -350,16 +364,26 @@ function Invoke-GuestFullClean {
     # STUB _work/<owner>/<repo>: o runner invoca job-started/job-completed com
     # WorkingDirectory=GITHUB_WORKSPACE. Se o dir nao existe (apos full clean),
     # o Process.Start falha com "No such file or directory" ANTES do hook rodar
-    # (CI Router fail em 9s, acme#1423 2026-07-09). Re-cria stubs vazios dos
-    # owners que a box serve (acme org runner).
-    $remote = @'
+    # (CI Router fail if cwd missing). Re-create empty stubs for
+    # owners/repos that the box serves (from $Repos).
+    $stubLines = @()
+    foreach ($repo in @($Repos)) {
+        if ([string]::IsNullOrWhiteSpace($repo)) { continue }
+        # owner/name path under runner _work
+        $stubLines += ('  mkdir -p "$w/{0}" 2>/dev/null || true' -f ($repo -replace '"', ''))
+    }
+    if ($stubLines.Count -eq 0) {
+        $stubLines += '  # no Repos configured — skip workspace stubs'
+    }
+    $stubs = ($stubLines -join "`n")
+    $remote = @"
 rm -rf ~/.cache/* 2>/dev/null
 rm -rf ~/actions-runner*/_diag/* 2>/dev/null
 for w in ~/actions-runner*/_work; do
-  [ -d "$w" ] || continue
-  find "$w" -maxdepth 1 -mindepth 1 ! -name _tool -exec rm -rf {} + 2>/dev/null
-  # stubs para hooks do runner (cwd deve existir antes do job-started)
-  mkdir -p "$w/acme/app" 2>/dev/null || true
+  [ -d "`$w" ] || continue
+  find "`$w" -maxdepth 1 -mindepth 1 ! -name _tool -exec rm -rf {} + 2>/dev/null
+  # stubs for runner hooks (cwd must exist before job-started)
+$stubs
 done
 sudo journalctl --vacuum-size=50M >/dev/null 2>&1
 sudo rm -rf /tmp/* /var/tmp/* 2>/dev/null
@@ -367,7 +391,7 @@ sudo docker system prune -af --volumes >/dev/null 2>&1
 sudo docker builder prune -af >/dev/null 2>&1
 sudo fstrim -av >/dev/null 2>&1
 df -BG --output=avail / | tail -1 | tr -dc 0-9
-'@
+"@
     $free = Invoke-GuestSsh -Command $remote
     if ($script:LastGuestSshOk) { Write-OrcLog 'guest_full_clean' @{ free_after = "$free" } }
     else { Write-OrcLog 'guest_full_clean_warn' @{ error = "$free" } 'WARN' }
@@ -381,7 +405,7 @@ function Invoke-GuestReapRuns {
 set -a
 [ -f /etc/civm/run-reaper.env ] && . /etc/civm/run-reaper.env
 set +a
-repos="${CIVM_REAPER_REPOS:-acme/app}"
+repos="${CIVM_REAPER_REPOS:-}"
 civmctl reap-runs --execute --repos="$repos" 2>&1 | tail -8
 '@
     $out = Invoke-GuestSsh -Command $remote
@@ -467,6 +491,8 @@ function Invoke-StopAndCompact {
                 Write-OrcLog 'reclaim_abort_vm_not_off' @{ reason = $Reason } 'ERROR'
                 return
             }
+            # Brief settle so vmms releases the VHDX after Off (see Mount retry).
+            Start-Sleep -Seconds 5
         }
         # Gate AUTORITATIVO pos-Off (#106): re-mede a folga real (VMRS liberado).
         $vBeforeGB = Get-VFreeGB
@@ -477,7 +503,31 @@ function Invoke-StopAndCompact {
             Write-OrcLog 'reclaim_skip_insufficient_slack' @{ reason = $Reason; v_free_after_off_gb = $vBeforeGB; hard_floor_gb = $ReclaimHardFloorGB; scratch_budget_gb = $ReclaimScratchBudgetGB } 'ERROR'
             return
         }
-        Mount-VHD -Path $VhdxPath -ReadOnly -ErrorAction Stop
+        # Hyper-V race: Get-VM State=Off can precede VHDX release (0x80070020 on
+        # Mount-VHD). Settle + retry before treating as hard failure.
+        $mounted = $false
+        $mountErr = $null
+        for ($attempt = 1; $attempt -le 8; $attempt++) {
+            Start-Sleep -Seconds ([Math]::Min(2 * $attempt, 15))
+            try {
+                $vhdInfo = Get-VHD -Path $VhdxPath -ErrorAction Stop
+                if ($vhdInfo.Attached) {
+                    Write-OrcLog 'reclaim_vhdx_still_attached' @{ reason = $Reason; attempt = $attempt } 'WARN'
+                    continue
+                }
+                Mount-VHD -Path $VhdxPath -ReadOnly -ErrorAction Stop
+                $mounted = $true
+                break
+            }
+            catch {
+                $mountErr = $_.Exception.Message
+                Write-OrcLog 'reclaim_mount_retry' @{ reason = $Reason; attempt = $attempt; error = "$mountErr" } 'WARN'
+            }
+        }
+        if (-not $mounted) {
+            Write-OrcLog 'reclaim_mount_failed' @{ reason = $Reason; error = "$mountErr" } 'ERROR'
+            return
+        }
         try { Optimize-VHD -Path $VhdxPath -Mode Full -ErrorAction Stop }
         finally { Dismount-VHD -Path $VhdxPath -ErrorAction SilentlyContinue }
         $vhd = Get-VHD -Path $VhdxPath
