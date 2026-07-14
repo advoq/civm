@@ -13,7 +13,15 @@ go build -o /tmp/civmctl ./cmd/civmctl
 ```
 
 CI also runs `go vet`, `golangci-lint`, `govulncheck`, a secret-pattern scan,
-and a coverage gate on `./internal/...` (≥80% per package).
+**gitleaks** (working tree + git history), and a coverage gate on
+`./internal/...` (≥80% per package).
+
+Locally (optional, if you have [gitleaks](https://github.com/gitleaks/gitleaks) installed):
+
+```bash
+gitleaks detect --source . --no-git   # working tree
+gitleaks detect --source .           # + git history
+```
 
 ## Pull requests
 

@@ -32,14 +32,17 @@ Paths and *names* of env vars / GitHub Actions secrets are OK.
 
 **Before flipping the repo to public:**
 
-1. Confirm CI **Secret pattern scan** is green on default branch.
+1. Confirm CI **Secret pattern scan** and **Gitleaks** are green on default branch.
 2. Keep lab session logs gitignored and **local-only**: `MEMORY.md`, `validation.md`
    (agents append here; never publish). `vm.md` may stay tracked as generic runner inventory.
 3. Prefer `ubuntu-latest` for public free CI (default in this repo). Optional lab smoke:
    set repository variable `CIVM_SELF_HOSTED_SMOKE=true` when a `civm` runner exists.
 4. Never commit scratch scripts that `echo` registration tokens or hardcode guest IPs.
-5. History: if a real token ever landed in a commit, **rotate** it; rewriting public history is hard once mirrored.
+5. History: gitleaks scans full git history on every full CI run. If a real token is
+   ever found, **rotate** it immediately; rewriting public history is hard once mirrored.
 6. Module path is still `github.com/advoq/civm` until the Go module / GitHub transfer is intentional.
+7. Host secrets (`C:\ProgramData\civm\gh-token-*.txt`, SSH under `ProgramData\civm\ssh`)
+   must never be copied into this repository.
 
 ## Threat model
 

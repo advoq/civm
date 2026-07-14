@@ -107,6 +107,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history for gitleaks
 
       - uses: actions/setup-go@v5
         with:
@@ -127,8 +129,8 @@ jobs:
 
       - name: Secret pattern scan
         run: |
-          # High-confidence secret shapes (expand when going public; false positives
-          # must be fixed by redaction, not by weakening the pattern).
+          # High-confidence secret shapes (defense in depth with gitleaks below).
+          # False positives must be fixed by redaction, not by weakening the pattern.
           if grep -RInE --exclude-dir=.git \
             'ghp_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9_]{20,}|ghu_[A-Za-z0-9_]{20,}|ghs_[A-Za-z0-9_]{20,}|ghr_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}' \
             .; then
@@ -140,6 +142,20 @@ jobs:
             | grep -v 'runbooks/CI-GITHUB-APP-SETUP.md:'; then
             exit 1
           fi
+
+      - name: Gitleaks (tree + git history)
+        # Use the open-source CLI directly (gitleaks-action requires a paid
+        # GITLEAKS_LICENSE on organization repos).
+        run: |
+          set -euo pipefail
+          ver=v8.24.0
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/${ver}/gitleaks_${ver#v}_linux_x64.tar.gz" \
+            | tar -xz -C /tmp gitleaks
+          /tmp/gitleaks version
+          # Working tree (no .git needed)
+          /tmp/gitleaks detect --source . --no-git --redact --exit-code 1
+          # Full git history (shallow clone is enough for PR tip; full history on push)
+          /tmp/gitleaks detect --source . --redact --exit-code 1 --log-opts="--all"
 
       - name: go test (race + cover)
         run: go test -race -count=1 -coverprofile=coverage.out ./...
