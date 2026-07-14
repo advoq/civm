@@ -222,7 +222,10 @@ function Get-ContextHeadSha {
                     if (-not [string]::IsNullOrWhiteSpace($sha)) { return $sha }
                 }
                 catch {
-                    Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; repo = $repo; via = 'pulls'; error = "$($_.Exception.Message)" } 'WARN'
+                    # 404 = PR not in this repo (multi-repo lab); try next Repos entry.
+                    if ("$($_.Exception.Message)" -notmatch '404|N.o Localizado|Not Found') {
+                        Write-OrcLog 'tip_fetch_failed' @{ ctx = $ContextId; repo = $repo; via = 'pulls'; error = "$($_.Exception.Message)" } 'WARN'
+                    }
                 }
                 continue
             }
