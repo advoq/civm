@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.6](https://github.com/advoq/civm/compare/v1.22.5...v1.22.6) (2026-07-14)
+
+
+### Bug Fixes
+
+* **orchestrator:** drive PR queue from Repos and retry Mount-VHD ([#168](https://github.com/advoq/civm/issues/168)) ([76ef1bf](https://github.com/advoq/civm/commit/76ef1bf605b3bba692902bbca98e1b531a544457))
+
 ## [1.22.5](https://github.com/advoq/civm/compare/v1.22.4...v1.22.5) (2026-07-14)
 
 
