@@ -2,7 +2,7 @@
 # codigo deployado e o MESMO que o teste exercita). Funcao pura -> testavel sem
 # GitHub nem Hyper-V.
 #
-# O problema: o org runner unico ja serializa o advoq em job-FIFO (nunca 2 jobs ao
+# O problema: o org runner unico ja serializa o acme em job-FIFO (nunca 2 jobs ao
 # mesmo tempo), mas os jobs de PRs diferentes INTERCALAM na fila. O user quer
 # PR-grouping estrito: todos os checks do PR-A rodam, a box LIMPA TUDO + COMPACTA
 # (V:~67), e so entao o PR-B — pra cada PR iniciar com o SSD no maximo, igual o pago.

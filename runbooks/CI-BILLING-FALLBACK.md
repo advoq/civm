@@ -4,8 +4,8 @@
 > - [`MULTI-PROJECT-RUNNER.md`](./MULTI-PROJECT-RUNNER.md) — runner
 >   self-hosted compartilhado entre N repos; setup multi-runner;
 >   isolamento por job. **Doc do admin da VM**.
-> - [`ADVOQ-ADOPTION.md`](./ADVOQ-ADOPTION.md) — passo-a-passo "1
->   comando" pra adotar civm em peer novo (template advoq).
+> - [`ORG-RUNNER-ADOPTION.md`](./ORG-RUNNER-ADOPTION.md) — passo-a-passo "1
+>   comando" pra adotar civm em peer novo (template acme).
 > - `civmctl billing-status` — detector Go canonico no proprio civm
 >   (zero dep cross-repo, zero PAT, usa GITHUB_TOKEN auto-injetado).
 >   Cada peer pode chamar diretamente sem importar nada externo.
@@ -37,8 +37,8 @@
 > **Camada 2 — manual:** quando a Camada 1 nao bastar (ex.: civm
 > offline OU peer novo sem workflow refatorado), o admin roda o gate
 > local do peer e posta check manual informativo na PR via gh api.
-> Cada peer mantem seu "manual reporter" (advoq:
-> `devctl ci local --report-pr <N>`; vitae: script proprio). Camada 2
+> Cada peer mantem seu "manual reporter" (acme:
+> `devctl ci local --report-pr <N>`; peer: script proprio). Camada 2
 > NAO e' uniforme entre peers.
 >
 > **Camada 3 — CI pago com aprovacao:** quando o plano GitHub permitir
@@ -254,11 +254,11 @@ Depois que o plano GitHub aceitar a regra de Environment, rodar:
 ```bash
 cd /home/emdev/codespace/civm
 
-for repo in advoq/civm advoq/advoq advoq/harmya advoq/menu-orders advoq/barbershop advoq/orador-fluido advoq/salon; do
+for repo in acme/civm acme/app acme/harmya acme/menu-orders acme/barbershop acme/sample-repo acme/salon; do
   scripts/configure-paid-ci-environment.sh \
     --repo "$repo" \
-    --reviewer-login emersonbusson \
-    --reviewer-login Italo-Nogueira \
+    --reviewer-login other \
+    --reviewer-login reviewer-two \
     --enable
 done
 ```
@@ -275,10 +275,10 @@ Se o plano ainda nao permitir required reviewers em repo privado, o
 script falha e nao liga a variavel. Nao criar a variavel manualmente
 antes do Environment protegido existir.
 
-Para repos `emersonbusson/*`, precisa existir outro admin/collaborator
+Para repos `other/*`, precisa existir outro admin/collaborator
 com acesso ao repo para approval real, ou o repo precisa ser movido
 para a org. Com `prevent_self_review=true`, um repo pessoal em que so
-`emersonbusson` e admin fica sem aprovador independente.
+`other` e admin fica sem aprovador independente.
 
 ### Rollback
 

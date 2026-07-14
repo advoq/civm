@@ -13,10 +13,10 @@ func mkStatus(unit, active, sub string) Status {
 }
 
 const (
-	unitOrgAdvoq  = "actions.runner.advoq.civm-advoq-org.service"
-	unitRepoAdvoq = "actions.runner.advoq-advoq.civm-advoq.service"
-	unitRepoCivm  = "actions.runner.advoq-civm.civm-self.service"
-	unitVitae     = "actions.runner.emersonbusson-vitae.civm-vitae.service"
+	unitOrgAdvoq  = "actions.runner.acme.civm-acme-org.service"
+	unitRepoAdvoq = "actions.runner.acme-app.civm-app.service"
+	unitRepoCivm  = "actions.runner.acme-civm.civm-self.service"
+	unitVitae     = "actions.runner.other-peer.civm-peer.service"
 )
 
 func TestDetectCollisions_AdvoqOrgPlusRepoActive(t *testing.T) {
@@ -35,14 +35,14 @@ func TestDetectCollisions_AdvoqOrgPlusRepoActive(t *testing.T) {
 	if c.RepoUnit != unitRepoAdvoq {
 		t.Errorf("RepoUnit = %q, want %q", c.RepoUnit, unitRepoAdvoq)
 	}
-	if c.Repo != "advoq/advoq" {
-		t.Errorf("Repo = %q, want advoq/advoq", c.Repo)
+	if c.Repo != "acme/app" {
+		t.Errorf("Repo = %q, want acme/app", c.Repo)
 	}
-	if c.Owner != "advoq" {
-		t.Errorf("Owner = %q, want advoq", c.Owner)
+	if c.Owner != "acme" {
+		t.Errorf("Owner = %q, want acme", c.Owner)
 	}
-	if c.OrgUnit != unitOrgAdvoq || c.OrgName != "civm-advoq-org" {
-		t.Errorf("OrgUnit/OrgName = %q/%q, want %q/civm-advoq-org", c.OrgUnit, c.OrgName, unitOrgAdvoq)
+	if c.OrgUnit != unitOrgAdvoq || c.OrgName != "civm-acme-org" {
+		t.Errorf("OrgUnit/OrgName = %q/%q, want %q/civm-acme-org", c.OrgUnit, c.OrgName, unitOrgAdvoq)
 	}
 	if !c.RepoActive {
 		t.Errorf("RepoActive = false, want true (runner ainda de pé)")
@@ -69,7 +69,7 @@ func TestDetectCollisions_DisabledRepoStillCollides(t *testing.T) {
 
 func TestDetectCollisions_OrgOnly_NoCollision(t *testing.T) {
 	t.Parallel()
-	// Estado durável alvo: só o runner org do advoq sobrevive.
+	// Estado durável alvo: só o runner org do acme sobrevive.
 	units := []Status{
 		mkStatus(unitOrgAdvoq, "active", "running"),
 		mkStatus(unitVitae, "active", "running"),
@@ -94,33 +94,33 @@ func TestDetectCollisions_NoOrgRunner_NoCollision(t *testing.T) {
 
 func TestDetectCollisions_OrgServesMultipleOwnerRepos(t *testing.T) {
 	t.Parallel()
-	// O runner org do advoq serve advoq/advoq E advoq/civm. Se ALGUÉM
+	// O runner org do acme serve acme/app E acme/civm. Se ALGUÉM
 	// registrasse runners por-repo para os DOIS, ambos colidem.
 	units := []Status{
 		mkStatus(unitOrgAdvoq, "active", "running"),
 		mkStatus(unitRepoAdvoq, "active", "running"),
-		mkStatus(unitRepoCivm, "active", "running"), // repo advoq/civm
-		mkStatus(unitVitae, "active", "running"),    // owner emersonbusson: NÃO colide
+		mkStatus(unitRepoCivm, "active", "running"), // repo acme/civm
+		mkStatus(unitVitae, "active", "running"),    // owner other: NÃO colide
 	}
 	got := DetectCollisions(units)
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2 (%+v)", len(got), got)
 	}
-	// Ordem estável por unit: advoq-advoq antes de advoq-civm.
+	// Ordem estável por unit: acme-acme antes de acme-civm.
 	if got[0].RepoUnit != unitRepoAdvoq || got[1].RepoUnit != unitRepoCivm {
 		t.Errorf("ordem inesperada: %q, %q", got[0].RepoUnit, got[1].RepoUnit)
 	}
 	for _, c := range got {
-		if c.Owner != "advoq" {
-			t.Errorf("Owner = %q, want advoq", c.Owner)
+		if c.Owner != "acme" {
+			t.Errorf("Owner = %q, want acme", c.Owner)
 		}
 	}
 }
 
 func TestDetectCollisions_DifferentOwnerNotAffected(t *testing.T) {
 	t.Parallel()
-	// Um runner org do advoq NÃO torna o runner por-repo de outro owner
-	// (emersonbusson/vitae) redundante. Sem falso positivo cross-owner.
+	// Um runner org do acme NÃO torna o runner por-repo de outro owner
+	// (other/peer) redundante. Sem falso positivo cross-owner.
 	units := []Status{
 		mkStatus(unitOrgAdvoq, "active", "running"),
 		mkStatus(unitVitae, "active", "running"),
@@ -147,9 +147,9 @@ func TestIsOrgRunner(t *testing.T) {
 		want bool
 	}{
 		{unitOrgAdvoq, true},   // org: nome -org + repo sem barra
-		{unitRepoAdvoq, false}, // por-repo: repo advoq/advoq
+		{unitRepoAdvoq, false}, // por-repo: repo acme/app
 		{unitVitae, false},     // por-repo pessoal
-		{"actions.runner.advoq-org.civm-x.service", false}, // repo "advoq/org" (tem barra) — não é org runner
+		{"actions.runner.acme-org.civm-x.service", false}, // repo "acme/org" (tem barra) — não é org runner
 	}
 	for _, c := range cases {
 		got := isOrgRunner(mkStatus(c.unit, "active", "running"))
@@ -165,9 +165,9 @@ func TestIsOrgRunner(t *testing.T) {
 func TestDetectCollisions_FromListSnapshot(t *testing.T) {
 	t.Parallel()
 	out := "" +
-		"  actions.runner.advoq.civm-advoq-org.service        loaded active running GitHub Actions Runner (advoq.civm-advoq-org)\n" +
-		"  actions.runner.advoq-advoq.civm-advoq.service      loaded active running GitHub Actions Runner (advoq-advoq.civm-advoq)\n" +
-		"  actions.runner.emersonbusson-vitae.civm-vitae.service loaded active running GitHub Actions Runner (vitae)\n"
+		"  actions.runner.acme.civm-acme-org.service        loaded active running GitHub Actions Runner (acme.civm-acme-org)\n" +
+		"  actions.runner.acme-app.civm-app.service      loaded active running GitHub Actions Runner (acme-acme.civm-app)\n" +
+		"  actions.runner.other-peer.civm-peer.service loaded active running GitHub Actions Runner (peer)\n"
 	o := DefaultListOptions()
 	o.RunFn = func(context.Context, string, ...string) ([]byte, error) { return []byte(out), nil }
 	items, err := List(context.Background(), o)
@@ -175,16 +175,16 @@ func TestDetectCollisions_FromListSnapshot(t *testing.T) {
 		t.Fatalf("List err = %v", err)
 	}
 	got := DetectCollisions(items)
-	if len(got) != 1 || got[0].Repo != "advoq/advoq" {
-		t.Fatalf("DetectCollisions sobre snapshot real = %+v, want 1 colisão advoq/advoq", got)
+	if len(got) != 1 || got[0].Repo != "acme/app" {
+		t.Fatalf("DetectCollisions sobre snapshot real = %+v, want 1 colisão acme/app", got)
 	}
 }
 
-// unitGateAdvoq representa um runner do pool civm-gate registrado para o advoq.
-// Nomeado "civm-advoq-gate" (convenção: civm-<owner>-gate), label `civm-gate`.
-// Unit: actions.runner.advoq-advoq.civm-advoq-gate.service — mesmo owner/repo
+// unitGateAdvoq representa um runner do pool civm-gate registrado para o acme.
+// Nomeado "civm-app-gate" (convenção: civm-<owner>-gate), label `civm-gate`.
+// Unit: actions.runner.acme-app.civm-app-gate.service — mesmo owner/repo
 // que o runner por-repo padrão, mas sufixo "-gate" no nome.
-const unitGateAdvoq = "actions.runner.advoq-advoq.civm-advoq-gate.service"
+const unitGateAdvoq = "actions.runner.acme-app.civm-app-gate.service"
 
 func TestDetectCollisions_GateRunnerPlusOrg_NoCollision(t *testing.T) {
 	t.Parallel()
@@ -220,10 +220,10 @@ func TestDetectCollisions_GateRunnerDoesNotSuppressPlainRepoCollision(t *testing
 	if c.RepoUnit != unitRepoAdvoq {
 		t.Errorf("RepoUnit = %q, want %q (runner gate não deve aparecer)", c.RepoUnit, unitRepoAdvoq)
 	}
-	if c.RepoName != "civm-advoq" {
-		t.Errorf("RepoName = %q, want civm-advoq", c.RepoName)
+	if c.RepoName != "civm-app" {
+		t.Errorf("RepoName = %q, want civm-app", c.RepoName)
 	}
-	if c.Owner != "advoq" {
-		t.Errorf("Owner = %q, want advoq", c.Owner)
+	if c.Owner != "acme" {
+		t.Errorf("Owner = %q, want acme", c.Owner)
 	}
 }

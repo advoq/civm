@@ -52,13 +52,13 @@
 - `corepack@0.34.6`
 - `npm@11.12.1`
 
-## Runners (multi-repo — NÃO é dedicada ao advoq)
+## Runners (multi-repo — NÃO é dedicada ao acme)
 
 A VM hospeda runners self-hosted para **7 repos**, todos compartilhando a mesma
 box (CPU/RAM/disco/daemon Docker):
 
-`advoq` · `advoq-org` · `advoqwhatsappapi` · `chatwoot-realtime` ·
-`n8n-engine` · `typebot-runtime` · `vitae`
+`acme` · `acme-org` · `service-a` · `service-b` ·
+`service-c` · `service-d` · `peer`
 
 Cada um com seu `~/actions-runner-{repo}/` e cache yarn escopado
 (`~/.cache/yarn-{repo}-*`), então uma limpeza pode ser escopada por repo.
@@ -72,7 +72,7 @@ Cada um com seu `~/actions-runner-{repo}/` e cache yarn escopado
   2026-06-17). Devolve espaço ao V:.
 - **Hygiene contínua (deployada):**
   - `civmctl-buildcache-prune.timer` (3 min) → build cache (`builder prune -af`)
-    + imagens de service de runs finalizadas (`advoq-org-{runid}-*`),
+    + imagens de service de runs finalizadas (`civm-run-{runid}-*`),
     BuildKit/container-safe, sem deferir ao heavy-lock.
   - `civmctl-disk-watchdog` + `civmctl-cleanup` → hygiene geral.
   - `civm-vhdx-autoreclaim` (host) → **DESABILITADA desde 2026-06-17**

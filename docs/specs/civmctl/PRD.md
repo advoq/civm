@@ -72,7 +72,7 @@ Alternativas consideradas e descartadas:
   registra novo runner GitHub. Idempotente (skip se já existe).
 - **RF-6** `civmctl doctor [--repos=a/b,c/d] [--workflow=ci.yml] [--json]`:
   visão read-only consolidada de host, timers, systemd runners e GitHub
-  runners. Classifica `civm-*` online como canônico, `vitae-ci-*` offline
+  runners. Classifica `civm-*` online como canônico, `legacy-ci-*` offline
   como legacy/stale e runner online sem label `civm` como ambíguo.
 - **RF-7** `civmctl idle-check [--json]`: read-only; exit `0=idle`,
   `1=busy`, `2=unknown`.

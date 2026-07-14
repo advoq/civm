@@ -9,7 +9,7 @@
 
 ```
 1. Dev muda código no laptop.
-2. Roda gate local do peer (ex.: script `ci-local`; advoq usa `devctl ci local --clean`)
+2. Roda gate local do peer (ex.: script `ci-local`; acme usa `devctl ci local --clean`)
        │
        ├─ Falha → fix loop até passar local
        └─ Passa → autorizado a `git push`
@@ -66,7 +66,7 @@ Cada repo deve ter:
    - Build
    - Contracts/schema drift
 
-   Exemplo: `devctl ci local --clean` (advoq) OU
+   Exemplo: `devctl ci local --clean` (acme) OU
    `npm run ci:local` (Node) OU `make ci` (genérico).
 
 2. **Pre-push hook husky** que pelo menos warns se tests não foram

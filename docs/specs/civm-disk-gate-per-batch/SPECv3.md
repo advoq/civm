@@ -54,7 +54,7 @@ issues: []
 - `orchestrator-scale-to-zero/SPEC.md`: **todas** as âncoras do piso 40 + event-table §8.
 
 **Fora agora:** o `switch` segue chamando `Invoke-StopAndCompact` (reuso); o
-Off-path guest-side (inalterado); serialização docker-heavy/workflow advoq; pré-build.
+Off-path guest-side (inalterado); serialização docker-heavy/workflow acme; pré-build.
 
 ## Matriz PRD → SPECv3
 

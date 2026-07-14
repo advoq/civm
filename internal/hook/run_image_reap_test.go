@@ -40,10 +40,10 @@ func baseReapOpts(t *testing.T, run *reapTestRunFn) Options {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("RUNNER_TEMP", "")
 	t.Setenv("GITHUB_WORKSPACE", "")
-	t.Setenv("GITHUB_REPOSITORY", "advoq/advoq")
+	t.Setenv("GITHUB_REPOSITORY", "acme/app")
 	t.Setenv("GITHUB_RUN_ID", "555")
-	t.Setenv("CIVM_RUNNER_SLOT", "advoq")
-	t.Setenv("COMPOSE_PROJECT_NAME", "advoq")
+	t.Setenv("CIVM_RUNNER_SLOT", "acme")
+	t.Setenv("COMPOSE_PROJECT_NAME", "acme")
 	opts := DefaultOptionsFromEnv(EventJobCompleted)
 	opts.Execute = true
 	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 60, nil }
@@ -69,8 +69,8 @@ func TestJobCompletedReapsOwnRunImages(t *testing.T) {
 	Run(context.Background(), opts)
 
 	joined := strings.Join(run.commands, "\n")
-	wantSlot := "docker image prune -a -f --filter label=com.docker.compose.project=advoq"
-	wantRun := "docker image prune -a -f --filter label=com.docker.compose.project=advoq-555"
+	wantSlot := "docker image prune -a -f --filter label=com.docker.compose.project=acme"
+	wantRun := "docker image prune -a -f --filter label=com.docker.compose.project=acme-555"
 	if !strings.Contains(joined, wantSlot) {
 		t.Errorf("job-completed deve reapar as imagens do compose project do slot %q\nGot:\n%s", wantSlot, joined)
 	}
@@ -129,10 +129,10 @@ func TestJobStartedDoesNotReapRunImages(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("RUNNER_TEMP", "")
 	t.Setenv("GITHUB_WORKSPACE", "")
-	t.Setenv("GITHUB_REPOSITORY", "advoq/advoq")
+	t.Setenv("GITHUB_REPOSITORY", "acme/app")
 	t.Setenv("GITHUB_RUN_ID", "555")
-	t.Setenv("CIVM_RUNNER_SLOT", "advoq")
-	t.Setenv("COMPOSE_PROJECT_NAME", "advoq")
+	t.Setenv("CIVM_RUNNER_SLOT", "acme")
+	t.Setenv("COMPOSE_PROJECT_NAME", "acme")
 	opts := DefaultOptionsFromEnv(EventJobStarted)
 	opts.Execute = true
 	opts.PreCleanupPct = 50
@@ -166,9 +166,9 @@ func TestComposeProjectFromEnv(t *testing.T) {
 		project string
 		want    string
 	}{
-		{"slot tem precedencia", "advoq", "outro", "advoq"},
-		{"fallback para COMPOSE_PROJECT_NAME", "", "advoq-web", "advoq-web"},
-		{"trim de espaco no slot", "  advoq  ", "", "advoq"},
+		{"slot tem precedencia", "acme", "outro", "acme"},
+		{"fallback para COMPOSE_PROJECT_NAME", "", "acme-web", "acme-web"},
+		{"trim de espaco no slot", "  acme  ", "", "acme"},
 		{"ambos vazios -> vazio", "", "", ""},
 	}
 	for _, tt := range tests {
@@ -191,8 +191,8 @@ func TestRunImageReapScopes(t *testing.T) {
 		runID   string
 		want    []string
 	}{
-		{"project + run_id -> ambos", "advoq", "555", []string{"advoq", "advoq-555"}},
-		{"project sem run_id -> so o slot", "advoq", "", []string{"advoq"}},
+		{"project + run_id -> ambos", "acme", "555", []string{"acme", "acme-555"}},
+		{"project sem run_id -> so o slot", "acme", "", []string{"acme"}},
 		{"sem project -> nil", "", "555", nil},
 	}
 	for _, tt := range tests {

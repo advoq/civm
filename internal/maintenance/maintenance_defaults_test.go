@@ -538,8 +538,8 @@ func TestValueOrNone(t *testing.T) {
 	if got := valueOrNone("  "); got != "(none)" {
 		t.Fatalf("valueOrNone(blank) = %q, want (none)", got)
 	}
-	if got := valueOrNone("advoq/civm"); got != "advoq/civm" {
-		t.Fatalf("valueOrNone(value) = %q, want advoq/civm", got)
+	if got := valueOrNone("acme/civm"); got != "acme/civm" {
+		t.Fatalf("valueOrNone(value) = %q, want acme/civm", got)
 	}
 }
 

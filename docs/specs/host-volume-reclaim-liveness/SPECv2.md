@@ -102,7 +102,7 @@ docker), gap ~28GB e Optimize procedeu. #13: o gap reclamável é a prova do efe
    com processo VIVO, NÃO limpa (não mata reclaim legítimo).
 3. **RF-3 host (efeito):** com guest cheio + gap baixo, o reclaim pruna →
    gap sobe → Optimize libera V:. (JÁ demonstrado no firefight 2026-06-15.)
-4. **Regressão:** `go test ./... -race` (civm) verde; lint; re-run CI advoq
+4. **Regressão:** `go test ./... -race` (civm) verde; lint; re-run CI acme
    #1155 sem falha de disco.
 
 ## Rastreabilidade

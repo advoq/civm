@@ -9,17 +9,42 @@ defend it, and how to report issues.
 
 For anything that could let an unprivileged actor escalate to runner
 privileges or compromise the VM, contact the maintainer privately first
-— **do not** open a public issue. The maintainer is `@emersonbusson` on
-GitHub; use a private channel (email, DM) to share details before
-public disclosure.
+— **do not** open a public issue. Contact the repository owner via a
+**private** channel (security advisory / DM) before public disclosure.
+Do not paste live tokens or private keys into issues.
 
 For ordinary bugs that are not security-relevant, regular GitHub issues
 are fine.
 
+## Public repository readiness (credentials)
+
+**Invariant:** no secret *values* in git (tokens, private keys, passwords).
+Paths and *names* of env vars / GitHub Actions secrets are OK.
+
+| Class | In repo? | Where real values live |
+| --- | --- | --- |
+| `RELEASE_APP_ID` / `RELEASE_APP_PRIVATE_KEY` | name only | GitHub Actions secrets |
+| `RELEASE_PLEASE_TOKEN` (optional) | name only | GitHub Actions secrets |
+| Host `C:\ProgramData\civm\gh-token-*.txt` | path only in docs | Windows host filesystem |
+| SSH host→guest key | path only | `C:\ProgramData\civm\ssh\` (SYSTEM) |
+| Guest `/etc/civm/*.env`, `~/.config/gh` | never | guest host state |
+| Runner `.credentials` / registration tokens | never | ephemeral / guest dirs |
+
+**Before flipping the repo to public:**
+
+1. Confirm CI **Secret pattern scan** is green on default branch.
+2. Keep lab session logs gitignored and **local-only**: `MEMORY.md`, `validation.md`
+   (agents append here; never publish). `vm.md` may stay tracked as generic runner inventory.
+3. Prefer `ubuntu-latest` for public free CI (default in this repo). Optional lab smoke:
+   set repository variable `CIVM_SELF_HOSTED_SMOKE=true` when a `civm` runner exists.
+4. Never commit scratch scripts that `echo` registration tokens or hardcode guest IPs.
+5. History: if a real token ever landed in a commit, **rotate** it; rewriting public history is hard once mirrored.
+6. Module path is still `github.com/advoq/civm` until the Go module / GitHub transfer is intentional.
+
 ## Threat model
 
-The civm runner is a **shared resource** across peer repos (`vitae`,
-`advoq`, etc.). Multiple jobs from different repos can run
+The civm runner is a **shared resource** across peer repos (`peer`,
+`acme`, etc.). Multiple jobs from different repos can run
 concurrently on the same VM. Each job ships with whatever code its
 authors push — so untrusted input includes:
 

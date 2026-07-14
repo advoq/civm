@@ -188,9 +188,9 @@ EXEMPLOS
   civmctl capacity --json
   civmctl active-runs --repos=auto --json
   civmctl active-runs --repos=owner/repo1,owner/repo2 --include-eta=false --json
-  civmctl actions-metrics --org=advoq --period=month --json
-  civmctl actions-metrics --org=advoq --period=last-month --repos=auto --json
-  civmctl actions-metrics --org=advoq --period=2026-05-01..2026-05-15 --json
+  civmctl actions-metrics --org=acme --period=month --json
+  civmctl actions-metrics --org=acme --period=last-month --repos=auto --json
+  civmctl actions-metrics --org=acme --period=2026-05-01..2026-05-15 --json
   civmctl metrics dump --stdout
   civmctl metrics dump --out=/var/lib/node_exporter/textfile_collector/civm.prom
   civmctl hook job-completed --execute --json

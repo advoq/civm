@@ -82,7 +82,7 @@ inicia (= o gate de admissão warm, §0/§5).
 - `docs/specs/orchestrator-scale-to-zero/SPEC.md` (doc viva): **todas** as âncoras.
 
 **Fora:** o `switch` segue chamando `Invoke-StopAndCompact` (reuso); Off-path
-guest-side (inalterado); serialização docker-heavy/workflow advoq; pré-build/pull.
+guest-side (inalterado); serialização docker-heavy/workflow acme; pré-build/pull.
 
 ## 2. Matriz PRD → SPECv4
 

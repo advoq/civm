@@ -240,8 +240,8 @@ amarras de gate apontam para o vazio.
   `{CIVM_RUNNER_SLOT,CIVM_PORT_BASE,COMPOSE_PROJECT_NAME}` (`install.go:167-177`).
   NÃO depende de HOME — depende do nome do diretório. Os slots do admit e o dockerlock
   são paths FIXOS box-wide fora de qualquer HOME — mover HOME não os toca (bom). MAS
-  se o re-registro mudar o DIR de `/home/emdev/actions-runner-advoq` para
-  `/home/runner1/actions-runner` (sem sufixo), `runnerSlot` passa de `advoq` para
+  se o re-registro mudar o DIR de `/home/emdev/actions-runner-acme` para
+  `/home/runner1/actions-runner` (sem sufixo), `runnerSlot` passa de `acme` para
   `actions-runner` (`install.go:102`: `TrimPrefix` falha → devolve a base inteira).
   Dois runners re-registrados sem sufixo colidem em `COMPOSE_PROJECT_NAME=actions-runner`
   → colisão de container/projeto Docker box-wide — o exato failure mode que o MPI

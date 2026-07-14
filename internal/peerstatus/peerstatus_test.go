@@ -14,7 +14,7 @@ import (
 func TestCollect_HappyPath(t *testing.T) {
 	t.Parallel()
 	o := DefaultOptions()
-	o.Repo = "advoq/civm"
+	o.Repo = "acme/civm"
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		key := name + " " + strings.Join(args, " ")
 		switch {
@@ -38,7 +38,7 @@ func TestCollect_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if s.Repo != "advoq/civm" {
+	if s.Repo != "acme/civm" {
 		t.Errorf("Repo = %s", s.Repo)
 	}
 	if s.RunnersTotal != 2 {
@@ -240,7 +240,7 @@ func TestStatusSeverity(t *testing.T) {
 func TestCollectFleetSummaryAndRenderJSON(t *testing.T) {
 	t.Parallel()
 	opts := DefaultFleetOptions()
-	opts.Repos = []string{"advoq/civm", "advoq/advoq", "emersonbusson/vitae"}
+	opts.Repos = []string{"acme/civm", "acme/app", "other/peer"}
 	opts.RunFn = fleetRunFn(t)
 
 	report, err := CollectFleet(context.Background(), opts)
@@ -263,14 +263,14 @@ func TestCollectFleetSummaryAndRenderJSON(t *testing.T) {
 			t.Fatalf("peer %s missing last run", peer.Repo)
 		}
 	}
-	if severities["advoq/civm"] != SeverityOK {
-		t.Fatalf("advoq/civm severity = %s", severities["advoq/civm"])
+	if severities["acme/civm"] != SeverityOK {
+		t.Fatalf("acme/civm severity = %s", severities["acme/civm"])
 	}
-	if severities["advoq/advoq"] != SeverityWarn {
-		t.Fatalf("advoq/advoq severity = %s", severities["advoq/advoq"])
+	if severities["acme/app"] != SeverityWarn {
+		t.Fatalf("acme/app severity = %s", severities["acme/app"])
 	}
-	if severities["emersonbusson/vitae"] != SeverityCritical {
-		t.Fatalf("vitae severity = %s", severities["emersonbusson/vitae"])
+	if severities["other/peer"] != SeverityCritical {
+		t.Fatalf("peer severity = %s", severities["other/peer"])
 	}
 
 	var buf bytes.Buffer
@@ -297,7 +297,7 @@ func TestRenderFleetHuman(t *testing.T) {
 		Peers: []FleetPeer{
 			{
 				Status: Status{
-					Repo: "advoq/civm", WorkflowFile: "ci.yml",
+					Repo: "acme/civm", WorkflowFile: "ci.yml",
 					BillingStatus: "ok", RunnersOnline: 1, RunnersTotal: 1,
 					LastRun: &RunSummary{DatabaseID: 10, Conclusion: "success", URL: "https://github.com/advoq/civm/actions/runs/10"},
 				},
@@ -305,7 +305,7 @@ func TestRenderFleetHuman(t *testing.T) {
 			},
 			{
 				Status: Status{
-					Repo: "advoq/advoq", WorkflowFile: "ci.yml",
+					Repo: "acme/app", WorkflowFile: "ci.yml",
 					BillingStatus: "unknown", RunnersOnline: 0, RunnersTotal: 1,
 				},
 				Severity: SeverityWarn,
@@ -315,7 +315,7 @@ func TestRenderFleetHuman(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	report.Render(&buf)
-	for _, want := range []string{"read-only", "ok=1 warn=1 critical=0", "advoq/civm", "advoq/advoq", "WARN"} {
+	for _, want := range []string{"read-only", "ok=1 warn=1 critical=0", "acme/civm", "acme/app", "WARN"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Fatalf("Render omitted %q:\n%s", want, buf.String())
 		}
@@ -356,7 +356,7 @@ func TestRender_LastRunNoConclusion(t *testing.T) {
 func TestCollect_TimeoutDoesNotCrash(t *testing.T) {
 	t.Parallel()
 	o := DefaultOptions()
-	o.Repo = "advoq/civm"
+	o.Repo = "acme/civm"
 	o.RunFn = func(context.Context, string, ...string) ([]byte, error) {
 		return nil, context.DeadlineExceeded
 	}
@@ -364,7 +364,7 @@ func TestCollect_TimeoutDoesNotCrash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect must tolerate gh timeouts, got err=%v", err)
 	}
-	if s.Repo != "advoq/civm" {
+	if s.Repo != "acme/civm" {
 		t.Errorf("Repo not preserved on timeout: %s", s.Repo)
 	}
 	if s.RunnersTotal != 0 || s.LastRun != nil {
@@ -378,7 +378,7 @@ func TestCollect_TimeoutDoesNotCrash(t *testing.T) {
 func TestCollect_MalformedRunnersJSON(t *testing.T) {
 	t.Parallel()
 	o := DefaultOptions()
-	o.Repo = "advoq/civm"
+	o.Repo = "acme/civm"
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		key := name + " " + strings.Join(args, " ")
 		if strings.Contains(key, "actions/runners") {
@@ -401,7 +401,7 @@ func TestCollect_MalformedRunnersJSON(t *testing.T) {
 func TestCollect_PartialFailure(t *testing.T) {
 	t.Parallel()
 	o := DefaultOptions()
-	o.Repo = "advoq/civm"
+	o.Repo = "acme/civm"
 	o.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		key := name + " " + strings.Join(args, " ")
 		switch {
@@ -433,23 +433,23 @@ func fleetRunFn(t *testing.T) func(context.Context, string, ...string) ([]byte, 
 		}
 		key := strings.Join(args, " ")
 		switch {
-		case strings.Contains(key, "/repos/advoq/civm/actions/runners"):
+		case strings.Contains(key, "/repos/acme/civm/actions/runners"):
 			return []byte(`{"runners":[{"name":"civm-self","status":"online"}]}`), nil
-		case strings.Contains(key, "/repos/advoq/advoq/actions/runners"):
-			return []byte(`{"runners":[{"name":"civm-advoq","status":"online"}]}`), nil
-		case strings.Contains(key, "/repos/emersonbusson/vitae/actions/runners"):
+		case strings.Contains(key, "/repos/acme/app/actions/runners"):
+			return []byte(`{"runners":[{"name":"civm-app","status":"online"}]}`), nil
+		case strings.Contains(key, "/repos/other/peer/actions/runners"):
 			return []byte(`{"runners":[]}`), nil
-		case strings.Contains(key, "--repo advoq/civm") && strings.Contains(key, "startedAt"):
+		case strings.Contains(key, "--repo acme/civm") && strings.Contains(key, "startedAt"):
 			return healthyBillingRuns(), nil
-		case strings.Contains(key, "--repo advoq/advoq") && strings.Contains(key, "startedAt"):
+		case strings.Contains(key, "--repo acme/app") && strings.Contains(key, "startedAt"):
 			return blockedBillingRuns(), nil
-		case strings.Contains(key, "--repo emersonbusson/vitae") && strings.Contains(key, "startedAt"):
+		case strings.Contains(key, "--repo other/peer") && strings.Contains(key, "startedAt"):
 			return blockedBillingRuns(), nil
-		case strings.Contains(key, "--repo advoq/civm") && strings.Contains(key, "createdAt"):
+		case strings.Contains(key, "--repo acme/civm") && strings.Contains(key, "createdAt"):
 			return lastRun(101, "success"), nil
-		case strings.Contains(key, "--repo advoq/advoq") && strings.Contains(key, "createdAt"):
+		case strings.Contains(key, "--repo acme/app") && strings.Contains(key, "createdAt"):
 			return lastRun(202, "failure"), nil
-		case strings.Contains(key, "--repo emersonbusson/vitae") && strings.Contains(key, "createdAt"):
+		case strings.Contains(key, "--repo other/peer") && strings.Contains(key, "createdAt"):
 			return lastRun(303, "failure"), nil
 		default:
 			t.Fatalf("unexpected gh args: %s", key)

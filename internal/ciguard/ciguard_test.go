@@ -50,7 +50,7 @@ func findingForRule(findings []Finding, rule string) (Finding, bool) {
 func TestScanRuleR1ContainerName(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	writeCompose(t, root, "services:\n  db:\n    image: postgres:18\n    container_name: advoq-db\n")
+	writeCompose(t, root, "services:\n  db:\n    image: postgres:18\n    container_name: acme-db\n")
 
 	result, err := Scan(DefaultOptions(root))
 	if err != nil {
@@ -254,7 +254,7 @@ func TestScanRuleR4DevctlCiUpSuppressedByLock(t *testing.T) {
 func TestScanWaiverSuppressesFinding(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	writeCompose(t, root, "services:\n  db:\n    # civm:ci-guard-allow R1-container-name legado documentado\n    container_name: advoq-db\n")
+	writeCompose(t, root, "services:\n  db:\n    # civm:ci-guard-allow R1-container-name legado documentado\n    container_name: acme-db\n")
 
 	result, err := Scan(DefaultOptions(root))
 	if err != nil {

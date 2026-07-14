@@ -44,11 +44,11 @@
 | Dimensão | Realidade da box |
 | --- | --- |
 | Instância | **UMA VM Hyper-V persistente.** `uptime` = horas/dias. Reusada por TODOS os jobs. |
-| Isolamento | **8 runners** compartilham 1 kernel, 1 daemon Docker, 1 disco, 1 `/home/emdev`. `systemctl` lista `actions.runner.*` × 8 (advoq, advoq-org, advoqwhatsappapi, chatwoot-realtime, civm-self, n8n-engine, typebot-runtime, vitae). |
+| Isolamento | **8 runners** compartilham 1 kernel, 1 daemon Docker, 1 disco, 1 `/home/emdev`. `systemctl` lista `actions.runner.*` × 8 (acme, acme-org, service-a, service-b, civm-self, service-c, service-d, peer). |
 | Disco | `/dev/sda2 108G, 88G usado, 15G livre (86%)`. **Não** 128 GB (README desatualizado). Volátil e compartilhado. |
 | Daemon Docker | `Server 29.1.3`, **25 images / 18.62 GB**, **106 volumes / 4.34 GB**, **build cache 13.49 GB**. Acumulado entre jobs. |
 | RAM / CPU | `9.85 GiB` total / 12 vCPU (foi 7.7 GiB no contexto antigo — **resized**). Dividido por 8 runners. |
-| Rede | `eth0 192.168.0.50/24` (LAN doméstica + NAT), `tailscale0`, `FORWARD policy DROP`. **Não** é egress datacenter. |
+| Rede | `eth0 <LAN_IP>/24` (LAN doméstica + NAT), `tailscale0`, `FORWARD policy DROP`. **Não** é egress datacenter. |
 | Secrets | Registrados no GitHub repo/org, entregues ao runner **persistente**; o `.env` por runner fica em disco. |
 | Cache | `$HOME/.cache/go-build`, npm, yarn etc. **persistem** entre jobs (de propósito — caro reconstruir). |
 | Concorrência | Real e contenciosa: load 7.87, jobs disputam RAM/disco/daemon. Serializada por flock-slots. |
@@ -68,16 +68,16 @@ não tem efeito observável pelo job; nas demais, o máximo é PARCIAL com mitig
 | | |
 | --- | --- |
 | **Pago** | VM nova por job. Zero herança. |
-| **Box** | VM persistente; runner **não-efêmero** (`/home/emdev/actions-runner-advoq/.runner` não tem flag ephemeral; reusado job a job). |
+| **Box** | VM persistente; runner **não-efêmero** (`/home/emdev/actions-runner-acme/.runner` não tem flag ephemeral; reusado job a job). |
 | **Veredito** | **INFIEL → PARCIAL** (mitigado por hooks) |
 
-**Evidência:** `.runner` = `{"agentId":22,"agentName":"civm-advoq",...}` sem `"ephemeral":true`.
-O runner roda como serviço systemd `actions.runner.advoq-advoq.civm-advoq.service` (estado `running` contínuo).
+**Evidência:** `.runner` = `{"agentId":22,"agentName":"civm-app",...}` sem `"ephemeral":true`.
+O runner roda como serviço systemd `actions.runner.acme-app.civm-app.service` (estado `running` contínuo).
 O hook `job-started` (`internal/hook/hook.go:206-250`) faz `reclaimWorkspaceOwnership` (chown do checkout
 reusado) + `cleanWorkRoot` sob pressão de disco; `job-completed` (`hook.go:251-273`) limpa `_work`.
 
 **Por que não é FIEL:** o `_work` é limpo, mas **volumes Docker, images e build cache NÃO são por-job**.
-`docker volume ls` = 106 volumes órfãos acumulados (`advoq-27075821642_postgres_data` … run-IDs antigos).
+`docker volume ls` = 106 volumes órfãos acumulados (`acme-27075821642_postgres_data` … run-IDs antigos).
 Um job vê o daemon "sujo" do anterior — o oposto do clean slate.
 
 **AÇÃO p/ fechar:**
@@ -102,7 +102,7 @@ um único `/var/lib/docker`. O SPEC `docs/specs/multi-project-isolation/SPEC.md`
 **O que a box faz em vez de isolamento real (namespacing lógico):**
 - **Identidade por runner** injetada no `.env` (`internal/hook/install.go:173-175`): `CIVM_RUNNER_SLOT`,
   `CIVM_PORT_BASE`, `COMPOSE_PROJECT_NAME`. Confirmado na box: `cat .env` → `CIVM_PORT_BASE=20064`,
-  `CIVM_RUNNER_SLOT=advoq`, `COMPOSE_PROJECT_NAME=advoq`.
+  `CIVM_RUNNER_SLOT=acme`, `COMPOSE_PROJECT_NAME=acme`.
 - **Blocos de porta disjuntos** por slot (`internal/portblock/portblock.go`): janela `[20000,32000)`,
   64 portas/runner. Box: `/var/lib/civm/port-blocks.json` = 8 slots, bases 20000…20448, disjuntos.
   Acima dos defaults dos peers e **abaixo** da faixa ephemeral do kernel (`/proc/sys/net/ipv4/ip_local_port_range`
@@ -118,12 +118,12 @@ um único `/var/lib/docker`. O SPEC `docs/specs/multi-project-isolation/SPEC.md`
 **AÇÃO p/ fechar (a melhor possível sem hardware novo):**
 - **Lock-serialização docker-heavy** (`internal/dockerlock` + `civmctl lock --exec`): faz no máximo 1 bring-up
   docker-heavy por vez na box → reduz a janela de corrida no content store a ~zero. **Requer adoção pelo peer**
-  (`flock`/`civmctl lock` no step de `compose up`). Hoje o advoq usa `runs-on: [self-hosted, civm]` sem o label
+  (`flock`/`civmctl lock` no step de `compose up`). Hoje o acme usa `runs-on: [self-hosted, civm]` sem o label
   dedicado e sem wrapper de lock visível nos workflows — **lacuna aberta**.
 - **Runner dedicado `civm-e2e`** (SPEC RF-5 / DT-8): rotear só E2E docker-heavy a 1 runner via
   `runs-on: [self-hosted, civm, civm-e2e]` + flip `CIVM_E2E_RUNNER_AVAILABLE`. **Status: NÃO adotado** —
   `CIVM_E2E_RUNNER_AVAILABLE` só aparece em `docs/specs/.../SPEC.md`, `PRD.md` e `runbooks/MULTI-PROJECT-RUNNER.md`,
-  **zero referências em código**. O advoq `e2e-tenant-isolation.yml` roda em `[self-hosted, civm]` (pool genérico).
+  **zero referências em código**. O acme `e2e-tenant-isolation.yml` roda em `[self-hosted, civm]` (pool genérico).
 
 ---
 
@@ -147,7 +147,7 @@ um único `/var/lib/docker`. O SPEC `docs/specs/multi-project-isolation/SPEC.md`
   2026-06-10 (deferiu tudo, disco foi a 0%, sshd travou).
 
 **Por que continua INFIEL:** 15 GB livres compartilhados por 8 runners ≠ ~14 GB **dedicados e frescos** por job.
-Dois bring-ups docker-heavy concorrentes (advoq E2E ~vários GB de images + volumes) podem cruzar o `HardFailPct`
+Dois bring-ups docker-heavy concorrentes (acme E2E ~vários GB de images + volumes) podem cruzar o `HardFailPct`
 e **rejeitar um job** (exit 75) — algo que o pago nunca faz. O frescor é impossível sem clean slate (§1).
 
 **AÇÃO p/ fechar:** (a) `compose down -v` por-run no peer (libera volumes do run na hora, não no próximo tick de
@@ -165,7 +165,7 @@ nunca ter 2 bring-ups docker-heavy somando disco ao mesmo tempo.
 | **Veredito** | **IMPOSSÍVEL** (vazio por job) → **PARCIAL** (prune disciplinado) |
 
 **Evidência:** `docker info` → 1 daemon (`overlayfs`, containerd snapshotter), live-restore desabilitado.
-`docker images` = 25 (mix de tags do advoq por run-ID + bases vendor); `docker volume ls` = 106.
+`docker images` = 25 (mix de tags do acme por run-ID + bases vendor); `docker volume ls` = 106.
 
 **O perigo central já corrigido nesta sessão** (a razão deste doc): o `cleanup` da box rodava
 `docker image prune -a --filter until=168h` no branch host-busy. `until` casa a **data de build do VENDOR**,
@@ -233,7 +233,7 @@ sozinho pode OOM onde o pago não OOMaria. **Sem expansão de RAM, não há pari
 **estrutural** — não há incineração. A própria existência deste doc nasceu de um estado herdado ("No such image").
 
 **AÇÃO p/ fechar:** manter a disciplina; cada novo path destrutivo precisa do mesmo par positivo+recusa
-(Kahneman #13 do advoq). Único fechamento real = efemeridade (§1), com o custo do cache.
+(Kahneman #13 do acme). Único fechamento real = efemeridade (§1), com o custo do cache.
 
 ---
 
@@ -242,10 +242,10 @@ sozinho pode OOM onde o pago não OOMaria. **Sem expansão de RAM, não há pari
 | | |
 | --- | --- |
 | **Pago** | Egress Azure limpo, IP datacenter, sem firewall do host, sem NAT doméstico. |
-| **Box** | LAN doméstica `192.168.0.50/24` + NAT + `tailscale0` + `FORWARD policy DROP`. |
+| **Box** | LAN doméstica `<LAN_IP>/24` + NAT + `tailscale0` + `FORWARD policy DROP`. |
 | **Veredito** | **INFIEL** (e parcialmente IMPOSSÍVEL) |
 
-**Evidência:** `ip -br addr` → `eth0 192.168.0.50/24`, `tailscale0 100.123.103.106/32`; `iptables` → `FORWARD policy DROP`.
+**Evidência:** `ip -br addr` → `eth0 <LAN_IP>/24`, `tailscale0 <TAILSCALE_IP>/32`; `iptables` → `FORWARD policy DROP`.
 Há um `registry-mirror` configurado (`/etc/docker/daemon.json` → `http://127.0.0.1:5000`) **mas o mirror NÃO está
 rodando** (`ss -ltnp` → nada em `:5000`; `curl :5000/v2/_catalog` vazio). Ou seja: pulls saem pela LAN doméstica
 para o Docker Hub, sujeitos a rate-limit/latência/saúde da conexão de casa — o pago não tem isso.
@@ -336,7 +336,7 @@ e (b) o classificador `compatible`/`ahead` **tolera** drift que pode mudar compo
 | **Box** | 8 runners disputam recursos; `cancel-in-progress` + flock-slots. |
 | **Veredito** | **IMPOSSÍVEL** (ilimitada sem contenção) → **PARCIAL** (admissão + cancel) |
 
-**Evidência:** advoq usa `concurrency: cancel-in-progress: true` nos workflows pesados (`ci-router.yml:28-30`,
+**Evidência:** acme usa `concurrency: cancel-in-progress: true` nos workflows pesados (`ci-router.yml:28-30`,
 `e2e-tenant-isolation.yml:33-35`, `security-scans.yml`, etc.). `admit` limita heavy a 2. `dockerlock` serializa
 docker-heavy box-wide. Load real 7.87 confirma que a contenção **acontece**.
 
@@ -387,7 +387,7 @@ que propaga correções como a deste branch (`fix/busy-branch-image-prune-race`)
 fecham de verdade com **efemeridade** (runner descartável por job) ou **expansão de hardware** (mais RAM/disco) ou
 **isolamento de daemon** (gate explícito do SPEC). O **máximo atingível hoje, sem hardware novo**, é:
 
-1. **Adotar a lock-serialização docker-heavy no peer** (advoq) — fecha a janela de corrida do content store (§2/§4).
+1. **Adotar a lock-serialização docker-heavy no peer** (acme) — fecha a janela de corrida do content store (§2/§4).
 2. **`docker compose -p $COMPOSE_PROJECT_NAME down -v` por-run** no peer — recupera disco/volumes na hora (§1/§3).
 3. **Subir o registry-mirror `:5000`** já configurado mas morto — estabiliza pulls (§7).
 4. **Atualizar `git` + re-sincronizar os pins** e endurecer o classificador de paridade (§9).

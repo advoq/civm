@@ -129,7 +129,7 @@ Alternativas descartadas:
 
 - **F3 (working-set ATIVO > capacidade do disco)** — hardware; nenhum lever
   compacta dado em uso. A recusa no piso permanece o fail-safe correto (#15/#16).
-  Mitigação é disco maior ou menos concorrência de CI (repo advoq). Este PRD prova
+  Mitigação é disco maior ou menos concorrência de CI (repo acme). Este PRD prova
   com número ONDE F3 começa, não o resolve.
 - **Recusa de admit por disco no guest** — o orçamento NÃO adiciona um novo gate
   de admit; o piso de recusa permanece o exit 75 host-crit já existente. (Uma

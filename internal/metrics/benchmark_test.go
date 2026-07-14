@@ -36,7 +36,7 @@ func BenchmarkRender_WithLabels(b *testing.B) {
 			Labels: map[string]string{
 				"event":  "job-started",
 				"result": "ok",
-				"repo":   "advoq/civm",
+				"repo":   "acme/civm",
 			},
 			Value: 100,
 		},

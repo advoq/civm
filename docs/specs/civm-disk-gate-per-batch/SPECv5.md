@@ -24,7 +24,7 @@ usa ~10–25 GB transitórios → **um PR cabe FOLGADO em 58 GB**. O "não cabe 
 análise anterior foi **chute, não medição** — errado. O que enche o disco é **acumulação**
 (volumes/imagens/cache de runs antigos) + o VHDX que só encolhe via `Optimize-VHD` + o
 **thrash do gate antigo** (compactava a cada gap `running==0`) — **não** o tamanho de um PR,
-e **não** concorrência: o advoq tem **1 runner só** → jobs pesados já rodam 1 por vez.
+e **não** concorrência: o acme tem **1 runner só** → jobs pesados já rodam 1 por vez.
 
 ## 2. Gate POR-EVENTO (a mudança central)
 
@@ -47,15 +47,15 @@ e **não** concorrência: o advoq tem **1 runner só** → jobs pesados já roda
 
 ## 3. Serialização — JÁ É NATURAL (1 runner), SEM lock
 
-**Correção (2026-06-22):** o advoq tem **um único runner self-hosted** (`civm-advoq-org`,
+**Correção (2026-06-22):** o acme tem **um único runner self-hosted** (`civm-acme-org`,
 labels `[self-hosted, civm]`); os jobs pesados rodam em `[self-hosted, civm]` → **um por vez**
-por natureza. Não existe "concorrência pesada" no advoq pra serializar → **nenhum lock é
+por natureza. Não existe "concorrência pesada" no acme pra serializar → **nenhum lock é
 necessário**. `civmctl lock` / `CIVM_E2E_RUNNER_AVAILABLE` **NÃO** fazem parte deste slice.
 
 ⚠️ Versão anterior deste SPEC dizia que `CIVM_E2E_RUNNER_AVAILABLE=true` ativava um
 `civmctl lock --scope docker-heavy` — **ERRADO**. Essa variável **troca o runner-alvo** dos
 e2e para `[self-hosted, civm, civm-e2e]`, e o runner **`civm-e2e` não existe** (confirmado:
-o runner advoq só tem o label `civm`) → setá-la **travaria** os e2e queued. Foi setada por
+o runner acme só tem o label `civm`) → setá-la **travaria** os e2e queued. Foi setada por
 engano e **revertida** (deletada). O gate por-evento + o runner único entregam
 "~58 GB por PR, 1 PR por vez" — paridade com o CI pago — **sem** lock.
 

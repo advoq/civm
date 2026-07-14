@@ -66,7 +66,7 @@ civm-vhdx-optimize-watchdog   State=Ready    ExecTimeLimit=PT72H  (Enabled)
 
 ## Correção pós-validação (disciplina SSDV3: efeito > código)
 
-A validação ao vivo (re-run do CI advoq #1155 que dirigiu o V: ao piso, F3)
+A validação ao vivo (re-run do CI acme #1155 que dirigiu o V: ao piso, F3)
 expôs um **bug de placement no RF-3**: o guest-prune estava DEPOIS do
 `Wait-GuestIdle`, ou seja, DEPOIS do `autoreclaim_skip_low_gap`. Com o gap baixo
 (0.82GB, guest cheio), o reclaim saía em `skip_low_gap` ANTES de chegar ao
@@ -84,7 +84,7 @@ subiu de <1GB para >20GB, e o Optimize liberou o V: (2.8→recuperando).
 
 - **F3 (fora de escopo):** working set ativo de uma rajada concorrente pesada >
   capacidade do V: (119GB) é limite de **hardware**; nenhum reclaim compacta
-  dados em uso. Mitigação: disco maior ou menor concorrência de CI (repo advoq).
+  dados em uso. Mitigação: disco maior ou menor concorrência de CI (repo acme).
   A recusa de job no piso crítico permanece o fail-safe correto (#15).
 - RF-1 positivo validado por unit+deploy+lived, não por injeção de fantasma real
   (não reproduzível sob demanda).

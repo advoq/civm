@@ -24,7 +24,7 @@ concurrency:
 jobs:
   release-please:
     name: release-please
-    runs-on: [self-hosted, civm]
+    runs-on: ubuntu-latest
     env:
       # GitHub vai forçar Node.js 24 default em 2026-06-02; a action
       # release-please-action@v4 ainda declara Node.js 20. Esse flag

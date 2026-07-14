@@ -4,11 +4,11 @@
     civm-labeled por organizacao (o runner ORG), sem runner por-repo redundante.
 
 .DESCRIPTION
-    A box (guest gha-ubuntu-2404) hospeda varios runners self-hosted. O advoq
-    e servido por um runner ORG (civm-advoq-org, gitHubUrl https://github.com/advoq)
-    que atende advoq/advoq E advoq/civm num unico processo, serializando a org
-    inteira em fila FIFO. Se um runner POR-REPO (civm-advoq, repo advoq/advoq)
-    coexistir, ambos carregam o label civm e um job de advoq cai em qualquer um
+    A box (guest gha-ubuntu-2404) hospeda varios runners self-hosted. O acme
+    e servido por um runner ORG (civm-acme-org, gitHubUrl https://github.com/acme)
+    que atende acme/app E acme/civm num unico processo, serializando a org
+    inteira em fila FIFO. Se um runner POR-REPO (civm-app, repo acme/app)
+    coexistir, ambos carregam o label civm e um job de acme cai em qualquer um
     -> 2 jobs concorrentes no mesmo disco/daemon Docker -> "concurrent prune on
     shared civm runner" mata o docker pull de um deles (incidente #1184,
     validation.md 2026-06-18).
@@ -35,7 +35,7 @@
     so cobre runners POR-REPO (--repo=owner/repo). Por isso a serializacao nao
     pode ser garantida so pelo `runner add`; ela e imposta por (a) este script,
     (b) o guard RUNNER_SERIALIZATION no doctor, (c) o watchdog que nao ressuscita,
-    e (d) o runbook ADVOQ-ADOPTION.md que deixou de registrar o runner por-repo.
+    e (d) o runbook de adocao (org runner como path primario).
 
     Idempotencia: sem colisao -> no-op (sai 0). Re-rodar apos remocao -> no-op.
 #>
@@ -45,11 +45,8 @@ param(
     [string]$GuestSshTarget = 'emdev@gha-ubuntu-2404',
     [string]$SshKeyPath = 'C:\ProgramData\civm\ssh\id_ed25519',
     # PAT por owner para mintar o remove-token (gh api .../actions/runners/remove-token).
-    # Mesmo layout do orchestrator: 1 token fine-grained por resource owner.
-    [hashtable]$TokenPaths = @{
-        'advoq'         = 'C:\ProgramData\civm\gh-token-advoq.txt'
-        'emersonbusson' = 'C:\ProgramData\civm\gh-token-emersonbusson.txt'
-    },
+    # Preencha no host: @{ 'myorg' = 'C:\ProgramData\civm\gh-token-myorg.txt' }
+    [hashtable]$TokenPaths = @{},
     # Path do civmctl no guest.
     [string]$CivmctlPath = '/usr/local/bin/civmctl',
     # Aplica de fato (default: dry-run, so reporta o que faria).

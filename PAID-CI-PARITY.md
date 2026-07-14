@@ -33,7 +33,7 @@
 
 ## 1. Propósito (por que esta âncora existe)
 
-A box `civm` existe para rodar o CI do advoq (e dos peers) **de graça**, no lugar
+A box `civm` existe para rodar o CI do acme (e dos peers) **de graça**, no lugar
 dos minutos pagos do GitHub-hosted. A troca é deliberada: custo zero em troca de
 isolamento. O risco dessa troca é **"verde-mudo enganoso"** — o CI passa na box
 mas falharia (ou já falhou) no pago, ou pior, falha na box por um motivo de
@@ -72,7 +72,7 @@ deriva diretamente em ~metade das dimensões.
 hardware novo), **3 são INFIEL corrigíveis hoje** sem hardware, e **6 PARCIAL**
 podem endurecer. A maior alavanca isolada de fidelidade acionável hoje é o
 **flip `CIVM_E2E_RUNNER_AVAILABLE`** (a serialização docker-heavy via `civmctl
-lock` JÁ está cabeada no `web.yml` do advoq, apenas inerte) somada a fechar o
+lock` JÁ está cabeada no `web.yml` do acme, apenas inerte) somada a fechar o
 **R4 aberto no `e2e-tenant-isolation.yml`** (esse SIM roda docker-heavy no pool
 genérico sem lock).
 
@@ -112,20 +112,20 @@ genérico sem lock).
 
 | Recurso | Realidade |
 | --- | --- |
-| Modelo de execução | **1 VM Hyper-V permanente**; **8 runners systemd** long-lived, NÃO-efêmeros, reusados job a job (advoq-org em piloto **ephemeral** — ver §4 #1/#8). |
+| Modelo de execução | **1 VM Hyper-V permanente**; **8 runners systemd** long-lived, NÃO-efêmeros, reusados job a job (acme-org em piloto **ephemeral** — ver §4 #1/#8). |
 | CPU / RAM | **Host:** Ryzen 5 3600 (12 threads), **31.9 GB RAM**. **VM/guest:** **8 GB RAM** (= o VMRS de 8 GB no V:) / 12 vCPU compartilhadas. (O "7.8 GiB" de snapshots antigos era a RAM *disponível* do guest, não o total.) |
 | Disco | **Host V: = SSD dedicado de 119.2 GB** (128G nominal), só pra VM. **Guest `/` = 108 GB** (no VHDX dinâmico, ~38 usados pós-pente-fino). V: livre: **72 Off ↔ 54-64 Running** (o swing de 8 GB é o VMRS/RAM). Ver `docs/HARDWARE.md`. |
-| Docker daemon | **1 daemon único** `29.1.3` (overlayfs, containerd snapshotter, `/var/lib/docker`). Snapshot: 0 images / **106 volumes órfãos** (`advoq-<runId>_*` de runs distintas) / build cache 589 MB. |
+| Docker daemon | **1 daemon único** `29.1.3` (overlayfs, containerd snapshotter, `/var/lib/docker`). Snapshot: 0 images / **106 volumes órfãos** (`acme-<runId>_*` de runs distintas) / build cache 589 MB. |
 | `$HOME` / FS | **`/home/emdev` ÚNICO** compartilhado pelos 8 runners. |
-| Rede | `eth0 192.168.0.50/24` (**LAN doméstica + NAT**) + `tailscale0 100.123.103.106` + `docker0`; `iptables FORWARD policy DROP`. **Não** é egress datacenter. |
+| Rede | `eth0 <LAN_IP>/24` (**LAN doméstica + NAT**) + `tailscale0 <TAILSCALE_IP>` + `docker0`; `iptables FORWARD policy DROP`. **Não** é egress datacenter. |
 | Secrets | Entregues ao runner **persistente** (mesmo protocolo do GitHub); `.env`/`.credentials` por runner em disco compartilhado. |
-| Cache | `$HOME/.cache/*-advoq-$SLOT` **persiste** entre jobs (de propósito — caro reconstruir). |
+| Cache | `$HOME/.cache/*-acme-$SLOT` **persiste** entre jobs (de propósito — caro reconstruir). |
 | Concorrência | Real e contenciosa: 8 runners disputam RAM/disco/daemon; teto físico duro. `admit MaxHeavy=2` + `dockerlock` (onde adotados). |
 | Tools / OS | Subconjunto pinado em `internal/specs/specs.go` (~9 tools); **drift real** vs box e vs pago (ver §4 #9). |
 | Cleanup / falha | Hooks `job-started`/`job-completed` + timers; best-effort, **NUNCA incinera**. Falha de infra é **herdável** (a corrida que motivou esta sessão). |
 
-8 runners confirmados: `advoq`, `advoq-org`, `advoqwhatsappapi`, `chatwoot-realtime`,
-`civm-self`, `n8n-engine`, `typebot-runtime`, `vitae` (todos `ephemeral=false`, `.runner` sem o campo).
+8 runners confirmados: `acme`, `acme-org`, `service-a`, `service-b`,
+`civm-self`, `service-c`, `service-d`, `peer` (todos `ephemeral=false`, `.runner` sem o campo).
 
 ---
 
@@ -133,13 +133,13 @@ genérico sem lock).
 
 | # | Dimensão | O que o PAGO garante | Estado REAL do civm (evidência) | Paridade | Lacuna | Ação para fechar |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | **Efemeridade / clean-slate por job** | VM nova e destruída; zero estado herdado | Runner long-lived (`.runner` sem `ephemeral`); `job-completed` limpa só o `_work` próprio; **volumes/imagens de runs anteriores persistem** (106 volumes `advoq-<runId>_*`). `hook.go:217-280` | ❌ | Daemon vê o acúmulo do job anterior; oposto do clean slate | `compose -p $COMPOSE_PROJECT_NAME down -v` por-run no peer + prune de volumes órfãos por-runId no boundary do hook. Clean-slate TOTAL = 🧱 (sem VM-por-job) |
+| 1 | **Efemeridade / clean-slate por job** | VM nova e destruída; zero estado herdado | Runner long-lived (`.runner` sem `ephemeral`); `job-completed` limpa só o `_work` próprio; **volumes/imagens de runs anteriores persistem** (106 volumes `acme-<runId>_*`). `hook.go:217-280` | ❌ | Daemon vê o acúmulo do job anterior; oposto do clean slate | `compose -p $COMPOSE_PROJECT_NAME down -v` por-run no peer + prune de volumes órfãos por-runId no boundary do hook. Clean-slate TOTAL = 🧱 (sem VM-por-job) |
 | 2 | **Isolamento de daemon Docker** | Daemon próprio e vazio por job | 1 daemon único `29.1.3`; corrida "No such image" do prune concorrente já corrigida (`7e9cc0d`); SPEC marca daemon-por-runner como **fora de escopo** | 🧱 | Content store / RAM / disco fisicamente compartilhados; daemon-por-runner = isolamento falso | N/A — 🧱 sem VM-por-job. Máximo viável = **serialização docker-heavy** (`civmctl lock`, #2 da §6) reduz a janela de corrida a ~zero |
 | 3 | **Isolamento de disco** | ~14 GB SSD próprio e fresco por job | 1 partição 108 GB; pressão de um job afeta todos; `disk-watchdog` + `HardFailPct` podem **rejeitar job (exit 75)** — algo que o pago nunca faz. `hook.go:242-245` | ❌ (frescor é 🧱) | Sem cotas por-runner (cgroup/FS quota não implementadas) | `down -v` por-run + lock-serialização (nunca 2 bring-ups somando disco) + expandir disco. Frescor real = 🧱 sem clean slate (#1) |
-| 4 | **Isolamento de FS / `$HOME`** | `$HOME` fresco por job | `/home/emdev` ÚNICO p/ 8 runners; **cache slot por-runner** (`*-advoq-$SLOT`) fecha só a pasta de cache, não o `$HOME` inteiro | 🟡 | `$HOME` per-runner (RF-1 forte) segue NO-GO (sem código, SPECv4) | Manter slot; auditar todo caminho que escreve fora do slot; scrub de `_work`/`/tmp` no boundary |
+| 4 | **Isolamento de FS / `$HOME`** | `$HOME` fresco por job | `/home/emdev` ÚNICO p/ 8 runners; **cache slot por-runner** (`*-acme-$SLOT`) fecha só a pasta de cache, não o `$HOME` inteiro | 🟡 | `$HOME` per-runner (RF-1 forte) segue NO-GO (sem código, SPECv4) | Manter slot; auditar todo caminho que escreve fora do slot; scrub de `_work`/`/tmp` no boundary |
 | 5 | **Isolamento de rede / portas** | netns próprio da VM | netns único do host; colisão evitada por `CIVM_PORT_BASE` (bloco de 64, sticky em `port-blocks.json`); janela `[20000,32000)` **abaixo** do ephemeral do kernel (`32768`, confirmado) | 🟡 | Sem netns real, dois jobs ainda compartilham `localhost`; só funciona se o peer **adota** `${CIVM_PORT_BASE}` | `ci-guard` R1/R2/R3 lintam `container_name`/porta literal/`COMPOSE_PROJECT_NAME` ausente. Sem netns = 🧱 |
 | 6 | **Secrets** | Injetados por job; VM destruída remove rastro | Mesmo protocolo de runner do GitHub; MAS persistem em `$HOME`/`_work`/disco compartilhado **entre jobs** até cleanup; daemon e caches compartilhados ampliam a janela | 🟡 | Raio de exposição maior (persistência + vizinhos) que no pago | Scrub de `_work`/`/tmp` no `job-completed`; nunca compartilhar secret via env global; runner dedicado p/ workflow com secret sensível; não rodar peer não-confiável co-residente |
-| 7 | **Cache (`actions/cache`)** | Serviço remoto do GitHub, isolado por chave | `actions/cache` remoto é **idêntico** (mesmo serviço); o civm adiciona cache **local** por slot (`*-advoq-$SLOT`), trimado por idade/cap | ✅ (o remoto) / 🟡 (o local) | Cache local extra pode mascarar bug de cold-cache (passa na box, falha no pago em cache vazio) | Garantir cache key correto nos workflows; rodar cold-cache periodicamente p/ não mascarar bug |
+| 7 | **Cache (`actions/cache`)** | Serviço remoto do GitHub, isolado por chave | `actions/cache` remoto é **idêntico** (mesmo serviço); o civm adiciona cache **local** por slot (`*-acme-$SLOT`), trimado por idade/cap | ✅ (o remoto) / 🟡 (o local) | Cache local extra pode mascarar bug de cold-cache (passa na box, falha no pago em cache vazio) | Garantir cache key correto nos workflows; rodar cold-cache periodicamente p/ não mascarar bug |
 | 8 | **Concorrência / paralelismo** | Cada job = sua VM; paralelismo sem contenção local | 8 runners → ≤8 jobs; `admit MaxHeavy=2` + `cancel-in-progress` (10 workflows). **`admit` cabeado no `web.yml` (inerte) mas NÃO no `e2e-tenant-isolation.yml`** (pool genérico, sem lock) | ❌ (parcial) | RAM 7.8 GiB é teto duro; 3+ pesados sem admit podem estourar RAM/swap | Cabear `civmctl lock`/`admit` no `e2e-tenant-isolation.yml` (R4 aberto) + flipar `CIVM_E2E_RUNNER_AVAILABLE` p/ ativar o `web.yml`. Paralelismo ilimitado = 🧱 |
 | 9 | **Versões de tool / OS** | Runner-image versionada; matriz LARGA; Docker 28.0.4 | Pin estreito em `specs.go` (~9 tools). Box: git `2.43` **BEHIND** pin `2.53`; docker `29.1.3`/compose `2.40.3` **AHEAD** pins `28.0.4`/`2.38.2`; python `3.12.3` BEHIND `3.12.13` (mascarado como `compatible`) | 🟡 | Pins desatualizados; classificador tolera `ahead`/patch como verde mudo; matriz LARGA do pago não coberta | Atualizar `git` na box; re-sincronizar pins (`specs.go`); tratar `Ahead`/patch como **warning visível**; declarar o subset suportado |
 | 10 | **Cleanup pós-job** | Implícito (VM destruída) | `job-completed`: mata órfãos (`killWorkRootContainers`), apaga `_work` próprio, prune **só dangling** (`-f`, nunca `-a`/`--volumes` no path concorrente, `hook.go:349-368`); best-effort, nunca falha o job (`DecisionCleanupDegraded`, exit 0) | 🟡 | Volumes nomeados e imagens taggeadas de runs **sobrevivem** (incompleto vs teardown total) | Prune de volumes órfãos por-runId no boundary; manter o prune disciplinado (já feito) |
@@ -177,7 +177,7 @@ O "máximo" que o usuário pede, **sem hardware novo**, em ordem de alavancagem.
 item com o estado atual VERIFICADO.
 
 1. **Flipar `CIVM_E2E_RUNNER_AVAILABLE=true`** — *estado: pronto, inerte.*
-   O `web.yml` do advoq JÁ roteia o E2E pesado ao label `civm-e2e` e JÁ envolve o
+   O `web.yml` do acme JÁ roteia o E2E pesado ao label `civm-e2e` e JÁ envolve o
    bring-up docker-heavy em `civmctl lock --exec --scope docker-heavy --budget
    50m --wait 75m` (web.yml:83,185), atrás do gate `vars.CIVM_E2E_RUNNER_AVAILABLE`.
    A serialização (`internal/dockerlock`, flock+heartbeat box-wide com defesa de
@@ -214,7 +214,7 @@ item com o estado atual VERIFICADO.
    cleanup (o `until` casava a data de build do VENDOR, não do pull, apagando image
    recém-baixada debaixo de um sibling em `compose up`). Job cleanup agora só poda
    dangling (`-f`, nunca `-a`), nunca `system prune --volumes` durante job
-   (`cleanup.go:208-214`, `hook.go:349-368`). Backstops no advoq: `cleanupRunner`
+   (`cleanup.go:208-214`, `hook.go:349-368`). Backstops no acme: `cleanupRunner`
    sem `-af`, `pipefail`, classify `SigImageEvicted`. **Mantido como invariante.**
 
 7. **`cancel-in-progress`** — *estado: feito (10 workflows).* Reduz a contenção

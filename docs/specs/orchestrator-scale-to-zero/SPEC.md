@@ -1,6 +1,6 @@
 # SPEC — orchestrator scale-to-zero da VM do runner
 
-Issue: advoq/civm#135 (base) + #18 (validation log) + fix `fix/orchestrator-disk-panic`
+Issue: acme/civm#135 (base) + #18 (validation log) + fix `fix/orchestrator-disk-panic`
 Status: implementado e ativo na box (2026-06-17)
 Precedente: `docs/specs/host-volume-reclamation/SPEC.md` (gate de 2 fases, issue #106),
 `docs/specs/host-volume-reclaim-liveness/SPEC.md`, `docs/specs/civm-disk-watchdog-busy-cleanup/SPEC.md`
@@ -476,7 +476,7 @@ Auxiliares (WARN, best-effort, não bloqueiam): `guest_full_clean[_warn]`,
   (`orchestrator.ps1:25-29`). A task registra com `New-ScheduledTaskPrincipal
   -UserId 'SYSTEM'` (`activate-orchestrator.ps1:8`).
 - **Tokens.** Um PAT fine-grained `actions:read` por resource owner em
-  `C:\ProgramData\civm\gh-token-{advoq,emersonbusson}.txt` (o host não tem `gh`,
+  `C:\ProgramData\civm\gh-token-{acme,other}.txt` (o host não tem `gh`,
   `orchestrator.ps1:25-27,38-43`).
 - **`MultipleInstances IgnoreNew`** (`activate-orchestrator.ps1:9`): um
   `Optimize-VHD` de ~8 min bloqueia os ticks seguintes; um job que chega durante

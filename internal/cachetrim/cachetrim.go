@@ -1,8 +1,8 @@
 // Package cachetrim bounds the size of regenerable build/dependency caches under
 // the runner home(s) so a shared CI runner's caches cannot grow unbounded and
-// fill the host VHDX volume (the 2026-06 PausedCritical incident: the advoq
+// fill the host VHDX volume (the 2026-06 PausedCritical incident: the acme
 // workflows point GOCACHE/yarn cache-folder to named per-workflow dirs —
-// ~/.cache/go-build-advoq-services hit 13GB — that the old fixed-path cap never
+// ~/.cache/go-build-acme-services hit 13GB — that the old fixed-path cap never
 // matched). It is the SINGLE SOURCE of the cache-cap policy, consumed by both
 // the job hooks (internal/hook, runs as the runner user) and the disk-pressure
 // cleanup (internal/cleanup, runs as root over all /home/* runner homes).
@@ -326,7 +326,7 @@ func TrimByAge(opts Options, c Cap) Result {
 	// mais antigo ao mais novo. Pass 1 (allowProtected=false) preserva os arquivos
 	// quentes (acessados dentro de MinProtect). Se isso NAO alcanca o cap — o caso
 	// do cache de CI sob carga continua, onde TODO arquivo e recente e o cap nunca
-	// se aplicava (yarn-advoq-* cresceu a 18GB, incidente 2026-06-15) — Pass 2 trima
+	// se aplicava (yarn-acme-* cresceu a 18GB, incidente 2026-06-15) — Pass 2 trima
 	// os protegidos tambem, do mais antigo ao mais novo, ate o cap. A protecao de
 	// disco vence a temperatura do cache (Kahneman #16: o fail-safe e o disco).
 	freed, err := trimEntries(entries, removed, target, 0, false, opts, c)

@@ -64,12 +64,12 @@ de host idle.
 Nao usar estes nomes em documentacao operacional nova:
 
 - `ci-vm`
-- `vitae-ci`
+- `legacy-ci`
 - `ci-result`
 - `make ci-vm`
 - `CI_VM_HOST`, `CI_VM_USER`, `CI_VM_PASSWORD`
-- `~/.config/advoq/ci-vm.env`
-- `advoq-ci-vm-autoclean.timer`
+- `~/.config/acme/ci-vm.env`
+- `acme-ci-vm-autoclean.timer`
 - wrappers shell customizados em hooks de job; o contrato atual usa
   scripts `.sh` gerenciados por `civmctl hook install`
 
@@ -79,7 +79,7 @@ arquivo de migracao ou bloco explicitamente marcado como legado.
 ## Como verificar
 
 ```bash
-rg -n "vitae-ci|ci-result|make ci-vm|CI_VM_|advoq-ci-vm|ci-vm" \
+rg -n "legacy-ci|ci-result|make ci-vm|CI_VM_|acme-ci-vm|ci-vm" \
   README.md AGENTS.md CLAUDE.md CODEX.md docs .github/workflows
 ```
 

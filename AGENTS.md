@@ -4,8 +4,8 @@ Resumo terso para CLIs estilo Codex/aider/Jules. Para visão completa, ler `READ
 
 ## Propósito do repo
 
-`civm` é o repo de infraestrutura compartilhada de CI/CD que serve múltiplos
-projetos do mesmo dono (vitae, advoq, futuros). Hospeda:
+`civm` is open-source tooling for self-hosted GitHub Actions runners
+(guest Linux + optional Windows host helpers). It hosts:
 
 1. **`civmctl`** — Go CLI zero-effort para provisionar e manter a VM
    self-hosted que serve como GitHub Actions runner com label `civm`.
@@ -141,8 +141,8 @@ civmctl runner watchdog --execute --repos=auto
 civmctl runner watchdog --execute --repos=owner/repo --rerun-network-failures --max-run-age=6h
 
 # Releases (automatizado via release-please)
-gh pr list --repo advoq/civm --label "autorelease: pending"
-gh release list --repo advoq/civm --limit 5
+gh pr list --repo acme/civm --label "autorelease: pending"
+gh release list --repo acme/civm --limit 5
 git tag --list 'v*' --sort=-version:refname
 ```
 
@@ -249,7 +249,7 @@ commit, push, rollback ou alteração automática em peer repo.
 - `MEMORY.md` — log de sessão append-only
 - `validation.md` — log append-only de TODA validação empírica de infra (Kahneman #13; taxonomia no header do arquivo)
 - `runbooks/MULTI-PROJECT-RUNNER.md` — provisionamento da VM
-- `runbooks/RUNNER-SERIALIZATION.md` — invariante "1 runner por org" (advoq serializa no runner ORG)
+- `runbooks/RUNNER-SERIALIZATION.md` — invariante "1 runner por org" (acme serializa no runner ORG)
 - `runbooks/VM-CREDENTIALS.md` — segurança de credenciais
 - `runbooks/PEER-ADOPTION-CHECKLIST.md` — adoção manual em peer repo
 - `templates/CIVM-USAGE.md` — fonte para `docs/CIVM.md` nos peer repos

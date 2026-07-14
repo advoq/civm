@@ -9,21 +9,21 @@ issues: []
 
 > Tipo: mudança de plataforma do runner (`civmctl` + hooks + runbook + templates). Sem schema de banco, sem endpoint HTTP de produto, sem evento de domínio.
 > Política Day-0: civm não tem produção viva com dados legados obrigatórios; backfill = N/A. Solução primária única, sem dual-path "disciplina-OU-primitivo".
-> Origem: auditoria disparada por `advoq#1006` (gate `tenant-isolation-smoke` instável por contenção/colisão no runner compartilhado). Corrige a **raiz no civm**, não remenda em cada peer.
+> Origem: auditoria disparada por `acme#1006` (gate `tenant-isolation-smoke` instável por contenção/colisão no runner compartilhado). Corrige a **raiz no civm**, não remenda em cada peer.
 
 ---
 
 ## 1. Resumo
 
-O civm é um runner self-hosted compartilhado por múltiplos repos peer (advoq, vitae) numa **única VM, com um único daemon Docker e um único disco** (Confirmado em docs — `runbooks/MULTI-PROJECT-RUNNER.md:393-397`). Hoje, todo o isolamento de trabalho docker-heavy entre projetos concorrentes é **delegado à disciplina do consumidor**: o runbook manda "sempre passar `--project-name <repo>-<run-id>`" e "nunca bindar portas fixas", mas o civm **não fornece, não injeta e não verifica** nada disso (Confirmado em docs — `MULTI-PROJECT-RUNNER.md:398-424`).
+O civm é um runner self-hosted compartilhado por múltiplos repos peer (acme, peer) numa **única VM, com um único daemon Docker e um único disco** (Confirmado em docs — `runbooks/MULTI-PROJECT-RUNNER.md:393-397`). Hoje, todo o isolamento de trabalho docker-heavy entre projetos concorrentes é **delegado à disciplina do consumidor**: o runbook manda "sempre passar `--project-name <repo>-<run-id>`" e "nunca bindar portas fixas", mas o civm **não fornece, não injeta e não verifica** nada disso (Confirmado em docs — `MULTI-PROJECT-RUNNER.md:398-424`).
 
-É uma guardrail por convenção, não por construção — e falha de forma observável. O `advoq#1006` existe porque o advoq não seguiu a regra não-fornecida: `infra/docker-compose.yml` fixa `name: advoq`, 24 `container_name: advoq-*` e portas de host estáticas, sem nenhum `COMPOSE_PROJECT_NAME` (Confirmado no codebase — advoq `infra/docker-compose.yml:1`, `tools/devctl/internal/ci/run.go:155-162,731-751`). Resultado: dois jobs docker-heavy co-residentes colidem em nome de container, rede, volume e porta de host, e o build de ~40 min satura o daemon/disco — derrubando justamente o gate de **isolamento de tenant**, a defesa de maior severidade do produto.
+É uma guardrail por convenção, não por construção — e falha de forma observável. O `acme#1006` existe porque o acme não seguiu a regra não-fornecida: `infra/docker-compose.yml` fixa `name: acme`, 24 `container_name: acme-*` e portas de host estáticas, sem nenhum `COMPOSE_PROJECT_NAME` (Confirmado no codebase — acme `infra/docker-compose.yml:1`, `tools/devctl/internal/ci/run.go:155-162,731-751`). Resultado: dois jobs docker-heavy co-residentes colidem em nome de container, rede, volume e porta de host, e o build de ~40 min satura o daemon/disco — derrubando justamente o gate de **isolamento de tenant**, a defesa de maior severidade do produto.
 
-O problema é estrutural e **comum a todos os peers**, não específico do advoq. Vitae tem o mesmo footgun latente assim que rodar `docker compose` no runner. A auditoria confirmou que o civm **não tem nenhum primitivo de serialização** para trabalho docker-heavy (activeruns/reversewatchdog/idle são read-only; capacity é hard-fail passivo a 90%; cleanup dispara a 60%) (Confirmado no codebase — `internal/activeruns/activeruns.go`, `internal/reversewatchdog/reversewatchdog.go`, `internal/civm/civm.go:37-40`), e que um lock segurado por um bring-up longo pode **starvar o próprio disk-watchdog/cleanup do civm** até o hard-fail de 90% (Confirmado em docs — advoq `docs/specs/M48/1006-...PRD.md:307`).
+O problema é estrutural e **comum a todos os peers**, não específico do acme. Vitae tem o mesmo footgun latente assim que rodar `docker compose` no runner. A auditoria confirmou que o civm **não tem nenhum primitivo de serialização** para trabalho docker-heavy (activeruns/reversewatchdog/idle são read-only; capacity é hard-fail passivo a 90%; cleanup dispara a 60%) (Confirmado no codebase — `internal/activeruns/activeruns.go`, `internal/reversewatchdog/reversewatchdog.go`, `internal/civm/civm.go:37-40`), e que um lock segurado por um bring-up longo pode **starvar o próprio disk-watchdog/cleanup do civm** até o hard-fail de 90% (Confirmado em docs — acme `docs/specs/M48/1006-...PRD.md:307`).
 
-Este PRD move o isolamento docker-heavy **para dentro do civm como primitivo de primeira classe**: **fornecido** (cada runner recebe identidade e faixa de porta disjuntas via `.env`), **enforced** (um linter recusa compose/workflow de peer que viole as invariantes) e **observável** (lock-wait/hold, colisões, faixa de porta em `capacity --json`/`hooks.jsonl`). Objetivo: advoq/vitae com CI docker-heavy **correto por padrão, livre de colisão e fail-safe**, consumindo um contrato único publicado em vez de cada repo re-implementar (errado) a disciplina.
+Este PRD move o isolamento docker-heavy **para dentro do civm como primitivo de primeira classe**: **fornecido** (cada runner recebe identidade e faixa de porta disjuntas via `.env`), **enforced** (um linter recusa compose/workflow de peer que viole as invariantes) e **observável** (lock-wait/hold, colisões, faixa de porta em `capacity --json`/`hooks.jsonl`). Objetivo: acme/peer com CI docker-heavy **correto por padrão, livre de colisão e fail-safe**, consumindo um contrato único publicado em vez de cada repo re-implementar (errado) a disciplina.
 
-Valor: o civm passa a "funcionar de forma linda nos repos" — o peer não precisa entender a física do daemon compartilhado; consome `CIVM_PORT_BASE`/`COMPOSE_PROJECT_NAME` e `civmctl lock`, e o `ci-guard` o impede de mergear config colidível. O `advoq#1006` deixa de ser fix local e vira **consumidor fino** deste primitivo.
+Valor: o civm passa a "funcionar de forma linda nos repos" — o peer não precisa entender a física do daemon compartilhado; consome `CIVM_PORT_BASE`/`COMPOSE_PROJECT_NAME` e `civmctl lock`, e o `ci-guard` o impede de mergear config colidível. O `acme#1006` deixa de ser fix local e vira **consumidor fino** deste primitivo.
 
 ---
 
@@ -59,7 +59,7 @@ Valor: o civm passa a "funcionar de forma linda nos repos" — o peer não preci
 
 ### Confirmado na documentação oficial
 
-- **GitHub Actions self-hosted:** o arquivo `.env` no diretório do runner é carregado no ambiente do serviço e herdado pelos jobs; dedicar uma classe de job a um runner se faz por **label** adicional em `runs-on`/runner group; `pull_request` de fork roda sem segredos do repo e `pull_request_target` é proibido pelo contrato civm (Confirmado em docs — `.claude/rules`/`civm.md` do advoq + docs.github.com).
+- **GitHub Actions self-hosted:** o arquivo `.env` no diretório do runner é carregado no ambiente do serviço e herdado pelos jobs; dedicar uma classe de job a um runner se faz por **label** adicional em `runs-on`/runner group; `pull_request` de fork roda sem segredos do repo e `pull_request_target` é proibido pelo contrato civm (Confirmado em docs — `.claude/rules`/`civm.md` do acme + docs.github.com).
 - **Docker Compose:** precedência de project name `-p` > `COMPOSE_PROJECT_NAME` > `name:` do arquivo > basename do dir. `COMPOSE_PROJECT_NAME` **sobrepõe** `name:`. `container_name` é global por daemon e **impede** múltiplas instâncias/escala — incompatível com co-residência (Confirmado em docs — docs.docker.com "Specify a project name", "container_name"). Project name isola redes/volumes/nomes auto-gerados, **mas não host ports** (recurso global do host).
 
 ### O que está sendo proposto (Inferência / proposta)
@@ -79,7 +79,7 @@ N/A para persistência. Em jogo está a **integridade dos gates** de cada peer q
 **Isolamento docker-heavy como primitivo civm fornecido + enforced + observável, mantendo o daemon Docker único** (defense-in-depth, Day-0 único):
 
 1. **Identidade de isolamento por runner (RF-1).** `civmctl hook install` grava no `.env` de cada runner: `CIVM_RUNNER_SLOT=<short>` (identidade estável), `CIVM_PORT_BASE=<base de bloco disjunto>` (faixa de ~64 portas por runner, sem sobreposição entre runners), e `COMPOSE_PROJECT_NAME=<slot>` como default. Como cada runner roda 1 job por vez, as faixas são **box-únicas a qualquer instante**. O consumidor offseta suas portas de host de `CIVM_PORT_BASE` e usa `COMPOSE_PROJECT_NAME=${CIVM_RUNNER_SLOT}-${GITHUB_RUN_ID}` para unicidade per-run.
-2. **Lock box-wide docker-heavy (RF-2).** Novo `civmctl lock acquire|release|--exec` sobre `syscall.Flock` em `/run/civm/docker-heavy.lock`, com **orçamento de hold-time**, heartbeat/PID para auto-release de lock obsoleto, e exit codes estáveis. Substitui o flock repo-local divergente do advoq (`/tmp/${owner}-${repo}-go-integration.lock`) por caminho único honrado por todos os peers.
+2. **Lock box-wide docker-heavy (RF-2).** Novo `civmctl lock acquire|release|--exec` sobre `syscall.Flock` em `/run/civm/docker-heavy.lock`, com **orçamento de hold-time**, heartbeat/PID para auto-release de lock obsoleto, e exit codes estáveis. Substitui o flock repo-local divergente do acme (`/tmp/${owner}-${repo}-go-integration.lock`) por caminho único honrado por todos os peers.
 3. **Cleanup/disk-watchdog lock-aware (RF-3).** `job-started`/cleanup/watchdog passam a enxergar lock docker-heavy ativo (heartbeat fresco) e **adiam** prune destrutivo enquanto o lock vive, até o orçamento; estourado o orçamento, o lock é force-released e o job falha fechado. Elimina a starvação documentada (hold de 40 min → hard-fail 90%).
 4. **`civmctl ci-guard` (RF-4).** Subcomando read-only que varre `infra/**/docker-compose*.yml` + `.github/workflows/*.yml` do repo consumidor e **recusa** (exit 1) `container_name` fixo, bind de porta de host estática, ausência de `COMPOSE_PROJECT_NAME`/`--project-name`, e step docker-heavy sem `civmctl lock`. Transforma os imperativos do runbook em guardrail.
 5. **Classe de runner dedicada (RF-5).** Formalizar `civmctl runner add --label civm,civm-e2e` para job E2E pesado em slot próprio; `civmctl doctor` checa existência quando o peer opta. Labels já funcionam — custo near-zero.
@@ -88,7 +88,7 @@ N/A para persistência. Em jogo está a **integridade dos gates** de cada peer q
 
 ### Motivo da escolha
 
-- **Ataca a raiz medida, não o sintoma.** A auditoria provou que a delegação por disciplina falha (advoq#1006) e que não há primitivo nenhum. Fornecer + enforced + observável é a única forma de o civm garantir o invariante para **todos** os peers em vez de torcer para cada um implementar certo.
+- **Ataca a raiz medida, não o sintoma.** A auditoria provou que a delegação por disciplina falha (acme#1006) e que não há primitivo nenhum. Fornecer + enforced + observável é a única forma de o civm garantir o invariante para **todos** os peers em vez de torcer para cada um implementar certo.
 - **Respeita a física verificada.** Daemon único (mantido), runner sequencial, `.env` per-runner estático, hook sem env-para-step. O design encaixa nesses fatos confirmados em código, sem inventar capacidade inexistente.
 - **Reuso máximo.** Labels (já existem), padrão Glob/WalkDir (`diskaudit`), dispatch por `switch`, `.env` writer (`upsertEnv`), thresholds (`civm.go`). Só o lock e o linter são código novo.
 - **Fail-safe por construção.** Lock indisponível/estourado → job falha alto, nunca pula o gate; `ci-guard` recusa config colidível antes do merge; cleanup lock-aware não derruba bring-up legítimo nem deixa o disco estourar silenciosamente.
@@ -98,10 +98,10 @@ N/A para persistência. Em jogo está a **integridade dos gates** de cada peer q
 
 | Alternativa | Por que descartada |
 | --- | --- |
-| **Manter "isolamento por disciplina" só adicionando o linter** | Meia-medida: não dá ao consumidor primitivo de porta/lock; cada repo ainda hand-rolla portas e flock, divergindo. O advoq#1006 nasceu desse modelo. |
+| **Manter "isolamento por disciplina" só adicionando o linter** | Meia-medida: não dá ao consumidor primitivo de porta/lock; cada repo ainda hand-rolla portas e flock, divergindo. O acme#1006 nasceu desse modelo. |
 | **dockerd rootless / `DOCKER_HOST` por runner (isolamento real de daemon)** | Eliminaria toda disciplina de porta, mas multiplica imagens/cache/disco numa VM que já bate hard-fail a 90%; caveats de rede/perf rootless. Inviável no VM 128GB single-daemon atual. **Deferido** atrás de gate de expansão de disco/RAM. |
 | **Injeção per-run dinâmica via hook de job** | Impossível: hooks rodam em processo separado e não exportam env para steps (Confirmado no codebase — `hook.go`). |
-| **Fix só no advoq (#1006), runbook continua imperativo** | Deixa vitae exposto ao mesmo footgun; mantém caminho de lock divergente; contraria o pedido de corrigir a raiz no civm. |
+| **Fix só no acme (#1006), runbook continua imperativo** | Deixa peer exposto ao mesmo footgun; mantém caminho de lock divergente; contraria o pedido de corrigir a raiz no civm. |
 | **Lock como `sync.Mutex`/flag em `/tmp`** | `sync.Mutex` não cruza processos; flag em `/tmp` não tem semântica de stale/heartbeat. `syscall.Flock` em `/run/civm/` é o primitivo correto e auditável. |
 | **`COMPOSE_PROJECT_NAME` per-runner sem `$GITHUB_RUN_ID`** | Protege cross-repo, mas um leftover de job crashado no mesmo runner colidiria com o próximo bring-up. Per-run (`<slot>-<run_id>`) + remoção de `container_name` fixo no consumidor fecha o gap. |
 
@@ -109,7 +109,7 @@ N/A para persistência. Em jogo está a **integridade dos gates** de cada peer q
 
 - **O consumidor ainda precisa mudar** (offsetar portas de `CIVM_PORT_BASE`, usar `COMPOSE_PROJECT_NAME`, envolver bring-up no lock, remover `container_name` fixo). Aceito: o civm não edita o YAML de cada peer; fornece o primitivo e recusa o uso errado via `ci-guard`.
 - **O lock box-wide serializa trabalho docker-heavy a 1 por vez**, trocando throughput por confiabilidade. Aceito: o detector de changes de cada peer já limita frequência de jobs pesados; o orçamento de hold limita o pior caso; a classe de runner dedicada dá slot próprio ao pesado.
-- **`CIVM_PORT_BASE` por runner reduz o universo de portas** por slot a bloco finito (~64). Aceito: suficiente para a maior stack (advoq publica ~13 portas de host) com folga.
+- **`CIVM_PORT_BASE` por runner reduz o universo de portas** por slot a bloco finito (~64). Aceito: suficiente para a maior stack (acme publica ~13 portas de host) com folga.
 - **Daemon único permanece** — sem isolamento de kernel entre jobs concorrentes além de namespaces de container do Docker. Aceito como Day-0; isolamento de daemon deferido com gate.
 
 ---
@@ -160,7 +160,7 @@ Emitir lock-wait/lock-hold, contador de colisão de project-name (= 0 esperado),
 
 ### RF-7 — Contrato único publicado e consumo dos peers
 
-Reescrever `MULTI-PROJECT-RUNNER.md` (§Riscos compartilhados → §Isolamento fornecido), `templates/CIVM-USAGE.md`, template `*-ci-router.yml` e `PEER-ADOPTION-CHECKLIST.md` para consumo copy-paste; advoq/vitae passam a consumir `CIVM_PORT_BASE`/`COMPOSE_PROJECT_NAME` + `civmctl lock` + `civmctl ci-guard`.
+Reescrever `MULTI-PROJECT-RUNNER.md` (§Riscos compartilhados → §Isolamento fornecido), `templates/CIVM-USAGE.md`, template `*-ci-router.yml` e `PEER-ADOPTION-CHECKLIST.md` para consumo copy-paste; acme/peer passam a consumir `CIVM_PORT_BASE`/`COMPOSE_PROJECT_NAME` + `civmctl lock` + `civmctl ci-guard`.
 
 - **Critério de aceite:** runbook descreve as 3 chaves de `.env`, o caminho do lock, os exit codes e o contrato do `ci-guard`; `PEER-ADOPTION-CHECKLIST.md` lista os passos; `docs/INDEX.md` regenerado (`npm run docs:check`).
 - **Tenant isolation:** N/A (documentação).
@@ -177,7 +177,7 @@ Reescrever `MULTI-PROJECT-RUNNER.md` (§Riscos compartilhados → §Isolamento f
 
 ### Segurança
 
-- **Sem `pull_request_target`** com runner self-hosted rodando código de PR (Confirmado em docs — `civm.md` do advoq + governance civm). `ci-guard` e o linter rodam sobre o checkout do PR sem segredos extras.
+- **Sem `pull_request_target`** com runner self-hosted rodando código de PR (Confirmado em docs — `civm.md` do acme + governance civm). `ci-guard` e o linter rodam sobre o checkout do PR sem segredos extras.
 - O `.env` por runner **não** carrega segredo; só identidade/porta/projeto. Nenhum IP/credencial de VM em regra de peer.
 - `civmctl lock` opera em `/run/civm/` (root-owned, fora do workspace de job); não expõe estado a jobs além do contrato CLI.
 
@@ -189,7 +189,7 @@ Reescrever `MULTI-PROJECT-RUNNER.md` (§Riscos compartilhados → §Isolamento f
 
 - `CIVM_PORT_BASE` por runner torna a stack horizontalmente segura para N runners co-residentes. Bloco de ~64 portas/runner cobre a maior stack peer com folga.
 - O lock limita trabalho docker-heavy concorrente a 1 para proteger daemon/disco único; o detector de changes de cada peer limita frequência; a classe de runner dedicada dá slot próprio ao pesado.
-- Com N peers: o lock só agrega valor se peers de fato rodam compose docker-heavy no mesmo box (lacuna aberta — confirmar vitae).
+- Com N peers: o lock só agrega valor se peers de fato rodam compose docker-heavy no mesmo box (lacuna aberta — confirmar peer).
 
 ### LGPD
 
@@ -212,7 +212,7 @@ Reescrever `MULTI-PROJECT-RUNNER.md` (§Riscos compartilhados → §Isolamento f
 4. O peer adquire o lock: `civmctl lock --exec --scope docker-heavy --budget 50m -- <bring-up>` (RF-2). Bloqueia/enfileira se outro docker-heavy estiver ativo no box.
 5. Bring-up: `docker compose -p "${COMPOSE_PROJECT_NAME}-${GITHUB_RUN_ID}" ... up` com portas de host offsetadas de `${CIVM_PORT_BASE}`. Projeto/rede/containers/portas disjuntos de qualquer outro runner.
 6. Cleanup/watchdog veem o lock fresco e **adiam** prune destrutivo (RF-3).
-7. Healthcheck do peer → suíte do peer (ex.: tenant-isolation smoke do advoq) usando as portas offsetadas.
+7. Healthcheck do peer → suíte do peer (ex.: tenant-isolation smoke do acme) usando as portas offsetadas.
 8. `civmctl lock` libera (defer do `--exec`) quando o bring-up estabiliza/termina; cleanup volta a podar.
 9. `job-completed` hook poda docker recuperável + trim de caches (já existente).
 
@@ -284,7 +284,7 @@ Sem endpoint HTTP, schema OpenAPI/SDK ou evento Redis. Interfaces são contratos
 
 ### Pré-requisitos
 
-- Confirmar se vitae roda compose docker-heavy no box (lacuna aberta) — define quanto o lock agrega cross-repo.
+- Confirmar se peer roda compose docker-heavy no box (lacuna aberta) — define quanto o lock agrega cross-repo.
 - Operador roda `civmctl hook install --execute` + `self-upgrade` para distribuir o binário com as novas chaves/lock.
 
 ### Riscos técnicos (com mitigação)
@@ -295,7 +295,7 @@ Sem endpoint HTTP, schema OpenAPI/SDK ou evento Redis. Interfaces são contratos
 | `CIVM_PORT_BASE` colide com portas default do compose do peer (minio 9020/9021, nginx 81, etc.) | Bloco por runner escolhido fora dos defaults conhecidos; `ci-guard` valida que o peer mapeou tudo no bloco |
 | `.env` injeção quebra runner existente | `upsertEnv` preserva chaves; idempotente; teste de round-trip; `doctor` valida `.env` |
 | `ci-guard` falso-positivo bloqueia peer legítimo | Regras conservadoras + `--json` + allowlist por arquivo documentada; rollout em modo report antes de enforce |
-| Acoplamento: peers precisam adotar o contrato | RF-7 publica contrato + checklist; advoq#1006 é o primeiro consumidor de prova |
+| Acoplamento: peers precisam adotar o contrato | RF-7 publica contrato + checklist; acme#1006 é o primeiro consumidor de prova |
 | Daemon único permanece SPOF de isolamento de kernel | Aceito Day-0; isolamento de daemon deferido atrás de gate de expansão |
 
 ### Impacto em componentes existentes
@@ -308,7 +308,7 @@ Nenhum breaking de produto. Mudança de comportamento de plataforma de CI: peers
 
 ### Estratégia de rollout
 
-Por dependência: **Slice 0** (profiling/baseline) → **Slice 1** (RF-1 `.env` + RF-2 lock, civmctl) → **Slice 2** (RF-3 lock-aware + RF-6 observabilidade) → **Slice 3** (RF-4 `ci-guard` em modo report → enforce) → **Slice 4** (RF-5 runner dedicado) → **Slice 5** (RF-7 docs/templates + adoção advoq como prova). Cada slice atrás de validação na VM.
+Por dependência: **Slice 0** (profiling/baseline) → **Slice 1** (RF-1 `.env` + RF-2 lock, civmctl) → **Slice 2** (RF-3 lock-aware + RF-6 observabilidade) → **Slice 3** (RF-4 `ci-guard` em modo report → enforce) → **Slice 4** (RF-5 runner dedicado) → **Slice 5** (RF-7 docs/templates + adoção acme como prova). Cada slice atrás de validação na VM.
 
 ### Estratégia de rollback
 
@@ -329,9 +329,9 @@ Reversível por-slice, sem estado de infra a desfazer: remover as 3 chaves do `.
 | **Slice 0 — Baseline** | `civmctl capacity --json` do box vivo + profiling do bring-up dos peers (medir slots, disco, tempo). Sem código. | — | Output colado no SPEC; de-risca claims numéricos |
 | **Slice 1 — Primitivos (RF-1, RF-2)** | `.env` writer estendido + atribuição de `CIVM_PORT_BASE` disjunto; `civmctl lock` (flock + budget + stale). | Slice 0 | Teste unit/concorrência local; round-trip de `.env` |
 | **Slice 2 — Resiliência + obs (RF-3, RF-6)** | cleanup/watchdog lock-aware; `Report` estendido; linhas `hooks.jsonl`. | Slice 1 | Teste com lock mockado fresco/estourado |
-| **Slice 3 — Enforcement (RF-4)** | `civmctl ci-guard` (report → enforce). | Slice 1 | Fixtures conforme/violador; rodar contra advoq real |
+| **Slice 3 — Enforcement (RF-4)** | `civmctl ci-guard` (report → enforce). | Slice 1 | Fixtures conforme/violador; rodar contra acme real |
 | **Slice 4 — Runner dedicado (RF-5)** | formalizar label `civm-e2e` + check no `doctor`. | Slice 1 | `runner add --label` + verificação online |
-| **Slice 5 — Contrato + adoção (RF-7)** | runbook/templates/checklist; advoq#1006 consome (prova). | Slices 1-4 | `npm run docs:check`; smoke do advoq verde |
+| **Slice 5 — Contrato + adoção (RF-7)** | runbook/templates/checklist; acme#1006 consome (prova). | Slices 1-4 | `npm run docs:check`; smoke do acme verde |
 
 **Validável cedo:** Slice 0 (sem código) e Slice 1 (local). **Exige VM/coordenação:** Slices 2-5. **Backfill/migração:** N/A — Day-0.
 
@@ -341,12 +341,12 @@ Reversível por-slice, sem estado de infra a desfazer: remover as 3 chaves do `.
 
 - `docs/specs/multi-project-isolation/{PRD.md (este), SPEC.md, IMPL.md}`
 - `runbooks/MULTI-PROJECT-RUNNER.md` (§Riscos compartilhados → §Isolamento fornecido; lock; `.env`; `ci-guard`; label `civm-e2e`)
-- `templates/CIVM-USAGE.md` + `templates/advoq-ci-router.yml.template` + `templates/ci-router.yml.template`
-- `runbooks/PEER-ADOPTION-CHECKLIST.md` + `runbooks/ADVOQ-ADOPTION.md`
+- `templates/CIVM-USAGE.md` + `templates/acme-ci-router.yml.template` + `templates/ci-router.yml.template`
+- `runbooks/PEER-ADOPTION-CHECKLIST.md` + `runbooks/ORG-RUNNER-ADOPTION.md`
 - `disciplines/KAHNEMAN-DISCIPLINES.md` (link de etapas críticas — só se nova âncora)
 - `AGENTS.md`/`CODEX.md` (se mudar regra de trabalho/boundary)
 - `docs/INDEX.md` (regenerado via `npm run docs:index`)
-- Lado consumidor (advoq, fora deste repo): `docs/specs/M48/1006-...`, `.claude/rules/civm.md`, `docs/CIVM.md`
+- Lado consumidor (acme, fora deste repo): `docs/specs/M48/1006-...`, `.claude/rules/civm.md`, `docs/CIVM.md`
 
 ## 12. Fora de escopo
 
@@ -356,7 +356,7 @@ Reversível por-slice, sem estado de infra a desfazer: remover as 3 chaves do `.
 | **Reescrever billing/release/parity/drift do civm** | Fora do problema de isolamento docker-heavy; manter foco |
 | **Migrar para N VMs (1 por repo)** | Capex; só se rollback trigger de crosstalk/disco disparar (já no runbook) |
 | **Mudança em produto de peer (schema/endpoint/SDK)** | Puramente plataforma de CI |
-| **Implementar o fix no advoq aqui** | advoq é consumidor; o SPEC do advoq#1006 vira slice fina separada |
+| **Implementar o fix no acme aqui** | acme é consumidor; o SPEC do acme#1006 vira slice fina separada |
 
 ## 13. Critérios de aceitação
 
@@ -366,7 +366,7 @@ Reversível por-slice, sem estado de infra a desfazer: remover as 3 chaves do `.
 - `capacity --json` expõe lock/porta; `hooks.jsonl` registra lock (RF-6).
 - Runner `civm-e2e` registrável e detectável (RF-5).
 - Runbook/templates/checklist publicam o contrato; `npm run docs:check` verde (RF-7).
-- advoq#1006 consome o primitivo e seu `tenant-isolation-smoke` fica verde sob concorrência (prova de Slice 5).
+- acme#1006 consome o primitivo e seu `tenant-isolation-smoke` fica verde sob concorrência (prova de Slice 5).
 
 ## 14. Validação
 
@@ -375,4 +375,4 @@ Reversível por-slice, sem estado de infra a desfazer: remover as 3 chaves do `.
 - **Lint/format:** `golangci-lint run` (`.golangci.yml`), `gofmt`.
 - **Docs:** `npm run docs:check` (índice), markdown links.
 - **Gates cognitivos:** cada etapa crítica do SPEC aponta `disciplines/KAHNEMAN-DISCIPLINES.md` com pergunta obrigatória, evidência mínima e abort trigger.
-- **Prova end-to-end:** advoq `tenant-isolation-smoke` verde sob concorrência consumindo o primitivo (Slice 5).
+- **Prova end-to-end:** acme `tenant-isolation-smoke` verde sob concorrência consumindo o primitivo (Slice 5).

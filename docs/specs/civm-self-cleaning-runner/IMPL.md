@@ -7,7 +7,7 @@
 > abaixo é preservado como histórico — não o reimplemente.
 
 > **Natureza desta IMPL.** Intervenção de emergência em 2026-06-06: o `V:` do host
-> chegou a **6.59 GB livres** (espiral de morte ativa) **e** a CI do advoq (#1092
+> chegou a **6.59 GB livres** (espiral de morte ativa) **e** a CI do acme (#1092
 > `tenant-isolation-smoke`) falhava com `No such image` de largada. Esta IMPL
 > executou o subconjunto do PRD/SPEC necessário para **quebrar a espiral agora** e
 > **destravar a CI de forma durável**, deixando o restante do plano de slices
@@ -89,7 +89,7 @@ falta de trim automático).
 ### 4. Deploy ao host `C:\civm-deploy` + self-heal autônomo (stale-on-host — o elo que fechou #106)
 
 **Achado "stale-on-host" (código existe ≠ proteção ativa — disciplina Kahneman #16
-no advoq / #15 no civm).** O fix #106 estava **correto no repo** mas a scheduled task
+no acme / #15 no civm).** O fix #106 estava **correto no repo** mas a scheduled task
 do host rodava o `.ps1` **antigo** de `C:\civm-deploy`: o artefato deployado ≠ o do
 repo. Logo o gate de duas fases, o `fstrim` best-effort e o `ScratchBudget=11` **não
 tinham efeito real** — "código existe" não é "proteção ativa". Este foi o elo que
@@ -141,13 +141,13 @@ não era o docker:
 
 | Consumidor (guest 66 GB usados) | Tamanho | Natureza |
 | --- | --- | --- |
-| `~/.cache/go-build-advoq-services` | 13 GB | cache de build regenerável |
-| `~/.cache/yarn-advoq-{web,gates,tenant-isolation-smoke}` | 4.3 GB cada | cache de deps |
-| `~/.cache/go-build-advoq{,-devctl}` | 3.6 GB | cache de build |
+| `~/.cache/go-build-acme-services` | 13 GB | cache de build regenerável |
+| `~/.cache/yarn-acme-{web,gates,tenant-isolation-smoke}` | 4.3 GB cada | cache de deps |
+| `~/.cache/go-build-acme{,-devctl}` | 3.6 GB | cache de build |
 | `~/.cache/golangci-lint` | 1.1 GB | cache de lint |
 | docker | **0 B** | (não era o vilão) |
 
-Os workflows do advoq apontam `GOCACHE`/yarn cache-folder para dirs **nomeados
+Os workflows do acme apontam `GOCACHE`/yarn cache-folder para dirs **nomeados
 por workflow** (isolamento de cache-key). O `cacheCaps()` do hook só casava os
 paths **default** (`~/.cache/go-build`, `~/.yarn/cache`), então os dirs nomeados
 **nunca casavam nenhum cap e cresciam sem limite** (.cache somou 31 GB; VHDX 105
@@ -162,7 +162,7 @@ GB num volume V: de 119 GB ≈ 14 GB de headroom).
    `cachePaths()` (modo wipe / disk-pressure) deriva de `cacheCaps()`, então
    passa a varrer os nomeados também. **Deployado + provado no binário do guest:**
    `civmctl hook job-started --json --pre-cleanup-pct 1` → `cache_trim` com
-   `path=~/.cache/go-build-advoq-probe found=83886080` (antes: 0 ações).
+   `path=~/.cache/go-build-acme-probe found=83886080` (antes: 0 ações).
 2. **`feat(hook): host-aware job-started gate` (`5252efb`).** O gate só via a % do
    filesystem do **guest**; o guest podia estar em 69% (confortável) enquanto o
    `V:` do host já estava em 88% (crítico). Agora o hook lê o snapshot

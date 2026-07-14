@@ -36,9 +36,9 @@ keying do orquestrador (`Get-PrActivity`: `pr-<num>` ou `branch-<ref>`).
 
 ## Passos do canario
 1. **Provisionar o gate runner** (host, elevado):
-   `$tok = gh api -X POST /orgs/advoq/actions/runners/registration-token --jq .token`
+   `$tok = gh api -X POST /orgs/acme/actions/runners/registration-token --jq .token`
    `pwsh C:\civm-deploy\civm-gate-runner-provision.ps1 -RegToken $tok -Index 1`
-   Conferir: `gh api orgs/advoq/actions/runners --jq '.runners[]|select(.name|endswith("-gate"))|.name'`.
+   Conferir: `gh api orgs/acme/actions/runners --jq '.runners[]|select(.name|endswith("-gate"))|.name'`.
    **Persistencia (sobreviver reboot/crash):** NAO use o service do Windows
    (`config.cmd --runasservice` da `Win32 1068` nesta box mesmo sem dependencias
    declaradas — beco sem saida). Use o WATCHDOG via scheduled task:

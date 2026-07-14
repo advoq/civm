@@ -356,7 +356,7 @@ Slice 0 (diagnóstico/baseline, sem mudança) → Slice 1 (`disk-doctor` + `main
 | Migrar civmctl para Windows / reescrever em PS | Mantém arquitetura guest-Linux; host só precisa de scripts + task |
 | Trocar Hyper-V por outro hypervisor | Fora do problema |
 | Expandir fisicamente o `V:`/disco como solução única | Capex; mitigação estrutural (RF-6), não a solução |
-| Mudança em produto de peer (advoq/vitae) | Puramente plataforma de runner |
+| Mudança em produto de peer (acme/peer) | Puramente plataforma de runner |
 | Multi-project isolation (lock/porta/project-name) | Coberto por `docs/specs/multi-project-isolation/` |
 
 ## 13. Critérios de aceitação

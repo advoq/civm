@@ -82,7 +82,7 @@ VHDX, consumido pelo guard de headroom do reclaim.
 infra** — a fonte de verdade para "isso está de fato funcionando agora?". A
 definição, a taxonomia de categorias e o framing Kahneman #13 vivem no **header
 do `validation.md`**; complementa o `vm.md` (inventário da máquina). Validação de
-app vive no `validation.md` do **advoq** (independente); não logue app aqui.
+app vive no `validation.md` do **acme** (independente); não logue app aqui.
 
 Regras de uso:
 

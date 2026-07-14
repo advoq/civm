@@ -1,6 +1,6 @@
 # SPEC — disk-watchdog: limpeza segura mesmo com host ocupado
 
-Issue: advoq/civm#70
+Issue: acme/civm#70
 Status: implementação
 Precedente: `docs/specs/civm-runner-reliability/SPEC.md` RF-6/ITEM-10 (runner-watchdog host-busy -> exit 0).
 

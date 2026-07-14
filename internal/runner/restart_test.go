@@ -28,9 +28,9 @@ func newRestartRunner(commands map[string][]byte, errs map[string]error) func(co
 	}
 }
 
-const fakeListOutput = `actions.runner.advoq-civm.civm-1.service        loaded active running GitHub Actions Runner
-actions.runner.advoq-advoq.civm-cmpx.service loaded active running GitHub Actions Runner
-actions.runner.emersonbusson-vitae.civm-vitae.service    loaded active running GitHub Actions Runner
+const fakeListOutput = `actions.runner.acme-civm.civm-1.service        loaded active running GitHub Actions Runner
+actions.runner.acme-acme.civm-cmpx.service loaded active running GitHub Actions Runner
+actions.runner.other-peer.civm-peer.service    loaded active running GitHub Actions Runner
 `
 
 func TestRestart_DryRun_ResolvesUnit(t *testing.T) {
@@ -47,7 +47,7 @@ func TestRestart_DryRun_ResolvesUnit(t *testing.T) {
 	if r.Err != nil {
 		t.Fatalf("r.Err = %v", r.Err)
 	}
-	want := "actions.runner.advoq-advoq.civm-cmpx.service"
+	want := "actions.runner.acme-acme.civm-cmpx.service"
 	if r.UnitResolved != want {
 		t.Errorf("UnitResolved = %q, want %q", r.UnitResolved, want)
 	}

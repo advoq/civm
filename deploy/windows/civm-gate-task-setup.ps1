@@ -10,7 +10,7 @@
 #   .\civm-gate-task-setup.ps1 -Index 2
 param([Parameter(Mandatory)][int]$Index, [string]$Root = 'C:\civm-gate')
 $ErrorActionPreference = 'Stop'
-$svc = "actions.runner.advoq.civm-advoq-gate-$Index"
+$svc = "actions.runner.acme.civm-gate-$Index"
 $dir = Join-Path $Root "runner-$Index"
 $task = "civm-gate-runner-$Index"
 

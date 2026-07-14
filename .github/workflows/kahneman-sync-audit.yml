@@ -5,7 +5,7 @@ name: kahneman-sync-audit
 # declared style. Runs on a weekly cron + on every change to the manifest or
 # the audit tooling + manual dispatch.
 #
-# Self-hosted runner only — the runner ([self-hosted, civm]) can hydrate peer
+# # Peer hydration is optional; default is ubuntu-latest for public CI.
 # repos from the manifest git_url fields when they are not already present.
 
 on:
@@ -35,7 +35,7 @@ permissions:
 jobs:
   audit:
     name: Audit Kahneman pattern across peer repos
-    runs-on: [self-hosted, civm]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Checkout civm

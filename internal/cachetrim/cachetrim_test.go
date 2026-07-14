@@ -10,7 +10,7 @@ import (
 )
 
 // TestCapsGlobsNamedDirsAcrossHomes is the regression of the 2026-06 incident:
-// the named per-workflow cache dirs (go-build-advoq-services, yarn-advoq-web)
+// the named per-workflow cache dirs (go-build-acme-services, yarn-acme-web)
 // must be capped, and the family budget divided among matched dirs.
 func TestCapsGlobsNamedDirsAcrossHomes(t *testing.T) {
 	root := t.TempDir()
@@ -24,10 +24,10 @@ func TestCapsGlobsNamedDirsAcrossHomes(t *testing.T) {
 	// two runner homes (cleanup runs as root over /home/*), each with named caches.
 	home1 := filepath.Join(root, "home", "emdev")
 	home2 := filepath.Join(root, "home", "runner")
-	gbA := mk("home", "emdev", ".cache", "go-build-advoq-services")
-	gbB := mk("home", "emdev", ".cache", "go-build-advoq-devctl")
-	gbC := mk("home", "runner", ".cache", "go-build-advoq-web")
-	yarn1 := mk("home", "emdev", ".cache", "yarn-advoq-web")
+	gbA := mk("home", "emdev", ".cache", "go-build-acme-services")
+	gbB := mk("home", "emdev", ".cache", "go-build-acme-devctl")
+	gbC := mk("home", "runner", ".cache", "go-build-acme-web")
+	yarn1 := mk("home", "emdev", ".cache", "yarn-acme-web")
 	lint := mk("home", "emdev", ".cache", "golangci-lint")
 	npm := mk("home", "emdev", ".npm", "_cacache")
 
@@ -114,7 +114,7 @@ func TestTrimByAgeRemovesOldestPreservesHot(t *testing.T) {
 
 // TestTrimByAgeHardCeilingTrimsRecentWhenAllProtected prova o TETO HARD do
 // incidente 2026-06-15: quando TODO arquivo esta dentro do MinProtect — o caso do
-// cache de CI sob carga continua, onde o yarn-advoq-* cresceu a 18GB porque o cap
+// cache de CI sob carga continua, onde o yarn-acme-* cresceu a 18GB porque o cap
 // nunca aplicava — o MaxBytes AINDA e imposto (Pass 2 trima os protegidos, do mais
 // antigo ao mais novo). Antes do fix isto FALHAVA (freed=0, dir crescia sem limite).
 func TestTrimByAgeHardCeilingTrimsRecentWhenAllProtected(t *testing.T) {

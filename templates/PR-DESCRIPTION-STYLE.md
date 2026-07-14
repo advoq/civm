@@ -56,4 +56,4 @@ Até o auditor existir, regra fica documentada via:
 
 ## Histórico
 
-- **2026-05-10** — primeira versão. Criada após PR #4 do vitae apresentar 16 commits dobrados em `<details>` agrupador, frustrando o reviewer ao ver só 5 linhas no preview. Regra retroativamente aplicada em vitae no mesmo PR.
+- **2026-05-10** — primeira versão. Criada após PR #4 do peer apresentar 16 commits dobrados em `<details>` agrupador, frustrando o reviewer ao ver só 5 linhas no preview. Regra retroativamente aplicada em peer no mesmo PR.

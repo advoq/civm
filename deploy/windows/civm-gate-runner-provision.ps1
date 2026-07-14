@@ -10,8 +10,8 @@
 # deteccao de colisao (eles nao fazem Docker/disco, nao causam o concurrent-prune do
 # #1184), entao nao violam o invariante "1 runner civm por org".
 #
-# Pre-requisito — token de REGISTRO de runner da ORG advoq (precisa de admin na org):
-#   $tok = gh api -X POST /orgs/advoq/actions/runners/registration-token --jq .token
+# Pre-requisito — token de REGISTRO de runner da ORG acme (precisa de admin na org):
+#   $tok = gh api -X POST /orgs/acme/actions/runners/registration-token --jq .token
 #
 # Uso (PowerShell ELEVADO no host, mesma maquina do orquestrador):
 #   .\civm-gate-runner-provision.ps1 -RegToken $tok -Index 1
@@ -19,12 +19,12 @@
 param(
     [Parameter(Mandatory)][string]$RegToken,
     [int]$Index = 1,
-    [string]$Url = 'https://github.com/advoq',
+    [string]$Url = 'https://github.com/acme',
     [string]$RunnerVersion = '2.319.1',
     [string]$Root = 'C:\civm-gate'
 )
 $ErrorActionPreference = 'Stop'
-$name = "civm-advoq-gate-$Index"
+$name = "civm-gate-$Index"
 $dir = Join-Path $Root "runner-$Index"
 New-Item -ItemType Directory -Path $dir -Force | Out-Null
 # Baixa o actions-runner do Windows (uma vez por dir).

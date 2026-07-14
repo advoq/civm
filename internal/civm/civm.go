@@ -70,10 +70,10 @@ const (
 	// que DefaultCacheTrimMinProtectHours são preservados.
 	//
 	// Cada budget é FAMILY-WIDE: cacheCaps() faz glob das variantes nomeadas que
-	// os workflows criam (ex. GOCACHE=~/.cache/go-build-advoq-services,
-	// YARN cache-folder=~/.cache/yarn-advoq-web) e divide o budget entre os dirs
+	// os workflows criam (ex. GOCACHE=~/.cache/go-build-acme-services,
+	// YARN cache-folder=~/.cache/yarn-acme-web) e divide o budget entre os dirs
 	// encontrados. Antes, os caps casavam só os paths default (~/.cache/go-build,
-	// ~/.yarn/cache) e os dirs nomeados cresciam SEM LIMITE — go-build-advoq-services
+	// ~/.yarn/cache) e os dirs nomeados cresciam SEM LIMITE — go-build-acme-services
 	// chegou a 13GB num cap de 5GB, enchendo o VHDX até o host dar PausedCritical.
 	DefaultCacheTrimMinProtectHours = 24
 	// DefaultCacheInFlightFloorMinutes é o piso de "escrita fresca" do emergency
@@ -159,29 +159,24 @@ const (
 	DefaultPortBlockStatePath   = "/var/lib/civm/port-blocks.json"
 
 	// Reaper de container órfão na fronteira job-started (docs/specs/orphan-port-reaper).
-	// O CI do advoq sobe um stack docker-compose com PORTAS FIXAS de host (minio em
+	// Jobs de CI sobem um stack docker-compose com PORTAS FIXAS de host (minio em
 	// 127.0.0.1:9020, nginx em :81, etc.). Quando um run anterior não é derrubado
 	// — job cancelado, OU o runner que o subiu foi REMOVIDO — o container vira
 	// órfão e segura a porta fixa: o próximo job morre em "Bind for 127.0.0.1:9020
-	// failed: port is already allocated" (incidente real 2026-06-19, matou
-	// tenant-isolation no #1184/#1186). O reaper do hook
+	// failed: port is already allocated". O reaper do hook
 	// (killWorkRootContainers) só pega órfãos sob o _work root do PRÓPRIO runner —
 	// um órfão de OUTRO runner (root diferente) escapa. Aqui o sinal NÃO é o _work
 	// root: numa box de 1 runner, na fronteira job-started (ANTES de o job subir o
 	// stack), todo container cujo project compose começa com este prefixo é órfão
-	// por definição.
-	DefaultCIOrphanProjectPrefix = "advoq"
+	// por definição. Prefixo alinhado às imagens de run (`civm-run-{id}-*`).
+	DefaultCIOrphanProjectPrefix = "civm-run"
 )
 
-// DefaultCIFixedHostPorts é o backstop por-porta do reaper de órfão: os hosts
-// ports FIXOS que o compose committed do advoq publica em 127.0.0.1 (defaults de
-// infra/docker-compose.yml + infra/docker-compose.override.yml). A detecção
-// PRIMÁRIA é o label com.docker.compose.project (DefaultCIOrphanProjectPrefix),
-// que pega o stack inteiro independente da porta; esta lista é defesa em
-// profundidade para um container que segure uma dessas portas SEM o label
-// (ex.: container avulso, ou label perdido). Mantida em sync com os defaults do
-// compose — se um default mudar lá, atualize aqui (a mesma disciplina do
-// schema-contract). A porta 9020 (minio) é a do incidente 2026-06-19.
+// DefaultCIFixedHostPorts é o backstop por-porta do reaper de órfão: hosts ports
+// FIXOS que stacks de CI típicos publicam em 127.0.0.1. A detecção PRIMÁRIA é o
+// label com.docker.compose.project (DefaultCIOrphanProjectPrefix); esta lista é
+// defesa em profundidade. Operadores com portas diferentes sobrescrevem via
+// config. A porta 9020 (minio) é um default comum de labs.
 var DefaultCIFixedHostPorts = []int{
 	81,   // nginx (LOCAL_NGINX_PORT)
 	3010, // web (LOCAL_WEB_PORT)

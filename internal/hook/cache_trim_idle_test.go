@@ -10,11 +10,11 @@ import (
 
 // TestCacheTrimIsIdle prova o gate que impede o hook de trimar o cache
 // compartilhado enquanto OUTRO runner tem build ativo (a corrida que dava
-// ENOENT em gates/yarn-audit). O caso "sibling advoq-org" guarda o trap de
+// ENOENT em gates/yarn-audit). O caso "sibling acme-org" guarda o trap de
 // prefixo: o runner dir do próprio runner termina com separador, então
-// actions-runner-advoq/ não casa dentro de actions-runner-advoq-org/.
+// actions-runner-acme/ não casa dentro de actions-runner-acme-org/.
 func TestCacheTrimIsIdle(t *testing.T) {
-	ownDirs := []string{"/home/emdev/actions-runner-advoq/"}
+	ownDirs := []string{"/home/emdev/actions-runner-acme/"}
 	act := func(cmds ...string) func(context.Context) ([]idle.Activity, error) {
 		return func(context.Context) ([]idle.Activity, error) {
 			as := make([]idle.Activity, len(cmds))
@@ -30,14 +30,14 @@ func TestCacheTrimIsIdle(t *testing.T) {
 		fn      func(context.Context) ([]idle.Activity, error)
 		want    bool
 	}{
-		{"so o proprio Worker -> idle", ownDirs, act("/home/emdev/actions-runner-advoq/bin/Runner.Worker run"), true},
+		{"so o proprio Worker -> idle", ownDirs, act("/home/emdev/actions-runner-acme/bin/Runner.Worker run"), true},
 		{"proprio build + Worker -> idle", ownDirs, act(
-			"/home/emdev/actions-runner-advoq/bin/Runner.Worker run",
-			"yarn /home/emdev/actions-runner-advoq/_work/advoq/advoq",
+			"/home/emdev/actions-runner-acme/bin/Runner.Worker run",
+			"yarn /home/emdev/actions-runner-acme/_work/acme/app",
 		), true},
-		{"sibling advoq-org build ativo -> NAO idle (trap de prefixo)", ownDirs, act(
-			"/home/emdev/actions-runner-advoq/bin/Runner.Worker run",
-			"node /home/emdev/actions-runner-advoq-org/_work/advoq/advoq next build",
+		{"sibling acme-org build ativo -> NAO idle (trap de prefixo)", ownDirs, act(
+			"/home/emdev/actions-runner-acme/bin/Runner.Worker run",
+			"node /home/emdev/actions-runner-acme-org/_work/acme/app next build",
 		), false},
 		{"sem atividade -> idle", ownDirs, act(), true},
 		{"ownDirs vazio (env degradado) -> fail-safe NAO idle", nil, act(), false},

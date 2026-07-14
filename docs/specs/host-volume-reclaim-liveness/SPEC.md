@@ -149,12 +149,12 @@ permanece o fail-safe correto (RNF-3, Kahneman **#15/#16**).
 4. **RF-2/RF-3 host (efeito):** dirigir `V:` ao WARN sob carga → o reclaim drena,
    pruna o guest, compacta, religa o runner; `V:` volta acima do WARN; nenhum
    job recusado por exit 75.
-5. **Regressão:** `go test ./... -race` (civm) verde; re-run CI advoq #1155 sem
+5. **Regressão:** `go test ./... -race` (civm) verde; re-run CI acme #1155 sem
    falha de disco (slack reclamável suficiente).
 
 ## Links Kahneman (passos críticos)
 
-- RF-1, RF-2: **#16** (`docs/methodology` no advoq / `disciplines/` no civm) — a
+- RF-1, RF-2: **#16** (`docs/methodology` no acme / `disciplines/` no civm) — a
   cura não pode morrer (fantasma) nem ser starvada (load) com o recurso.
 - RF-1, RF-3, validação por efeito: **#13** — task Running ≠ reclaim funcionando;
   gap reclamável é a prova.

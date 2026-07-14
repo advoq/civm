@@ -18,13 +18,11 @@ import (
 	"github.com/advoq/civm/internal/runner"
 )
 
-// DefaultRepos is the civm maintainer fleet used only when callers request
-// the explicit "default" repo mode. Generic doctor runs infer local repos.
-var DefaultRepos = []string{
-	"advoq/civm",
-	"emersonbusson/vitae",
-	"advoq/advoq",
-}
+// DefaultRepos is used only when callers request the explicit "default" repo
+// mode. It is intentionally empty for a public/generic civm — operators pass
+// --repos=auto (infer local runners) or an explicit owner/repo list. Product-
+// specific fleets must not ship as code defaults.
+var DefaultRepos = []string{}
 
 type Severity string
 
@@ -449,8 +447,8 @@ func checkRunnerSerialization(systemd []runner.Status, systemdErr error) HookChe
 	}
 }
 
-// repoRunnerShort deriva o sufixo --short do nome do runner ("civm-advoq" ->
-// "advoq") para montar o comando de remoção. Sem o prefixo civm-, devolve o
+// repoRunnerShort deriva o sufixo --short do nome do runner ("civm-app" ->
+// "acme") para montar o comando de remoção. Sem o prefixo civm-, devolve o
 // nome inteiro (o operador ajusta se necessário).
 func repoRunnerShort(name string) string {
 	return strings.TrimPrefix(name, "civm-")
@@ -497,9 +495,9 @@ func ClassifyRunner(r GitHubRunner) RunnerDiagnosis {
 		diag.Classification = "canonical"
 		diag.Severity = SeverityOK
 		diag.Detail = "runner civm canonico online"
-	case r.Status == "offline" && strings.HasPrefix(r.Name, "vitae-ci-"):
+	case r.Status == "offline" && strings.HasPrefix(r.Name, "legacy-ci-"):
 		diag.Classification = "legacy_stale"
-		diag.Detail = "runner legacy vitae-ci offline; remover manualmente depois de confirmar que nao e usado"
+		diag.Detail = "runner legacy legacy-ci offline; remover manualmente depois de confirmar que nao e usado"
 		if r.ID != 0 && r.Repo != "" {
 			diag.ManualRemoveCommand = fmt.Sprintf("gh api -X DELETE /repos/%s/actions/runners/%d", r.Repo, r.ID)
 		}

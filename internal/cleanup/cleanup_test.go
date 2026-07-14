@@ -68,7 +68,7 @@ func TestRun_DefersToActiveDockerHeavyLock(t *testing.T) {
 	t.Parallel()
 	opts := testExecuteOptions()
 	opts.LockActiveFn = func() (bool, error) { return true, nil }
-	opts.LockHolderFn = func() string { return "docker-heavy advoq/advoq#42" }
+	opts.LockHolderFn = func() string { return "docker-heavy acme/app#42" }
 	reclaimed := false
 	opts.ReclaimStaleFn = func() (bool, error) { reclaimed = true; return false, nil }
 	actions := Run(context.Background(), opts)
@@ -78,7 +78,7 @@ func TestRun_DefersToActiveDockerHeavyLock(t *testing.T) {
 	if actions[0].Err != nil {
 		t.Fatalf("defer must not be an error (exit 0): %v", actions[0].Err)
 	}
-	if actions[0].Path != "docker-heavy advoq/advoq#42" {
+	if actions[0].Path != "docker-heavy acme/app#42" {
 		t.Fatalf("holder not surfaced in deferred action: %q", actions[0].Path)
 	}
 	if reclaimed {
@@ -265,7 +265,7 @@ func TestRun_CodespaceStaleDiscoversAndAgeGates(t *testing.T) {
 
 // TestRunCacheTrimCoversNamedDirsUnderRunnerHome proves the disk-watchdog gap
 // fix: cleanup.Run (used by civmctl cleanup AND the disk-watchdog) now trims the
-// NAMED CI cache dirs (~/.cache/go-build-advoq-services, yarn-advoq-web) under
+// NAMED CI cache dirs (~/.cache/go-build-acme-services, yarn-acme-web) under
 // the discovered runner home — not just _work/tmp/docker/apt. Before, an idle
 // runner with disk full of caches got no cache reclaim from the watchdog.
 func TestRunCacheTrimCoversNamedDirsUnderRunnerHome(t *testing.T) {
@@ -274,8 +274,8 @@ func TestRunCacheTrimCoversNamedDirsUnderRunnerHome(t *testing.T) {
 	old := now.Add(-72 * time.Hour)
 	mfs := fstest.MapFS{
 		"home/emdev/actions-runner-a/_work/x":             {Data: []byte("x"), ModTime: old},
-		"home/emdev/.cache/go-build-advoq-services/big.o": {Data: []byte("data"), ModTime: old},
-		"home/emdev/.cache/yarn-advoq-web/dep.tgz":        {Data: []byte("data"), ModTime: old},
+		"home/emdev/.cache/go-build-acme-services/big.o": {Data: []byte("data"), ModTime: old},
+		"home/emdev/.cache/yarn-acme-web/dep.tgz":        {Data: []byte("data"), ModTime: old},
 	}
 	opts := testExecuteOptions()
 	opts.Now = now
@@ -295,8 +295,8 @@ func TestRunCacheTrimCoversNamedDirsUnderRunnerHome(t *testing.T) {
 	actions := Run(context.Background(), opts)
 
 	covered := map[string]bool{
-		"home/emdev/.cache/go-build-advoq-services": false,
-		"home/emdev/.cache/yarn-advoq-web":          false,
+		"home/emdev/.cache/go-build-acme-services": false,
+		"home/emdev/.cache/yarn-acme-web":          false,
 	}
 	for _, a := range actions {
 		if a.Name == "cache_trim" {
