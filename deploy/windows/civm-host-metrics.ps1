@@ -179,10 +179,33 @@ try {
     # 3. VM power state (observability; not a gate here).
     $vm = Get-VM -Name $VMName -ErrorAction Stop
     $vmState = [string]$vm.State
-
-    # 4. Guest root free space over SSH; null => delivery failed (DT-v2-5).
-    $guestFreeBytes = Get-GuestFreeBytes -Target $GuestSshTarget -TimeoutSeconds $SshTimeoutSeconds
     $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+    # 4. Guest free via SSH only when Running — Off has no listener (timeout only
+    # poisons the metrics task and stamps guest_free=0 as if measured).
+    if ($vmState -ne 'Running') {
+        Write-Log -Level 'INFO' -Message "VM state=$vmState: skip guest SSH; host-only snapshot"
+        $metrics = [ordered]@{
+            v_free_gb         = $vFreeGB
+            v_size_gb         = $vSizeGB
+            vhdx_file_size_gb = $vhdxFileGB
+            vhdx_min_size_gb  = $vhdxMinGB
+            vhdx_max_size_gb  = $vhdxMaxGB
+            vhdx_block_size_bytes = $vhdxBlockBytes
+            guest_free_gb     = 0
+            gap_gb            = $null
+            vm_state          = $vmState
+            timestamp         = $timestamp
+            delivery_status   = 'skipped_vm_not_running'
+        }
+        $json = $metrics | ConvertTo-Json -Depth 4
+        Write-JsonAtomic -Path $HostMetricsPath -Json $json
+        Write-Log -Level 'INFO' -Message "host-only snapshot written to $HostMetricsPath (vm=$vmState)"
+        exit 0
+    }
+
+    # Guest root free space over SSH; null => delivery failed (DT-v2-5).
+    $guestFreeBytes = Get-GuestFreeBytes -Target $GuestSshTarget -TimeoutSeconds $SshTimeoutSeconds
 
     if ($null -eq $guestFreeBytes) {
         Write-Log -Level 'WARN' -Message "guest df over SSH failed; writing host-only snapshot (delivery_status=failed)"

@@ -431,6 +431,17 @@ function Wait-GuestIdle {
 # Fail-safe: SSH falhou (mesmo apos retries) -> assume "ha job" -> nao desliga
 # (Kahneman #15).
 function Get-GuestHasActiveJob {
+    # VM Off: no guest process can run. SSH would only timeout and false-positive
+    # "busy" (stuck pr_boundary_deferred forever while scale-to-zero is Off).
+    try {
+        if ((Get-VM -Name $VMName -ErrorAction Stop).State -eq 'Off') {
+            return $false
+        }
+    }
+    catch {
+        Write-OrcLog 'guest_active_probe_failed' @{ error = "vm_state: $($_.Exception.Message)" } 'WARN'
+        return $true  # cannot prove Off -> fail-safe busy
+    }
     $n = Invoke-GuestSsh -Command 'pgrep -c "[R]unner.Worker" 2>/dev/null || echo 0'
     if (-not $script:LastGuestSshOk) { Write-OrcLog 'guest_active_probe_failed' @{ error = "$n" } 'WARN'; return $true }
     return ([int]$n -gt 0)
