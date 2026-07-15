@@ -1,12 +1,15 @@
 $ErrorActionPreference = 'Stop'
 $taskName = 'civm-vm-orchestrator'
-Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-# DEPLOY ATOMICO (SPECv4 §8 / DT-12): com a task JA des-registrada (Unregister acima),
-# nenhum tick NOVO inicia -> a janela de troca esta fechada (um tick em voo ja fez o
-# dot-source do par antigo). Copia os 2 .ps1 do repo p/ C:\civm-deploy e valida por AST
-# (NAO executa o caller -> sem dependencia de Hyper-V/tokens, sem aborto flaky). So
-# entao Register. Aborta se um reclaim estiver em curso.
+# Nunca remova a ultima task valida antes de copiar/validar o deploy novo. O
+# Register-ScheduledTask -Force abaixo substitui a definicao em uma operacao.
 if (Test-Path 'V:\civm-reclaim.lock') { throw 'reclaim em curso (V:\civm-reclaim.lock); abortar deploy' }
+$hostTask = Get-ScheduledTask -TaskName 'civm-host-orchestrator' -ErrorAction SilentlyContinue
+if ($hostTask -and $hostTask.State -ne 'Disabled') {
+    $hostArgs = ($hostTask.Actions | ForEach-Object { $_.Arguments }) -join ' '
+    if ($hostArgs -match '(?i)(--active|active\.cmd)') {
+        throw 'dual-owner recusado: civm-host-orchestrator esta ativo; execute o rollback F4 antes'
+    }
+}
 $dst = 'C:\civm-deploy'
 if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
 # O caller dot-sourceia decision + reclaim-gate via $PSScriptRoot -> os 3 DEVEM
@@ -55,8 +58,8 @@ $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccou
 # (espelha register-civm-vhdx-autoreclaim). Trade-off: um tick pendurado fica ate 2h, mas
 # IgnoreNew so engole ticks (sem efeito) e o CompactVirtualDisk e nativo (VHDX nao
 # corrompe). (SPECv4 §8 / M-2)
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew -StartWhenAvailable
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger @($trigger, $bootTrigger) -Principal $principal -Settings $settings | Out-Null
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger @($trigger, $bootTrigger) -Principal $principal -Settings $settings -Force | Out-Null
 'orchestrator ATIVO (sem -Observe)'
 # Um dono so do power/compact da VM (fail-safe #15): desabilita TODOS os curadores
 # legados que disputariam o lock/power-state. O optimize-watchdog chegava a religar
