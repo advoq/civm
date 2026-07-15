@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.9](https://github.com/advoq/civm/compare/v1.22.8...v1.22.9) (2026-07-15)
+
+
+### Bug Fixes
+
+* **orchestrator:** survive host power interruptions ([#176](https://github.com/advoq/civm/issues/176)) ([ce677ed](https://github.com/advoq/civm/commit/ce677edb308ed3cad63991c243ea02ebfef3db2c))
+
 ## [1.22.8](https://github.com/advoq/civm/compare/v1.22.7...v1.22.8) (2026-07-14)
 
 
