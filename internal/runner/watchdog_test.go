@@ -493,6 +493,9 @@ func TestWatchdogRestartsFailedOrgRunnerWhenReposCannotBeInferred(t *testing.T) 
 	if report.Exit != 0 {
 		t.Fatalf("Exit = %d, want 0 events=%+v", report.Exit, report.Events)
 	}
+	if !report.RunnerOnline {
+		t.Fatalf("RunnerOnline = false, want true after local systemd repair")
+	}
 	assertWatchdogCall(t, calls, "sudo systemctl restart actions.runner.advoq.civm-advoq-org.service")
 	if !hasWatchdogEvent(report, "runner-restarted") {
 		t.Fatalf("events = %+v, want runner-restarted", report.Events)
@@ -533,6 +536,9 @@ func TestWatchdogTreatsHealthyOrgRunnerWithoutRepoAsWarning(t *testing.T) {
 	report := Watchdog(context.Background(), opts)
 	if report.Exit != 0 {
 		t.Fatalf("Exit = %d, want 0 for healthy org runner warning events=%+v", report.Exit, report.Events)
+	}
+	if !report.RunnerOnline {
+		t.Fatalf("RunnerOnline = false, want true for healthy local org runner")
 	}
 	if !hasWatchdogEventWithReason(report, "rerun-skipped", "no-repos") {
 		t.Fatalf("events = %+v, want no-repos warning", report.Events)

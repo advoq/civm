@@ -185,10 +185,12 @@ func Watchdog(ctx context.Context, opts WatchdogOptions) WatchdogReport {
 	}
 	report.Repos = repos
 	if len(repos) == 0 {
+		localOnlineBeforeRepair := anyLocalRunnerOnline(systemd)
 		if err := restartWatchdogRunners(ctx, opts, systemd, nil, &report); err != nil {
 			report.Exit = 2
 			return report
 		}
+		report.RunnerOnline = localOnlineBeforeRepair || watchdogReportHasEvent(report, "runner-restarted")
 		report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "warning", Reason: "no-repos"})
 		if len(systemd) == 0 {
 			report.Exit = maxExit(report.Exit, 1)
@@ -1256,6 +1258,24 @@ func sortedMapKeys(values map[string]string) []string {
 func anyRepoOnline(repoOnline map[string]bool) bool {
 	for _, online := range repoOnline {
 		if online {
+			return true
+		}
+	}
+	return false
+}
+
+func anyLocalRunnerOnline(systemd []Status) bool {
+	for _, s := range systemd {
+		if s.ActiveState == "active" && s.SubState == "running" {
+			return true
+		}
+	}
+	return false
+}
+
+func watchdogReportHasEvent(report WatchdogReport, event string) bool {
+	for _, got := range report.Events {
+		if got.Event == event {
 			return true
 		}
 	}
