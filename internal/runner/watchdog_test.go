@@ -454,6 +454,91 @@ func TestWatchdogRestartsFailedSystemdRunner(t *testing.T) {
 	assertWatchdogCall(t, calls, "sudo systemctl restart actions.runner.acme-civm.civm-self.service")
 }
 
+func TestWatchdogRestartsFailedOrgRunnerWhenReposCannotBeInferred(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.RestartDelay = 0
+	opts.Repos = nil
+	opts.InferRepos = true
+	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
+		return []Status{{
+			UnitName:    "actions.runner.advoq.civm-advoq-org.service",
+			Repo:        "advoq",
+			Name:        "civm-advoq-org",
+			ActiveState: "failed",
+			SubState:    "failed",
+		}}, nil
+	}
+	var calls []string
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		calls = append(calls, call)
+		switch call {
+		case "systemctl show actions.runner.advoq.civm-advoq-org.service --property=WorkingDirectory --value":
+			return []byte("/home/emedev/actions-runner-advoq-org\n"), nil
+		case "systemctl is-active actions.runner.advoq.civm-advoq-org.service":
+			return []byte("active\n"), nil
+		default:
+			return nil, nil
+		}
+	}
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if !strings.HasSuffix(path, "/.runner") {
+			return nil, errors.New("unexpected read: " + path)
+		}
+		return []byte(`{"gitHubUrl":"https://github.com/advoq"}`), nil
+	}
+
+	report := Watchdog(context.Background(), opts)
+	if report.Exit != 0 {
+		t.Fatalf("Exit = %d, want 0 events=%+v", report.Exit, report.Events)
+	}
+	assertWatchdogCall(t, calls, "sudo systemctl restart actions.runner.advoq.civm-advoq-org.service")
+	if !hasWatchdogEvent(report, "runner-restarted") {
+		t.Fatalf("events = %+v, want runner-restarted", report.Events)
+	}
+	if !hasWatchdogEventWithReason(report, "rerun-skipped", "no-repos") {
+		t.Fatalf("events = %+v, want no-repos note", report.Events)
+	}
+}
+
+func TestWatchdogTreatsHealthyOrgRunnerWithoutRepoAsWarning(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.Repos = nil
+	opts.InferRepos = true
+	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
+		return []Status{{
+			UnitName:    "actions.runner.advoq.civm-advoq-org.service",
+			Repo:        "advoq",
+			Name:        "civm-advoq-org",
+			ActiveState: "active",
+			SubState:    "running",
+		}}, nil
+	}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		if call == "systemctl show actions.runner.advoq.civm-advoq-org.service --property=WorkingDirectory --value" {
+			return []byte("/home/emedev/actions-runner-advoq-org\n"), nil
+		}
+		return nil, nil
+	}
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if !strings.HasSuffix(path, "/.runner") {
+			return nil, errors.New("unexpected read: " + path)
+		}
+		return []byte(`{"gitHubUrl":"https://github.com/advoq"}`), nil
+	}
+
+	report := Watchdog(context.Background(), opts)
+	if report.Exit != 0 {
+		t.Fatalf("Exit = %d, want 0 for healthy org runner warning events=%+v", report.Exit, report.Events)
+	}
+	if !hasWatchdogEventWithReason(report, "rerun-skipped", "no-repos") {
+		t.Fatalf("events = %+v, want no-repos warning", report.Events)
+	}
+}
+
 // TestWatchdogDoesNotResurrectRedundantRepoRunner prova a defesa de
 // serialização: um runner por-repo (civm-app) já parado (inactive/dead, o
 // estado pós-`systemctl disable`) NÃO pode ser reativado pelo watchdog enquanto

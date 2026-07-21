@@ -185,8 +185,14 @@ func Watchdog(ctx context.Context, opts WatchdogOptions) WatchdogReport {
 	}
 	report.Repos = repos
 	if len(repos) == 0 {
+		if err := restartWatchdogRunners(ctx, opts, systemd, nil, &report); err != nil {
+			report.Exit = 2
+			return report
+		}
 		report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "warning", Reason: "no-repos"})
-		report.Exit = maxExit(report.Exit, 1)
+		if len(systemd) == 0 {
+			report.Exit = maxExit(report.Exit, 1)
+		}
 		return report
 	}
 
