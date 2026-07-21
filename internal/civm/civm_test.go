@@ -59,6 +59,25 @@ func TestValidateUserName(t *testing.T) {
 	}
 }
 
+func TestResolveRunnerUserPrefersValidSudoUser(t *testing.T) {
+	t.Setenv("SUDO_USER", "emedev")
+	t.Setenv("USER", "ignored")
+
+	if got := ResolveRunnerUser("fallback"); got != "emedev" {
+		t.Fatalf("ResolveRunnerUser() = %q, want SUDO_USER", got)
+	}
+}
+
+func TestResolveRunnerUserNeverReturnsInvalidFallbackWhenCurrentIsValid(t *testing.T) {
+	t.Setenv("SUDO_USER", "bad user")
+	t.Setenv("USER", "also bad")
+
+	got := ResolveRunnerUser("fallback")
+	if err := ValidateUserName(got); err != nil {
+		t.Fatalf("ResolveRunnerUser() returned invalid user %q: %v", got, err)
+	}
+}
+
 func TestValidateWorkflowAndUnit(t *testing.T) {
 	t.Parallel()
 	for _, workflow := range []string{"ci.yml", ".github/workflows/ci.yaml"} {

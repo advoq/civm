@@ -518,9 +518,7 @@ func TestCollectIncludesAdmitHostChecks(t *testing.T) {
 			return base(path)
 		}
 	}
-	// RunFn is used by both SCOPED_SUDOERS and the run-as-user probe; emdev keeps
-	// both green.
-	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return []byte("emdev\n"), nil }
+	opts.RunFn = stubRunFnWithRequestedUser
 
 	report, err := Collect(context.Background(), opts)
 	if err != nil {
@@ -645,12 +643,7 @@ const (
 )
 
 func stubHookContractOK(opts *Options) {
-	// The SCOPED_SUDOERS check and the ADMIT_RUN_AS_USER probe both run via RunFn.
-	// "emdev\n" keeps both green: safedelete --check exits 0 (output ignored) and
-	// the systemd-run probe reports the runner user (not root).
-	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
-		return []byte("emdev\n"), nil
-	}
+	opts.RunFn = stubRunFnWithRequestedUser
 	// GlobFn agora atende dois padrões: o glob de runner dirs (HOOK_RUNNER_ENVS)
 	// e o glob de units-fonte (UNIT_SCRIPTS_INSTALLED). Dispatch pelo padrão.
 	opts.GlobFn = func(pattern string) ([]string, error) {
@@ -689,4 +682,13 @@ func stubHookContractOK(opts *Options) {
 			return nil, errors.New("unexpected read path: " + path)
 		}
 	}
+}
+
+func stubRunFnWithRequestedUser(_ context.Context, _ string, args ...string) ([]byte, error) {
+	for i, arg := range args {
+		if arg == "-p" && i+1 < len(args) && strings.HasPrefix(args[i+1], "User=") {
+			return []byte(strings.TrimPrefix(args[i+1], "User=") + "\n"), nil
+		}
+	}
+	return []byte("ok\n"), nil
 }

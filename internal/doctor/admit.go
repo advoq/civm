@@ -3,7 +3,6 @@ package doctor
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/advoq/civm/internal/civm"
@@ -145,12 +144,9 @@ func admitEffectiveMemMB(memTotalMB int64) int64 {
 }
 
 // admitRunnerUser returns the runner user the probe should assert: SUDO_USER
-// when doctor runs under sudo, else the emdev default (DT-v3-1).
+// when doctor runs under sudo, else the current process user (DT-v3-1).
 func admitRunnerUser() string {
-	if u := strings.TrimSpace(os.Getenv("SUDO_USER")); u != "" && civm.ValidateUserName(u) == nil {
-		return u
-	}
-	return "emdev"
+	return civm.ResolveRunnerUser("emdev")
 }
 
 // hasController reports whether the cgroup.controllers blob lists name.

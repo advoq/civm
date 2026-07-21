@@ -412,6 +412,13 @@ func cacheTrimActions(opts Options) []Action {
 	}
 	out := make([]Action, 0, len(caps))
 	for _, c := range caps {
+		if opts.EmergencyBypassIdle && c.WipeWhole {
+			// Emergency disk pressure means headroom matters more than preserving a
+			// cache hit. WipeWhole caches (go-build/golangci) cannot be safely
+			// sub-trim, so remove the whole dir unless InFlightFloor detects a live
+			// writer. Non-WipeWhole caches keep their normal caps.
+			c.MaxBytes = 0
+		}
 		r := cachetrim.TrimByAge(trimOpts, c)
 		a := Action{Name: "cache_trim", Path: r.Path, BytesFound: r.BytesFound, BytesFreed: r.BytesFreed, Executed: r.Executed, Err: r.Err}
 		if r.SkippedInFlight {

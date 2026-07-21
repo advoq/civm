@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	osuser "os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -339,6 +340,28 @@ func ValidateUserName(name string) error {
 		return fmt.Errorf("run-as invalido: %q", name)
 	}
 	return nil
+}
+
+// ResolveRunnerUser returns the Unix account transient runner services should
+// use. SUDO_USER wins when a command is sudo-wrapped; otherwise use the current
+// process user or USER. The fallback preserves older single-user lab hosts.
+func ResolveRunnerUser(fallback string) string {
+	if u := strings.TrimSpace(os.Getenv("SUDO_USER")); u != "" && ValidateUserName(u) == nil {
+		return u
+	}
+	if u, err := osuser.Current(); err == nil {
+		name := strings.TrimSpace(u.Username)
+		if idx := strings.LastIndexAny(name, `\`); idx >= 0 {
+			name = name[idx+1:]
+		}
+		if name != "" && ValidateUserName(name) == nil {
+			return name
+		}
+	}
+	if u := strings.TrimSpace(os.Getenv("USER")); u != "" && ValidateUserName(u) == nil {
+		return u
+	}
+	return fallback
 }
 
 // ValidateWorkflowFile restricts gh workflow selectors to local YAML filenames.

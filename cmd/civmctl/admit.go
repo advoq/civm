@@ -28,8 +28,9 @@ const (
 	exitAdmitInternal    = 79 // admit/flock/systemd-run failure in the admit layer
 )
 
-// admitDefaultUser is the fallback runner user when SUDO_USER is unset. SPECv3
-// DT-v3-1: the payload MUST run as the runner user (emdev), never root.
+// admitDefaultUser is the last-resort runner user when sudo/current-user lookup
+// is unavailable. SPECv3 DT-v3-1: the payload MUST run as the runner user, never
+// root.
 const admitDefaultUser = "emdev"
 
 // admitEvent names for the structured stderr log (SPECv3 §observability).
@@ -306,12 +307,9 @@ func buildSystemdRunArgs(spec systemdRunSpec) []string {
 }
 
 // runnerUser returns the runner user for the cgroup service: SUDO_USER when
-// `admit` was invoked under sudo, else the emdev fallback (DT-v3-1).
+// `admit` was invoked under sudo, else the current process user (DT-v3-1).
 func runnerUser() string {
-	if u := strings.TrimSpace(os.Getenv("SUDO_USER")); u != "" && civm.ValidateUserName(u) == nil {
-		return u
-	}
-	return admitDefaultUser
+	return civm.ResolveRunnerUser(admitDefaultUser)
 }
 
 // ensureAdmitRunDir provisions the heavy-slot runtime dir (e.g. /run/civm) so the
