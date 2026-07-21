@@ -4,6 +4,7 @@ import { appendFileSync, readFileSync } from 'node:fs'
 import process from 'node:process'
 
 const ZERO_SHA = '0'.repeat(40)
+const FULL_CHANGE_SENTINEL = '__full_change_detection__'
 
 export const FILTERS = {
   docs: [
@@ -155,7 +156,7 @@ export function resolveComparisonRanges(eventName, payload, githubSha) {
 }
 
 export function changedFilesForRange(range) {
-  if (range.forceAll) return ['__workflow_dispatch__']
+  if (range.forceAll) return [FULL_CHANGE_SENTINEL]
   if (!range.head)
     throw new Error('Unable to resolve head SHA for change detection')
 
@@ -165,7 +166,7 @@ export function changedFilesForRange(range) {
 
   if (range.base && range.base !== ZERO_SHA && !hasGitObject(range.base)) {
     if (!range.fallbackBase || !hasGitObject(range.fallbackBase)) {
-      throw new Error(`Base commit is not available in checkout: ${range.base}`)
+      return [FULL_CHANGE_SENTINEL]
     }
     return splitLines(
       runGit([
@@ -191,6 +192,10 @@ export function changedFilesForRange(range) {
       : ['diff', '--name-only', '--diff-filter=ACMR', separator, range.head]
 
   return splitLines(runGit(args))
+}
+
+function shouldEvaluateAllFilters(range, changedFiles) {
+  return range.forceAll || changedFiles.includes(FULL_CHANGE_SENTINEL)
 }
 
 function readEventPayload() {
@@ -224,14 +229,18 @@ async function main() {
     process.env.GITHUB_SHA
   )
   const changedFiles = changedFilesForRange(ranges.current)
-  const evaluations = ranges.current.forceAll
+  const currentForceAll = shouldEvaluateAllFilters(ranges.current, changedFiles)
+  const evaluations = currentForceAll
     ? Object.fromEntries(filterNames.map((name) => [name, true]))
     : evaluateFilters(changedFiles, filterNames)
   const prChangedFiles = ranges.pullRequest
     ? changedFilesForRange(ranges.pullRequest)
     : changedFiles
+  const prForceAll = ranges.pullRequest
+    ? shouldEvaluateAllFilters(ranges.pullRequest, prChangedFiles)
+    : currentForceAll
   const prEvaluations =
-    ranges.current.forceAll || ranges.pullRequest?.forceAll
+    currentForceAll || prForceAll
       ? Object.fromEntries(filterNames.map((name) => [name, true]))
       : evaluateFilters(prChangedFiles, filterNames)
 
