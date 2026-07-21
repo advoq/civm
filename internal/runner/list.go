@@ -11,11 +11,12 @@ import (
 // Status of a single runner systemd service.
 type Status struct {
 	UnitName    string `json:"unit_name"`
-	Repo        string `json:"repo"`         // extraído do unit name (owner-repo)
-	Name        string `json:"name"`         // ex: civm-cmpx
-	LoadState   string `json:"load_state"`   // loaded, not-found, etc
-	ActiveState string `json:"active_state"` // active, inactive, failed
-	SubState    string `json:"sub_state"`    // running, dead, etc
+	Repo        string `json:"repo"`          // extraído do unit name (owner-repo)
+	Org         string `json:"org,omitempty"` // extraído de .runner quando o runner é org-level
+	Name        string `json:"name"`          // ex: civm-cmpx
+	LoadState   string `json:"load_state"`    // loaded, not-found, etc
+	ActiveState string `json:"active_state"`  // active, inactive, failed
+	SubState    string `json:"sub_state"`     // running, dead, etc
 	Description string `json:"description"`
 	// WorkingDirectory is the runner service WorkingDirectory (systemctl show),
 	// populated by the watchdog enrich step. The hook's WorkRoot lives under it,

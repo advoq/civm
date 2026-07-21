@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -186,6 +187,7 @@ func Watchdog(ctx context.Context, opts WatchdogOptions) WatchdogReport {
 	report.Repos = repos
 	if len(repos) == 0 {
 		localOnlineBeforeRepair := anyLocalRunnerOnline(systemd)
+		recoverWatchdogOrgBusyWithoutWorker(ctx, opts, systemd, &report)
 		if err := restartWatchdogRunners(ctx, opts, systemd, nil, &report); err != nil {
 			report.Exit = 2
 			return report
@@ -341,6 +343,73 @@ func restartWatchdogRunners(ctx context.Context, opts WatchdogOptions, systemd [
 		report.add(event)
 	}
 	return nil
+}
+
+func recoverWatchdogOrgBusyWithoutWorker(ctx context.Context, opts WatchdogOptions, systemd []Status, report *WatchdogReport) {
+	if hasLocalRunnerWorker(ctx, opts) {
+		return
+	}
+	opts.SleepFn(opts.IdleProbeDelay)
+	if hasLocalRunnerWorker(ctx, opts) {
+		return
+	}
+	for _, local := range systemd {
+		if local.UnitName == "" || local.Org == "" || local.ActiveState != "active" || local.SubState != "running" {
+			continue
+		}
+		runners, err := listWatchdogGitHubOrgRunners(ctx, local.Org, opts.RunFn)
+		if err != nil {
+			report.add(WatchdogEvent{
+				Event: "runner-online-unknown", Severity: "warning", Unit: local.UnitName,
+				Reason: "github-org-runners-failed", Detail: err.Error(),
+			})
+			continue
+		}
+		for _, gh := range runners {
+			if gh.Name != local.Name || gh.Status != "online" || !gh.Busy {
+				continue
+			}
+			event := WatchdogEvent{
+				Event: "runner-restarted", Severity: "info", Unit: local.UnitName,
+				Runner: gh.Name, Reason: "github-busy-without-local-worker", Executed: opts.Execute,
+			}
+			if !opts.Execute {
+				report.add(event)
+				return
+			}
+			if _, err := opts.RunFn(ctx, "sudo", "systemctl", "restart", local.UnitName); err != nil {
+				event.Severity = "critical"
+				event.Detail = fmt.Sprintf("systemctl restart: %v", err)
+				report.add(event)
+				report.Exit = maxExit(report.Exit, 2)
+				return
+			}
+			opts.SleepFn(opts.RestartDelay)
+			out, _ := opts.RunFn(ctx, "systemctl", "is-active", local.UnitName)
+			if strings.TrimSpace(string(out)) != "active" {
+				event.Severity = "critical"
+				event.Detail = fmt.Sprintf("%s is-active=%q", local.UnitName, strings.TrimSpace(string(out)))
+				report.add(event)
+				report.Exit = maxExit(report.Exit, 2)
+				return
+			}
+			report.add(event)
+			return
+		}
+	}
+}
+
+func hasLocalRunnerWorker(ctx context.Context, opts WatchdogOptions) bool {
+	activities, err := opts.ActivityFn(ctx)
+	if err != nil {
+		return true
+	}
+	for _, activity := range activities {
+		if strings.Contains(activity.Command, "Runner.Worker") {
+			return true
+		}
+	}
+	return false
 }
 
 // hookLogRecord is the subset of a hooks.jsonl line the watchdog needs to detect
@@ -1063,6 +1132,10 @@ func listWatchdogGitHubRunners(ctx context.Context, repo string, runFn func(cont
 	if err != nil {
 		return nil, fmt.Errorf("gh api actions/runners: %w", err)
 	}
+	return parseWatchdogGitHubRunners(repo, out)
+}
+
+func parseWatchdogGitHubRunners(scope string, data []byte) ([]WatchdogGitHubRunner, error) {
 	var raw struct {
 		Runners []struct {
 			ID     int64  `json:"id"`
@@ -1074,12 +1147,12 @@ func listWatchdogGitHubRunners(ctx context.Context, repo string, runFn func(cont
 			} `json:"labels"`
 		} `json:"runners"`
 	}
-	if err := json.Unmarshal(out, &raw); err != nil {
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parse gh runners: %w", err)
 	}
 	runners := make([]WatchdogGitHubRunner, 0, len(raw.Runners))
 	for _, rr := range raw.Runners {
-		item := WatchdogGitHubRunner{ID: rr.ID, Repo: repo, Name: rr.Name, Status: rr.Status, Busy: rr.Busy}
+		item := WatchdogGitHubRunner{ID: rr.ID, Repo: scope, Name: rr.Name, Status: rr.Status, Busy: rr.Busy}
 		for _, label := range rr.Labels {
 			item.Labels = append(item.Labels, label.Name)
 		}
@@ -1176,6 +1249,9 @@ func enrichWatchdogSystemdRepos(ctx context.Context, opts WatchdogOptions, syste
 		if ok {
 			out[i].Repo = repo
 		}
+		if org, _, ok := resolveWatchdogRunnerOrg(ctx, opts, out[i]); ok {
+			out[i].Org = org
+		}
 	}
 	return out
 }
@@ -1205,9 +1281,32 @@ func resolveWatchdogRunnerRepo(ctx context.Context, opts WatchdogOptions, status
 	return repo, dir, ok
 }
 
+func resolveWatchdogRunnerOrg(ctx context.Context, opts WatchdogOptions, status Status) (org string, dir string, ok bool) {
+	if status.UnitName == "" {
+		return "", "", false
+	}
+	if err := civm.ValidateServiceUnit(status.UnitName); err != nil {
+		return "", "", false
+	}
+	out, err := opts.RunFn(ctx, "systemctl", "show", status.UnitName, "--property=WorkingDirectory", "--value")
+	if err != nil {
+		return "", "", false
+	}
+	dir = strings.TrimSpace(string(out))
+	if dir == "" || dir == "-" {
+		return "", "", false
+	}
+	data, err := opts.ReadFileFn(filepath.Join(dir, ".runner"))
+	if err != nil {
+		return "", dir, false
+	}
+	org, ok = orgFromRunnerConfig(data)
+	return org, dir, ok
+}
+
 func repoFromRunnerConfig(data []byte) (string, bool) {
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(trimJSONBOM(data), &raw); err != nil {
 		return "", false
 	}
 	for _, field := range []string{"gitHubUrl", "serverUrl"} {
@@ -1224,6 +1323,54 @@ func repoFromRunnerConfig(data []byte) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func orgFromRunnerConfig(data []byte) (string, bool) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(trimJSONBOM(data), &raw); err != nil {
+		return "", false
+	}
+	for _, field := range []string{"gitHubUrl", "serverUrl"} {
+		valueRaw, ok := raw[field]
+		if !ok {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(valueRaw, &value); err != nil {
+			continue
+		}
+		if org, ok := orgFromGitHubURL(value); ok {
+			return org, true
+		}
+	}
+	return "", false
+}
+
+func trimJSONBOM(data []byte) []byte {
+	return bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
+}
+
+func orgFromGitHubURL(raw string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", false
+	}
+	if parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, "github.com") {
+		return "", false
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) != 1 || parts[0] == "" || strings.Contains(parts[0], ".git") {
+		return "", false
+	}
+	return parts[0], true
+}
+
+func listWatchdogGitHubOrgRunners(ctx context.Context, org string, runFn func(context.Context, string, ...string) ([]byte, error)) ([]WatchdogGitHubRunner, error) {
+	out, err := runFn(ctx, "gh", "api", fmt.Sprintf("/orgs/%s/actions/runners", org))
+	if err != nil {
+		return nil, fmt.Errorf("gh api org actions/runners: %w", err)
+	}
+	return parseWatchdogGitHubRunners(org, out)
 }
 
 func repoFromGitHubURL(raw string) (string, bool) {
