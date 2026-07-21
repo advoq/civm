@@ -123,7 +123,12 @@ func Caps(homes []string, deps Deps) []Cap {
 			}
 			dirs = append(dirs, deps.glob(filepath.Join(home, glob))...)
 			for _, sub := range extraSubs {
-				dirs = append(dirs, filepath.Join(home, sub))
+				p := filepath.Join(home, sub)
+				if strings.ContainsAny(sub, "*?[") {
+					dirs = append(dirs, deps.glob(p)...)
+					continue
+				}
+				dirs = append(dirs, p)
 			}
 		}
 		dirs = deps.existingDirs(dirs)
@@ -139,13 +144,14 @@ func Caps(homes []string, deps Deps) []Cap {
 		}
 	}
 	// yarn v1: pacote = diretório multi-arquivo em `<root>/v6/<pkg>` → atômico por
-	// pacote (PackageDepth 2; o `.yarn/cache` berry tem zips rasos e cai no modo por
-	// arquivo sozinho). go-build/golangci: entrada com refs cruzadas opacas (o `-a`
-	// aponta um `-d` em outro prefixo) → não dá para sub-trimar, só WipeWhole acima
-	// do cap (backstop; ambos auto-trimam o working-set normal). npm/pnpm (abaixo)
-	// são content-addressed → seguros por arquivo (cada blob é uma unidade).
+	// pacote (PackageDepth 2). Yarn Berry pode aparecer como `.yarn/cache` no repo
+	// ou como cache externo nomeado (`~/.yarn-berry-<org>`); os zips rasos caem no
+	// modo por arquivo sozinho. go-build/golangci: entrada com refs cruzadas opacas
+	// (o `-a` aponta um `-d` em outro prefixo) → não dá para sub-trimar, só
+	// WipeWhole acima do cap (backstop; ambos auto-trimam o working-set normal).
+	// npm/pnpm (abaixo) são content-addressed → seguros por arquivo.
 	family(civm.DefaultCacheGoBuildMaxGB, 0, true, ".cache/go-build*")
-	family(civm.DefaultCacheYarnMaxGB, 2, false, ".cache/yarn*", ".yarn/cache")
+	family(civm.DefaultCacheYarnMaxGB, 2, false, ".cache/yarn*", ".yarn-berry-*", ".yarn/cache")
 	family(civm.DefaultCacheGolangciLintMaxGB, 0, true, ".cache/golangci-lint*")
 	// npm/pnpm use a single well-known dir per home (no named variants) and the
 	// budget is not divided, so no division skew — they enter per home

@@ -28,6 +28,7 @@ func TestCapsGlobsNamedDirsAcrossHomes(t *testing.T) {
 	gbB := mk("home", "emdev", ".cache", "go-build-acme-devctl")
 	gbC := mk("home", "runner", ".cache", "go-build-acme-web")
 	yarn1 := mk("home", "emdev", ".cache", "yarn-acme-web")
+	yarnBerry := mk("home", "emdev", ".yarn-berry-advoq-org")
 	lint := mk("home", "emdev", ".cache", "golangci-lint")
 	npm := mk("home", "emdev", ".npm", "_cacache")
 
@@ -36,7 +37,7 @@ func TestCapsGlobsNamedDirsAcrossHomes(t *testing.T) {
 	for _, c := range caps {
 		byPath[c.Path] = c
 	}
-	for _, p := range []string{gbA, gbB, gbC, yarn1, lint, npm} {
+	for _, p := range []string{gbA, gbB, gbC, yarn1, yarnBerry, lint, npm} {
 		if _, ok := byPath[p]; !ok {
 			t.Errorf("Caps() missing named dir %s — would grow unbounded", p)
 		}
@@ -46,6 +47,10 @@ func TestCapsGlobsNamedDirsAcrossHomes(t *testing.T) {
 	wantPer := int64(civm.DefaultCacheGoBuildMaxGB) * giB / 3
 	if got := byPath[gbA].MaxBytes; got != wantPer {
 		t.Errorf("go-build per-dir cap=%d, want family/3=%d", got, wantPer)
+	}
+	wantYarnPer := int64(civm.DefaultCacheYarnMaxGB) * giB / 2
+	if got := byPath[yarnBerry].MaxBytes; got != wantYarnPer {
+		t.Errorf("yarn berry per-dir cap=%d, want family/2=%d", got, wantYarnPer)
 	}
 	// Paths derives 1:1.
 	if len(Paths(caps)) != len(caps) {
