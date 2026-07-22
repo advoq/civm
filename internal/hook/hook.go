@@ -668,13 +668,16 @@ func killWorkRootContainers(ctx context.Context, opts Options, root string) Acti
 }
 
 // orphanInspectFormat é o template do `docker inspect` que emite, por container,
-// uma linha "ID|projeto-compose|portas-host". O projeto vem do label
-// com.docker.compose.project ("<no value>" quando ausente). As host ports vêm de
-// .HostConfig.PortBindings (o MAPA DE BINDINGS PEDIDO) — é ele que segura a
-// alocação da porta e causa "port is already allocated", e fica populado mesmo
-// quando .NetworkSettings.Ports vem vazio (contexto rootless). Usar '|' como
-// separador evita ambiguidade com o espaço entre as portas.
+// uma linha "ID|projeto-compose|testcontainers|portas-host". O projeto vem do
+// label com.docker.compose.project ("<no value>" quando ausente). O label
+// org.testcontainers cobre Postgres órfãos que ficam vivos quando um go test é
+// cancelado/OOM antes do Ryuk limpar. As host ports vêm de .HostConfig.PortBindings
+// (o MAPA DE BINDINGS PEDIDO) — é ele que segura a alocação da porta e causa
+// "port is already allocated", e fica populado mesmo quando .NetworkSettings.Ports
+// vem vazio (contexto rootless). Usar '|' como separador evita ambiguidade com o
+// espaço entre as portas.
 const orphanInspectFormat = `{{.Id}}|{{index .Config.Labels "com.docker.compose.project"}}|` +
+	`{{index .Config.Labels "org.testcontainers"}}|` +
 	`{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{.HostPort}} {{end}}{{end}}`
 
 // reapOrphanCIContainers roda na fronteira job-started, ANTES de o job subir o
@@ -739,8 +742,9 @@ func reapOrphanCIContainers(ctx context.Context, opts Options) []Action {
 
 // orphanIDsFromInspect faz o parse da saída do orphanInspectFormat e devolve os
 // IDs órfãos. Função pura (sem I/O) para ser testável de forma hermética: cada
-// linha vira (id, projeto, hostPorts) e isCIOrphan decide. A ordem da entrada é
-// preservada, sem dedupe (o docker inspect já emite uma linha por ID único).
+// linha vira (id, projeto, testcontainers, hostPorts) e isCIOrphan decide. A
+// ordem da entrada é preservada, sem dedupe (o docker inspect já emite uma linha
+// por ID único).
 func orphanIDsFromInspect(inspectOut string) []string {
 	var orphans []string
 	for _, line := range strings.Split(inspectOut, "\n") {
@@ -748,17 +752,18 @@ func orphanIDsFromInspect(inspectOut string) []string {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "|", 3)
-		if len(parts) < 3 {
+		parts := strings.SplitN(line, "|", 4)
+		if len(parts) < 4 {
 			continue
 		}
 		id := strings.TrimSpace(parts[0])
 		project := strings.TrimSpace(parts[1])
-		ports := strings.Fields(parts[2])
+		testcontainers := strings.TrimSpace(parts[2])
+		ports := strings.Fields(parts[3])
 		if id == "" {
 			continue
 		}
-		if isCIOrphan(project, ports) {
+		if isCIOrphan(project, testcontainers, ports) {
 			orphans = append(orphans, id)
 		}
 	}
@@ -771,16 +776,22 @@ func orphanIDsFromInspect(inspectOut string) []string {
 //	    — sinal PRIMÁRIO; o `devctl ci up` nomeia o project "<slot>-<run_id>"
 //	    com fallback "acme", e o compose committed usa name: acme, então o stack
 //	    inteiro carrega esse prefixo independente das portas; OU
-//	(b) ele publica uma das host ports FIXAS de CI conhecidas
+//	(b) é um container gerado por testcontainers (`org.testcontainers=true`),
+//	    que é exclusivo de testes de CI neste runner e pode sobrar quando o
+//	    processo Go morre por OOM/cancel antes do Ryuk limpar; OU
+//	(c) ele publica uma das host ports FIXAS de CI conhecidas
 //	    (DefaultCIFixedHostPorts) — defesa em profundidade p/ um container que
 //	    segure a porta SEM o label esperado.
 //
 // O label "<no value>" do template (sem label) é tratado como string vazia, que
 // não casa o prefixo. A comparação de project é por prefixo case-insensitive
 // (nomes de project compose são lowercased).
-func isCIOrphan(project string, hostPorts []string) bool {
+func isCIOrphan(project, testcontainers string, hostPorts []string) bool {
 	if p := strings.ToLower(strings.TrimSpace(project)); p != "" && p != "<no value>" &&
 		strings.HasPrefix(p, civm.DefaultCIOrphanProjectPrefix) {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(testcontainers), "true") {
 		return true
 	}
 	for _, hp := range hostPorts {

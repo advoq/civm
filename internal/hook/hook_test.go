@@ -1605,25 +1605,28 @@ func TestIsCIOrphan(t *testing.T) {
 	tests := []struct {
 		name      string
 		project   string
+		testc     string
 		hostPorts []string
 		want      bool
 	}{
-		{"project civm-run exato", "civm-run", nil, true},
-		{"project civm-run-1184 (slot-runid)", "civm-run-1184", nil, true},
-		{"project CIVM-RUN uppercase (case-insensitive)", "CIVM-RUN-Org-9", nil, true},
-		{"porta fixa minio 9020 sem label", "<no value>", []string{"9020"}, true},
-		{"porta fixa nginx 81 sem label", "", []string{"81"}, true},
-		{"porta fixa entre outras não-fixas", "<no value>", []string{"40000", "9100", "40001"}, true},
-		{"sem label e sem porta fixa => não órfão", "<no value>", []string{"40000"}, false},
-		{"label vazio e porta vazia => não órfão", "", nil, false},
-		{"project de OUTRO produto não casa o prefixo", "other-org-3", []string{"40000"}, false},
-		{"prefixo só no meio do nome não casa", "my-civm-run-stack", []string{"40000"}, false},
-		{"porta não-numérica é ignorada (não panica)", "<no value>", []string{"abc", "9020"}, true},
+		{"project civm-run exato", "civm-run", "", nil, true},
+		{"project civm-run-1184 (slot-runid)", "civm-run-1184", "", nil, true},
+		{"project CIVM-RUN uppercase (case-insensitive)", "CIVM-RUN-Org-9", "", nil, true},
+		{"testcontainers sem compose/porta", "<no value>", "true", nil, true},
+		{"testcontainers uppercase", "<no value>", "TRUE", []string{"40000"}, true},
+		{"porta fixa minio 9020 sem label", "<no value>", "", []string{"9020"}, true},
+		{"porta fixa nginx 81 sem label", "", "", []string{"81"}, true},
+		{"porta fixa entre outras não-fixas", "<no value>", "", []string{"40000", "9100", "40001"}, true},
+		{"sem label e sem porta fixa => não órfão", "<no value>", "", []string{"40000"}, false},
+		{"label vazio e porta vazia => não órfão", "", "", nil, false},
+		{"project de OUTRO produto não casa o prefixo", "other-org-3", "", []string{"40000"}, false},
+		{"prefixo só no meio do nome não casa", "my-civm-run-stack", "", []string{"40000"}, false},
+		{"porta não-numérica é ignorada (não panica)", "<no value>", "", []string{"abc", "9020"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isCIOrphan(tt.project, tt.hostPorts); got != tt.want {
-				t.Errorf("isCIOrphan(%q, %v) = %v, want %v", tt.project, tt.hostPorts, got, tt.want)
+			if got := isCIOrphan(tt.project, tt.testc, tt.hostPorts); got != tt.want {
+				t.Errorf("isCIOrphan(%q, %q, %v) = %v, want %v", tt.project, tt.testc, tt.hostPorts, got, tt.want)
 			}
 		})
 	}
@@ -1634,17 +1637,18 @@ func TestIsCIOrphan(t *testing.T) {
 // são puladas sem panicar, e a ordem de entrada é preservada.
 func TestOrphanIDsFromInspect(t *testing.T) {
 	out := strings.Join([]string{
-		"aaa111|civm-run-1184|9020 9021 ", // órfão por project
-		"bbb222|<no value>|81 ",            // órfão por porta fixa (nginx)
-		"ccc333|<no value>|40000 ",         // NÃO órfão (porta não-fixa, sem label)
-		"ddd444|other-org-2|40001 ",        // NÃO órfão (outro produto)
-		"",                                 // linha vazia → pulada
-		"malformed-line-without-pipes",     // sem '|' → pulada
-		"eee555|civm-run|",                 // órfão por project, sem portas
-		"|civm-run-7|9100 ",               // id vazio → pulada apesar do match
+		"aaa111|civm-run-1184|<no value>|9020 9021 ", // órfão por project
+		"bbb222|<no value>|<no value>|81 ",           // órfão por porta fixa (nginx)
+		"ccc333|<no value>|<no value>|40000 ",        // NÃO órfão (porta não-fixa, sem label)
+		"ddd444|other-org-2|<no value>|40001 ",       // NÃO órfão (outro produto)
+		"fff666|<no value>|true|",                    // órfão por testcontainers
+		"",                                           // linha vazia → pulada
+		"malformed-line-without-pipes",               // sem '|' → pulada
+		"eee555|civm-run|<no value>|",                // órfão por project, sem portas
+		"|civm-run-7|<no value>|9100 ",               // id vazio → pulada apesar do match
 	}, "\n")
 	got := orphanIDsFromInspect(out)
-	want := []string{"aaa111", "bbb222", "eee555"}
+	want := []string{"aaa111", "bbb222", "fff666", "eee555"}
 	if len(got) != len(want) {
 		t.Fatalf("orphanIDsFromInspect = %v, want %v", got, want)
 	}
@@ -1669,10 +1673,12 @@ func TestReapOrphanCIContainersStopsAndRemoves(t *testing.T) {
 			case name == "docker" && len(args) >= 1 && args[0] == "ps":
 				return []byte("aaa111\nbbb222\nccc333\n"), nil
 			case name == "docker" && len(args) >= 1 && args[0] == "inspect":
-				// aaa=órfão(project), bbb=não-órfão, ccc=órfão(porta fixa minio).
-				return []byte("aaa111|civm-run-5|40000 \n" +
-					"bbb222|<no value>|40001 \n" +
-					"ccc333|<no value>|9020 \n"), nil
+				// aaa=órfão(project), bbb=não-órfão, ccc=órfão(porta fixa minio),
+				// ddd=órfão(testcontainers sem compose/porta).
+				return []byte("aaa111|civm-run-5|<no value>|40000 \n" +
+					"bbb222|<no value>|<no value>|40001 \n" +
+					"ccc333|<no value>|<no value>|9020 \n" +
+					"ddd444|<no value>|true| \n"), nil
 			}
 			return nil, nil
 		},
@@ -1704,7 +1710,7 @@ func TestReapOrphanCIContainersStopsAndRemoves(t *testing.T) {
 	}
 	joinedStop := strings.Join(stopArgs, " ")
 	joinedRm := strings.Join(rmArgs, " ")
-	for _, want := range []string{"aaa111", "ccc333"} {
+	for _, want := range []string{"aaa111", "ccc333", "ddd444"} {
 		if !strings.Contains(joinedStop, want) {
 			t.Errorf("docker stop missing orphan %s; got %q", want, joinedStop)
 		}
@@ -1748,7 +1754,7 @@ func TestReapOrphanCIContainersBestEffort(t *testing.T) {
 				case "ps":
 					return []byte("aaa111\n"), nil
 				case "inspect":
-					return []byte("aaa111|civm-run-1|\n"), nil
+					return []byte("aaa111|civm-run-1|<no value>|\n"), nil
 				case "rm":
 					return nil, fmt.Errorf("device or resource busy")
 				}
@@ -1831,7 +1837,7 @@ func TestReapOrphanCIContainersBestEffort(t *testing.T) {
 					return []byte("zzz999\n"), nil
 				case "inspect":
 					// Outro produto, porta não-fixa => não órfão.
-					return []byte("zzz999|harmya-org-1|40000 \n"), nil
+					return []byte("zzz999|harmya-org-1|<no value>|40000 \n"), nil
 				}
 				t.Errorf("stop/rm must not run when no orphan is found; args=%v", args)
 				return nil, nil
@@ -1852,7 +1858,7 @@ func TestReapOrphanCIContainersBestEffort(t *testing.T) {
 				case "ps":
 					return []byte("aaa111\n"), nil
 				case "inspect":
-					return []byte("aaa111|civm-run-1|\n"), nil
+					return []byte("aaa111|civm-run-1|<no value>|\n"), nil
 				case "stop":
 					return nil, fmt.Errorf("stop timeout")
 				case "rm":
@@ -1905,7 +1911,7 @@ func TestJobStartedRunsOrphanReaper(t *testing.T) {
 			case "ps":
 				return []byte("dead001\n"), nil
 			case "inspect":
-				return []byte("dead001|civm-run-1186|9020 \n"), nil
+				return []byte("dead001|civm-run-1186|<no value>|9020 \n"), nil
 			case "rm":
 				reapedID = "dead001"
 			}
@@ -1947,7 +1953,7 @@ func TestCIFixedHostPortsCoverIncidentPort(t *testing.T) {
 	if !found {
 		t.Errorf("DefaultCIFixedHostPorts must include the 2026-06-19 incident port %d (minio API)", minioAPIPort)
 	}
-	if !isCIOrphan("<no value>", []string{fmt.Sprint(minioAPIPort)}) {
+	if !isCIOrphan("<no value>", "", []string{fmt.Sprint(minioAPIPort)}) {
 		t.Errorf("a container publishing only %d must be classified as a CI orphan", minioAPIPort)
 	}
 }
