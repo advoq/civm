@@ -325,6 +325,13 @@ func restartWatchdogRunners(ctx context.Context, opts WatchdogOptions, systemd [
 			report.add(event)
 			continue
 		}
+		if hasLocalRunnerWorker(ctx, opts) {
+			report.add(WatchdogEvent{
+				Event: "runner-restart-skipped", Severity: "warning", Unit: unit,
+				Reason: "host-busy", Detail: "Runner.Worker appeared before restart",
+			})
+			continue
+		}
 		if _, err := opts.RunFn(ctx, "sudo", "systemctl", "restart", unit); err != nil {
 			event.Severity = "critical"
 			event.Detail = fmt.Sprintf("systemctl restart: %v", err)
@@ -375,6 +382,13 @@ func recoverWatchdogOrgBusyWithoutWorker(ctx context.Context, opts WatchdogOptio
 			}
 			if !opts.Execute {
 				report.add(event)
+				return
+			}
+			if hasLocalRunnerWorker(ctx, opts) {
+				report.add(WatchdogEvent{
+					Event: "runner-restart-skipped", Severity: "warning", Unit: local.UnitName,
+					Runner: gh.Name, Reason: "host-busy", Detail: "Runner.Worker appeared before restart",
+				})
 				return
 			}
 			if _, err := opts.RunFn(ctx, "sudo", "systemctl", "restart", local.UnitName); err != nil {

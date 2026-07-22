@@ -505,6 +505,59 @@ func TestWatchdogRestartsFailedOrgRunnerWhenReposCannotBeInferred(t *testing.T) 
 	}
 }
 
+func TestWatchdogSkipsNoRepoRestartWhenWorkerAppears(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.RestartDelay = 0
+	opts.Repos = nil
+	opts.InferRepos = true
+	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
+		return []Status{{
+			UnitName:    "actions.runner.advoq.civm-advoq-org.service",
+			Repo:        "advoq",
+			Name:        "civm-advoq-org",
+			ActiveState: "failed",
+			SubState:    "failed",
+		}}, nil
+	}
+	activityCalls := 0
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		activityCalls++
+		if activityCalls >= 3 {
+			return []idle.Activity{{PID: 99, Command: "Runner.Worker run"}}, nil
+		}
+		return nil, nil
+	}
+	var calls []string
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		calls = append(calls, call)
+		if call == "systemctl show actions.runner.advoq.civm-advoq-org.service --property=WorkingDirectory --value" {
+			return []byte("/home/emedev/actions-runner-advoq-org\n"), nil
+		}
+		return nil, nil
+	}
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if !strings.HasSuffix(path, "/.runner") {
+			return nil, errors.New("unexpected read: " + path)
+		}
+		return []byte(`{"gitHubUrl":"https://github.com/advoq"}`), nil
+	}
+
+	report := Watchdog(context.Background(), opts)
+	if report.Exit != 0 {
+		t.Fatalf("Exit = %d, want 0 events=%+v", report.Exit, report.Events)
+	}
+	if !hasWatchdogEventWithReason(report, "runner-restart-skipped", "host-busy") {
+		t.Fatalf("events = %+v, want host-busy restart skip", report.Events)
+	}
+	for _, call := range calls {
+		if strings.Contains(call, "systemctl restart") {
+			t.Fatalf("watchdog restarted after worker appeared: %v", calls)
+		}
+	}
+}
+
 func TestWatchdogTreatsHealthyOrgRunnerWithoutRepoAsWarning(t *testing.T) {
 	t.Parallel()
 	opts := baseWatchdogOptions(t)
@@ -593,6 +646,64 @@ func TestWatchdogRestartsOrgRunnerBusyWithoutLocalWorker(t *testing.T) {
 	assertWatchdogCall(t, calls, "sudo systemctl restart actions.runner.advoq.civm-advoq-org.service")
 	if !hasWatchdogEventWithReason(report, "runner-restarted", "github-busy-without-local-worker") {
 		t.Fatalf("events = %+v, want stale busy restart", report.Events)
+	}
+}
+
+func TestWatchdogSkipsOrgBusyRestartWhenWorkerAppears(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.RestartDelay = 0
+	opts.IdleProbeDelay = 0
+	opts.Repos = nil
+	opts.InferRepos = true
+	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
+		return []Status{{
+			UnitName:    "actions.runner.advoq.civm-advoq-org.service",
+			Repo:        "advoq",
+			Name:        "civm-advoq-org",
+			ActiveState: "active",
+			SubState:    "running",
+		}}, nil
+	}
+	activityCalls := 0
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		activityCalls++
+		if activityCalls >= 3 {
+			return []idle.Activity{{PID: 99, Command: "Runner.Worker run"}}, nil
+		}
+		return nil, nil
+	}
+	var calls []string
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		calls = append(calls, call)
+		switch call {
+		case "systemctl show actions.runner.advoq.civm-advoq-org.service --property=WorkingDirectory --value":
+			return []byte("/home/emedev/actions-runner-advoq-org\n"), nil
+		case "gh api /orgs/advoq/actions/runners":
+			return []byte(`{"runners":[{"id":1,"name":"civm-advoq-org","status":"online","busy":true,"labels":[{"name":"self-hosted"},{"name":"civm"}]}]}`), nil
+		default:
+			return nil, nil
+		}
+	}
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if !strings.HasSuffix(path, "/.runner") {
+			return nil, errors.New("unexpected read: " + path)
+		}
+		return []byte(`{"gitHubUrl":"https://github.com/advoq"}`), nil
+	}
+
+	report := Watchdog(context.Background(), opts)
+	if report.Exit != 0 {
+		t.Fatalf("Exit = %d, want 0 events=%+v", report.Exit, report.Events)
+	}
+	if !hasWatchdogEventWithReason(report, "runner-restart-skipped", "host-busy") {
+		t.Fatalf("events = %+v, want host-busy restart skip", report.Events)
+	}
+	for _, call := range calls {
+		if strings.Contains(call, "systemctl restart") {
+			t.Fatalf("watchdog restarted after worker appeared: %v", calls)
+		}
 	}
 }
 
