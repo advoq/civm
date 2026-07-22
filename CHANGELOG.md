@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.22.10](https://github.com/advoq/civm/compare/v1.22.9...v1.22.10) (2026-07-22)
+
+
+### Bug Fixes
+
+* avoid watchdog restart race with jobs ([f9a2e8a](https://github.com/advoq/civm/commit/f9a2e8a1b865132b332169ad4d32773c46a586d6))
+* cap external yarn berry caches ([d3fd80c](https://github.com/advoq/civm/commit/d3fd80cc608cc3e31fd520bec39f03a581d30bee))
+* reap orphan testcontainers after OOM ([23d606a](https://github.com/advoq/civm/commit/23d606a5ac9dd8e6820438af0db4c4ddc7db098f))
+* recover org runner without inferred repos ([e2be67f](https://github.com/advoq/civm/commit/e2be67fc4464573e67e22bab759528b05de677c6))
+* recover stale busy org runner ([1b60423](https://github.com/advoq/civm/commit/1b604239997dac3f02e61ab51d0114ed0975a358))
+* report org runner availability without repos ([f146766](https://github.com/advoq/civm/commit/f1467665a0c2c7d92660890885bac9a6926fb123))
+* resolve runner user for admit probes ([f87a002](https://github.com/advoq/civm/commit/f87a002c9e3d5a3724b0bc567af0dee78de2ccc6))
+* tolerate missing change-detection base ([4f220c8](https://github.com/advoq/civm/commit/4f220c8fba8a27085b01a130e49236e82d388ad0))
+
 ## [1.22.9](https://github.com/advoq/civm/compare/v1.22.8...v1.22.9) (2026-07-15)
 
 
