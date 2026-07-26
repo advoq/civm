@@ -64,7 +64,7 @@ func TestBootstrapEverythingHelpers(t *testing.T) {
 	if len(steps) == 0 || !bytes.Contains([]byte(steps[0].WouldDo), []byte("/usr/local/bin/civmctl")) {
 		t.Fatalf("bootstrap-everything deve validar /usr/local/bin/civmctl, step=%+v", steps)
 	}
-	var names []string
+	names := make([]string, 0, len(steps))
 	for _, step := range steps {
 		names = append(names, step.Name)
 	}
