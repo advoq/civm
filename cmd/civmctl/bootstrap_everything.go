@@ -88,6 +88,7 @@ func buildBootstrapEverythingSteps(unitsSource string, watchdog, runnerWatchdog,
 	if metricsTimer {
 		timerNames = append(timerNames, "civmctl-metrics")
 	}
+	timerNames = append(timerNames, "civmctl-run-reaper")
 
 	steps := []everythingStep{
 		{

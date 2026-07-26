@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -62,6 +63,14 @@ func TestBootstrapEverythingHelpers(t *testing.T) {
 	steps := buildBootstrapEverythingSteps("/opt/civm/deploy/systemd", true, true, true, true, false)
 	if len(steps) == 0 || !bytes.Contains([]byte(steps[0].WouldDo), []byte("/usr/local/bin/civmctl")) {
 		t.Fatalf("bootstrap-everything deve validar /usr/local/bin/civmctl, step=%+v", steps)
+	}
+	names := make([]string, 0, len(steps))
+	for _, step := range steps {
+		names = append(names, step.Name)
+	}
+	if !slices.Contains(names, "cp_civmctl-run-reaper_service") ||
+		!slices.Contains(names, "cp_civmctl-run-reaper_timer") {
+		t.Fatalf("bootstrap-everything omitiu units do reaper: %v", names)
 	}
 }
 

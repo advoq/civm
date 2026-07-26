@@ -279,6 +279,12 @@ padrão usa `civmctl runner watchdog --execute --repos=auto --json`; não passa
 `.runner` do diretório real do service para preservar owners/repos com hífen;
 se falhar, usa o parser legado do unit name.
 
+Para runner de organização que aparece `busy` no GitHub sem `Runner.Worker`
+local, o watchdog tenta um restart e persiste cooldown de 1h. Eventos
+`org-busy-cooldown` são esperados enquanto o índice remoto continuar stale;
+mais de um `runner-restarted` por hora com motivo
+`github-busy-without-local-worker` indica binário antigo ou marker ilegível.
+
 Rerun automático é opt-in. Quando alguém roda manualmente ou instala um
 drop-in com `--rerun-network-failures --max-run-age=6h`, o watchdog confirma
 runner GitHub `online` e usa `gh run rerun <run_id> --failed`. O rerun fica

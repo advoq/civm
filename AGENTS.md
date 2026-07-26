@@ -67,10 +67,13 @@ Deploy do binário no guest (obrigatório após mudança no reaper):
 ```bash
 # na guest, worktree deployado / self-upgrade:
 sudo civmctl self-upgrade --execute
+# CIVM_REAPER_REPOS deve estar configurado antes de habilitar o timer.
 # conferir timer:
 systemctl is-active civmctl-run-reaper.timer
 journalctl -u civmctl-run-reaper.service -n 20 --no-pager
 ```
+
+`civmctl health` trata timer ou service do reaper ausente/falho como crítico.
 
 > Por quê: a box é **1 VM compartilhada por 8 runners** (não VM-por-job como o pago). A fidelidade vem de
 > **tratar cada job como efêmero** + **serializar + compactar**. Clonar repo na VM ou deixar estado quebra

@@ -384,11 +384,45 @@ func recoverWatchdogOrgBusyWithoutWorker(ctx context.Context, opts WatchdogOptio
 				report.add(event)
 				return
 			}
+			state, err := loadRerunState(opts)
+			if err != nil {
+				report.add(WatchdogEvent{
+					Event: "runner-restart-skipped", Severity: "critical", Unit: local.UnitName,
+					Runner: gh.Name, Reason: "marker-read-failed", Detail: err.Error(),
+				})
+				report.Exit = maxExit(report.Exit, 2)
+				return
+			}
+			now := opts.NowFn()
+			key := "org-busy:" + local.UnitName
+			window := state.AutoRestarts[key]
+			if window.WindowStart.IsZero() || now.Sub(window.WindowStart) >= time.Hour {
+				window = autoRestartWindow{WindowStart: now}
+			}
+			if window.Count >= 1 {
+				report.add(WatchdogEvent{
+					Event: "runner-restart-skipped", Severity: "warning", Unit: local.UnitName,
+					Runner: gh.Name, Reason: "org-busy-cooldown",
+					Detail: "already restarted once in the rolling hour",
+				})
+				return
+			}
 			if hasLocalRunnerWorker(ctx, opts) {
 				report.add(WatchdogEvent{
 					Event: "runner-restart-skipped", Severity: "warning", Unit: local.UnitName,
 					Runner: gh.Name, Reason: "host-busy", Detail: "Runner.Worker appeared before restart",
 				})
+				return
+			}
+			window.Count++
+			window.LastActed = now
+			state.AutoRestarts[key] = window
+			if err := writeRerunState(opts, state); err != nil {
+				report.add(WatchdogEvent{
+					Event: "runner-restart-skipped", Severity: "critical", Unit: local.UnitName,
+					Runner: gh.Name, Reason: "marker-write-failed", Detail: err.Error(),
+				})
+				report.Exit = maxExit(report.Exit, 2)
 				return
 			}
 			if _, err := opts.RunFn(ctx, "sudo", "systemctl", "restart", local.UnitName); err != nil {

@@ -12,10 +12,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,17 +67,24 @@ type Options struct {
 	// SystemRunnersFn permite injetar runners simulados em teste; quando
 	// nil, usa runner.List com o mesmo RunFn.
 	SystemRunnersFn func(ctx context.Context) ([]runner.Status, error)
+	// ReposConfigFn supplies the explicit fleet when only an org-level runner
+	// exists. The default reads CIVM_REAPER_REPOS from run-reaper.env.
+	ReposConfigFn func() ([]string, error)
+	// OrgReposFn expands an org-level runner when the local fleet config is
+	// unavailable to the caller (for example, a root-only environment file).
+	OrgReposFn func(ctx context.Context, org string) ([]string, error)
 }
 
 // DefaultOptions retorna defaults conservadores.
 func DefaultOptions() Options {
 	return Options{
-		IncludeETA:   true,
-		Limit:        5,
-		HistoryLimit: 10,
-		Concurrency:  8,
-		Now:          time.Now,
-		RunFn:        defaultRun,
+		IncludeETA:    true,
+		Limit:         5,
+		HistoryLimit:  10,
+		Concurrency:   8,
+		Now:           time.Now,
+		RunFn:         defaultRun,
+		ReposConfigFn: defaultReposConfig,
 	}
 }
 
@@ -148,6 +157,21 @@ func resolveRepos(ctx context.Context, opts *Options) ([]string, error) {
 			return nil, fmt.Errorf("infer repos: %w", err)
 		}
 		repos = inferReposFromSystemd(systemd)
+		if len(repos) == 0 {
+			repos, err = opts.ReposConfigFn()
+			if err != nil {
+				return nil, fmt.Errorf("infer repos from config: %w", err)
+			}
+		}
+		if len(repos) == 0 {
+			for _, org := range inferOrgsFromSystemd(systemd) {
+				orgRepos, orgErr := opts.OrgReposFn(ctx, org)
+				if orgErr != nil {
+					return nil, fmt.Errorf("infer repos from org %s: %w", org, orgErr)
+				}
+				repos = append(repos, orgRepos...)
+			}
+		}
 	}
 	if err := validateRepos(repos); err != nil {
 		return nil, err
@@ -370,6 +394,88 @@ func inferReposFromSystemd(systemd []runner.Status) []string {
 }
 
 var validRepoShape = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+var validOrgShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}$`)
+
+func inferOrgsFromSystemd(systemd []runner.Status) []string {
+	seen := map[string]struct{}{}
+	var orgs []string
+	for _, status := range systemd {
+		org := status.Repo
+		if !validOrgShape.MatchString(org) {
+			continue
+		}
+		if _, ok := seen[org]; ok {
+			continue
+		}
+		seen[org] = struct{}{}
+		orgs = append(orgs, org)
+	}
+	sort.Strings(orgs)
+	return orgs
+}
+
+func defaultReposConfig() ([]string, error) {
+	data, err := os.ReadFile("/etc/civm/run-reaper.env")
+	if os.IsNotExist(err) || os.IsPermission(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return parseReposConfig(data)
+}
+
+func parseReposConfig(data []byte) ([]string, error) {
+	for _, line := range strings.Split(string(data), "\n") {
+		key, value, found := strings.Cut(strings.TrimSpace(line), "=")
+		if !found || key != "CIVM_REAPER_REPOS" {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if strings.HasPrefix(value, "\"") {
+			unquoted, err := strconv.Unquote(value)
+			if err != nil {
+				return nil, fmt.Errorf("parse CIVM_REAPER_REPOS: %w", err)
+			}
+			value = unquoted
+		} else if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
+			value = value[1 : len(value)-1]
+		}
+		var repos []string
+		for _, repo := range strings.Split(value, ",") {
+			if repo = strings.TrimSpace(repo); repo != "" {
+				repos = append(repos, repo)
+			}
+		}
+		return repos, nil
+	}
+	return nil, nil
+}
+
+func orgReposFromGitHub(ctx context.Context, runFn func(context.Context, string, ...string) ([]byte, error), org string) ([]string, error) {
+	out, err := runFn(ctx, "gh", "api", "--paginate", "--slurp",
+		"/orgs/"+org+"/repos?per_page=100")
+	if err != nil {
+		return nil, err
+	}
+	var pages [][]struct {
+		FullName string `json:"full_name"`
+		Archived bool   `json:"archived"`
+	}
+	if err := json.Unmarshal(out, &pages); err != nil {
+		return nil, fmt.Errorf("parse paginated org repos: %w", err)
+	}
+	var repos []string
+	for _, page := range pages {
+		for _, repo := range page {
+			if !repo.Archived {
+				repos = append(repos, repo.FullName)
+			}
+		}
+	}
+	sort.Strings(repos)
+	return repos, nil
+}
 
 func validateRepos(repos []string) error {
 	for _, r := range repos {
@@ -425,6 +531,14 @@ func applyDefaults(opts *Options) {
 	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
+	}
+	if opts.ReposConfigFn == nil {
+		opts.ReposConfigFn = defaultReposConfig
+	}
+	if opts.OrgReposFn == nil {
+		opts.OrgReposFn = func(ctx context.Context, org string) ([]string, error) {
+			return orgReposFromGitHub(ctx, opts.RunFn, org)
+		}
 	}
 }
 

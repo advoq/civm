@@ -483,6 +483,9 @@ func TestWatchdogRestartsFailedOrgRunnerWhenReposCannotBeInferred(t *testing.T) 
 		}
 	}
 	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if path == opts.MarkerPath {
+			return os.ReadFile(path)
+		}
 		if !strings.HasSuffix(path, "/.runner") {
 			return nil, errors.New("unexpected read: " + path)
 		}
@@ -502,6 +505,56 @@ func TestWatchdogRestartsFailedOrgRunnerWhenReposCannotBeInferred(t *testing.T) 
 	}
 	if !hasWatchdogEventWithReason(report, "rerun-skipped", "no-repos") {
 		t.Fatalf("events = %+v, want no-repos note", report.Events)
+	}
+}
+
+func TestWatchdogOrgBusyRestartHasOneHourCooldown(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.RestartDelay = 0
+	opts.IdleProbeDelay = 0
+	opts.Repos = nil
+	opts.InferRepos = true
+	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
+		return []Status{{
+			UnitName: "actions.runner.advoq.civm-advoq-org.service", Repo: "advoq",
+			Name: "civm-advoq-org", ActiveState: "active", SubState: "running",
+		}}, nil
+	}
+	restarts := 0
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		switch call {
+		case "systemctl show actions.runner.advoq.civm-advoq-org.service --property=WorkingDirectory --value":
+			return []byte("/home/emedev/actions-runner-advoq-org\n"), nil
+		case "gh api /orgs/advoq/actions/runners":
+			return []byte(`{"runners":[{"name":"civm-advoq-org","status":"online","busy":true}]}`), nil
+		case "sudo systemctl restart actions.runner.advoq.civm-advoq-org.service":
+			restarts++
+			return nil, nil
+		case "systemctl is-active actions.runner.advoq.civm-advoq-org.service":
+			return []byte("active\n"), nil
+		default:
+			return nil, nil
+		}
+	}
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if path == opts.MarkerPath {
+			return os.ReadFile(path)
+		}
+		if strings.HasSuffix(path, "/.runner") {
+			return []byte(`{"gitHubUrl":"https://github.com/advoq"}`), nil
+		}
+		return nil, os.ErrNotExist
+	}
+
+	first := Watchdog(context.Background(), opts)
+	second := Watchdog(context.Background(), opts)
+	if first.Exit != 0 || second.Exit != 0 || restarts != 1 {
+		t.Fatalf("first=%+v second=%+v restarts=%d, want one restart", first, second, restarts)
+	}
+	if !hasWatchdogEventWithReason(second, "runner-restart-skipped", "org-busy-cooldown") {
+		t.Fatalf("second events=%+v, want cooldown", second.Events)
 	}
 }
 
@@ -538,6 +591,9 @@ func TestWatchdogSkipsNoRepoRestartWhenWorkerAppears(t *testing.T) {
 		return nil, nil
 	}
 	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if path == opts.MarkerPath {
+			return os.ReadFile(path)
+		}
 		if !strings.HasSuffix(path, "/.runner") {
 			return nil, errors.New("unexpected read: " + path)
 		}
@@ -580,6 +636,9 @@ func TestWatchdogTreatsHealthyOrgRunnerWithoutRepoAsWarning(t *testing.T) {
 		return nil, nil
 	}
 	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if path == opts.MarkerPath {
+			return os.ReadFile(path)
+		}
 		if !strings.HasSuffix(path, "/.runner") {
 			return nil, errors.New("unexpected read: " + path)
 		}
@@ -633,6 +692,9 @@ func TestWatchdogRestartsOrgRunnerBusyWithoutLocalWorker(t *testing.T) {
 		}
 	}
 	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if path == opts.MarkerPath {
+			return os.ReadFile(path)
+		}
 		if !strings.HasSuffix(path, "/.runner") {
 			return nil, errors.New("unexpected read: " + path)
 		}
@@ -687,6 +749,9 @@ func TestWatchdogSkipsOrgBusyRestartWhenWorkerAppears(t *testing.T) {
 		}
 	}
 	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if path == opts.MarkerPath {
+			return os.ReadFile(path)
+		}
 		if !strings.HasSuffix(path, "/.runner") {
 			return nil, errors.New("unexpected read: " + path)
 		}

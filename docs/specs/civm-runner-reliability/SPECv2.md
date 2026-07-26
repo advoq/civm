@@ -209,6 +209,11 @@ Substitui DT-8 e ITEM-10 do baseline naquilo que conflita.
      é re-aplicada antes do restart.
 - **`escalation="aborted"` (DT-v2-13) NÃO é sentinela de restart** (é incompletude por cancel, não runner quebrado).
 - **Anti restart-loop:** ver §"Estado de auto-restart" (DT-v2-4).
+- **Runner org `busy` sem `Runner.Worker`:** esse sinal pode permanecer stale
+  no GitHub depois do primeiro restart. O watchdog reserva e persiste a chave
+  `org-busy:<UnitName>` antes de agir e permite no máximo **1 restart/hora**
+  nesse caminho. Ticks seguintes emitem `org-busy-cooldown`; não reiniciam o
+  listener novamente enquanto o job órfão ainda aparece como busy.
 - **Teto e DoS:** o teto por unidade/hora também limita restarts induzidos por outro repo escrevendo sentinelas
   (hooks.jsonl é 0644 e atacável por um step CI). Como o restart só atinge unidades **enumeradas pelo systemd**
   e casadas por `Status.Repo`, um log forjado que não casa nenhuma unidade → **nenhum restart** (teste explícito).
@@ -233,7 +238,7 @@ Substitui DT-8 e ITEM-10 do baseline naquilo que conflita.
   Se o timer puder sobrepor (8 runners), o rename atômico + read-modify-write por invocação é o contrato;
   documenta-se que sem flock há uma janela de last-writer-wins aceita (o teto é defensivo, não exato ao 1).
 - **Teste:** N>teto sentinelas de unidade quebrada na janela → exatamente `teto` restarts, depois WARN-only;
-  reset após 1h.
+  reset após 1h; `busy` org stale em dois ticks → exatamente 1 restart.
 
 ### Reconciliação PRD — fecha DT-v2-3 (parte documental)
 
