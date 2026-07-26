@@ -138,12 +138,12 @@ func TestCollectInferReposFromReaperConfigForOrgRunner(t *testing.T) {
 	opts.ReposConfigFn = func() ([]string, error) {
 		return []string{"advoq/advoq"}, nil
 	}
-	var calls int
+	var calls atomic.Int32
 	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name != "gh" {
 			t.Fatalf("command = %q, want gh", name)
 		}
-		calls++
+		calls.Add(1)
 		if !slices.Contains(args, "advoq/advoq") {
 			t.Fatalf("args = %v, want configured repo", args)
 		}
@@ -157,8 +157,71 @@ func TestCollectInferReposFromReaperConfigForOrgRunner(t *testing.T) {
 	if report.Exit != 0 {
 		t.Fatalf("Exit = %d, want 0", report.Exit)
 	}
-	if calls != 2 {
-		t.Fatalf("gh calls = %d, want 2 statuses", calls)
+	if calls.Load() != 2 {
+		t.Fatalf("gh calls = %d, want 2 statuses", calls.Load())
+	}
+}
+
+func TestCollectInferReposFromOrgRunnerWhenConfigIsRestricted(t *testing.T) {
+	t.Parallel()
+	opts := DefaultOptions()
+	opts.InferRepos = true
+	opts.IncludeETA = false
+	opts.SystemRunnersFn = func(context.Context) ([]runner.Status, error) {
+		return []runner.Status{{Repo: "advoq", Name: "civm-advoq-org"}}, nil
+	}
+	opts.ReposConfigFn = func() ([]string, error) { return nil, nil }
+	opts.OrgReposFn = func(_ context.Context, org string) ([]string, error) {
+		if org != "advoq" {
+			t.Fatalf("org = %q, want advoq", org)
+		}
+		return []string{"advoq/advoq"}, nil
+	}
+	var calls atomic.Int32
+	opts.RunFn = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		calls.Add(1)
+		if !slices.Contains(args, "advoq/advoq") {
+			t.Fatalf("args = %v, want expanded org repo", args)
+		}
+		return []byte("[]"), nil
+	}
+
+	report, err := Collect(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if report.Exit != 0 || calls.Load() != 2 {
+		t.Fatalf("report=%+v calls=%d, want clean two-status collection", report, calls.Load())
+	}
+}
+
+func TestParseReposConfigAcceptsSystemdQuotes(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{
+		"CIVM_REAPER_REPOS=advoq/advoq,advoq/docs\n",
+		"CIVM_REAPER_REPOS=\"advoq/advoq,advoq/docs\"\n",
+		"CIVM_REAPER_REPOS='advoq/advoq,advoq/docs'\n",
+	} {
+		got, err := parseReposConfig([]byte(raw))
+		if err != nil || !slices.Equal(got, []string{"advoq/advoq", "advoq/docs"}) {
+			t.Fatalf("parseReposConfig(%q) = %v, %v", raw, got, err)
+		}
+	}
+}
+
+func TestOrgReposFromGitHubPaginatesAndSkipsArchived(t *testing.T) {
+	t.Parallel()
+	runFn := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		want := []string{"api", "--paginate", "--slurp", "/orgs/advoq/repos?per_page=100"}
+		if name != "gh" || !slices.Equal(args, want) {
+			t.Fatalf("command = %s %v, want gh %v", name, args, want)
+		}
+		return []byte(`[[{"full_name":"advoq/a","archived":false}],` +
+			`[{"full_name":"advoq/old","archived":true},{"full_name":"advoq/b","archived":false}]]`), nil
+	}
+	got, err := orgReposFromGitHub(context.Background(), runFn, "advoq")
+	if err != nil || !slices.Equal(got, []string{"advoq/a", "advoq/b"}) {
+		t.Fatalf("orgReposFromGitHub = %v, %v", got, err)
 	}
 }
 

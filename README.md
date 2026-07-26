@@ -44,11 +44,14 @@ cd /opt/civm
 go build -o /usr/local/bin/civmctl ./cmd/civmctl
 sudo civmctl bootstrap --execute
 sudo cp deploy/systemd/civmctl-*.service deploy/systemd/civmctl-*.timer /etc/systemd/system/
+sudo install -d -m 0755 /etc/civm
+printf '%s\n' 'CIVM_REAPER_REPOS=<owner/repo[,owner/repo]>' | \
+  sudo tee /etc/civm/run-reaper.env >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable --now \
   civmctl-cleanup.timer civmctl-disk-watchdog.timer \
   civmctl-runner-watchdog.timer civmctl-reverse-watchdog.timer \
-  civmctl-metrics.timer
+  civmctl-metrics.timer civmctl-run-reaper.timer
 civmctl parity
 civmctl health
 ```

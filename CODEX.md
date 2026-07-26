@@ -98,6 +98,10 @@ gerenciados de hooks de job e não depende da fleet `acme/*` estar hardcoded.
 Use `--repos=owner/a,owner/b` quando a inferência local não for suficiente, e
 `--repos=none` para pular GitHub em auditoria local/offline.
 
+`civmctl active-runs --repos=auto` usa repos inferidos diretamente dos runners.
+Para runner de organização, prefere `CIVM_REAPER_REPOS` e, se indisponível,
+pagina todos os repos não arquivados visíveis ao token via API do GitHub.
+
 `civmctl capacity --json` é o endpoint read-only de prontidão: usa hard-fail
 de disco em 90% para `accepting_jobs=false` e expõe services/workers ativos.
 `civmctl disk-audit --json` é o endpoint read-only de ownership de disco:

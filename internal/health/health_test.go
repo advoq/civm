@@ -26,8 +26,8 @@ func okCollector() *Collector {
 	c.TimerStateFn = func(context.Context, string) (TimerState, error) {
 		return TimerState{Enabled: "enabled", Active: "active"}, nil
 	}
-	c.ServiceResultFn = func(context.Context, string) (string, error) {
-		return "success", nil
+	c.ServiceStateFn = func(context.Context, string) (ServiceState, error) {
+		return ServiceState{LoadState: "loaded", Result: "success"}, nil
 	}
 	return c
 }
@@ -47,11 +47,11 @@ func TestCollect_AllOK(t *testing.T) {
 func TestCollect_ReaperTimerActiveServiceFailedIsCritical(t *testing.T) {
 	t.Parallel()
 	c := okCollector()
-	c.ServiceResultFn = func(_ context.Context, service string) (string, error) {
+	c.ServiceStateFn = func(_ context.Context, service string) (ServiceState, error) {
 		if service == "civmctl-run-reaper.service" {
-			return "exit-code", nil
+			return ServiceState{LoadState: "loaded", Result: "exit-code"}, nil
 		}
-		return "success", nil
+		return ServiceState{LoadState: "loaded", Result: "success"}, nil
 	}
 
 	r := c.Collect(context.Background())
@@ -69,6 +69,17 @@ func TestCollect_ReaperTimerActiveServiceFailedIsCritical(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("failed reaper service not reported: %+v", r.Checks)
+	}
+}
+
+func TestCollect_ReaperServiceMissingIsCritical(t *testing.T) {
+	t.Parallel()
+	c := okCollector()
+	c.ServiceStateFn = func(context.Context, string) (ServiceState, error) {
+		return ServiceState{LoadState: "not-found", Result: "success"}, nil
+	}
+	if got := c.Collect(context.Background()).Exit(); got != int(StatusCritical) {
+		t.Fatalf("Exit = %d, want critical", got)
 	}
 }
 
