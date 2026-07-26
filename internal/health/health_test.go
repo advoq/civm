@@ -26,6 +26,9 @@ func okCollector() *Collector {
 	c.TimerStateFn = func(context.Context, string) (TimerState, error) {
 		return TimerState{Enabled: "enabled", Active: "active"}, nil
 	}
+	c.ServiceResultFn = func(context.Context, string) (string, error) {
+		return "success", nil
+	}
 	return c
 }
 
@@ -36,8 +39,36 @@ func TestCollect_AllOK(t *testing.T) {
 	if r.Exit() != 0 {
 		t.Errorf("Exit = %d, want 0", r.Exit())
 	}
-	if len(r.Checks) != 9 {
-		t.Errorf("len(Checks) = %d, want 9", len(r.Checks))
+	if len(r.Checks) != 11 {
+		t.Errorf("len(Checks) = %d, want 11", len(r.Checks))
+	}
+}
+
+func TestCollect_ReaperTimerActiveServiceFailedIsCritical(t *testing.T) {
+	t.Parallel()
+	c := okCollector()
+	c.ServiceResultFn = func(_ context.Context, service string) (string, error) {
+		if service == "civmctl-run-reaper.service" {
+			return "exit-code", nil
+		}
+		return "success", nil
+	}
+
+	r := c.Collect(context.Background())
+
+	if r.Exit() != int(StatusCritical) {
+		t.Fatalf("Exit = %d, want critical", r.Exit())
+	}
+	found := false
+	for _, ch := range r.Checks {
+		if ch.Name == "SERVICE_REAPER" &&
+			ch.Status == StatusCritical &&
+			strings.Contains(ch.Detail, "exit-code") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("failed reaper service not reported: %+v", r.Checks)
 	}
 }
 
@@ -233,8 +264,8 @@ func TestRenderJSON_StructValid(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
 		t.Fatalf("output nao e JSON valido: %v", err)
 	}
-	if len(parsed.Checks) != 9 {
-		t.Errorf("Checks len = %d, want 9", len(parsed.Checks))
+	if len(parsed.Checks) != 11 {
+		t.Errorf("Checks len = %d, want 11", len(parsed.Checks))
 	}
 	if parsed.Exit != 0 {
 		t.Errorf("Exit = %d, want 0", parsed.Exit)

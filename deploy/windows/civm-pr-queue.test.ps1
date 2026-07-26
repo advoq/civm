@@ -1,5 +1,6 @@
 # Teste da decisao PURA da fila FIFO por-PR (Resolve-PrSlot). Sem GitHub/Hyper-V ->
 # roda em qualquer pwsh (Kahneman #13). Ids sao STRING (ctx = 'pr-1234' ou 'branch-main').
+$ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\civm-pr-queue.ps1"
 
 $pass = 0; $fail = 0
@@ -16,6 +17,14 @@ function Test-Eq($label, $got, $exp) {
     else { $script:fail++; "FAIL  [eq] esperado='$exp' got='$got'  ::  $label" }
 }
 function Pr($n, $j) { [pscustomobject]@{ number = $n; realJobs = $j } }
+
+$migrated = Ensure-PrQueueState ([pscustomobject]@{
+    currentPr = 'pr-42'
+    currentIdleSinceUtc = ''
+})
+Test-Eq 'state migration contexts' @($migrated.contexts).Count 0
+Test-Eq 'state migration lastCompactHeadSha' "$($migrated.lastCompactHeadSha)" ''
+Test-Eq 'state migration lastCompactContext' "$($migrated.lastCompactContext)" ''
 
 # Relogio fixo (a funcao e pura: le os timestamps passados, nunca o relogio real).
 $now = '2026-06-25T00:00:00Z'

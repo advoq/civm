@@ -126,6 +126,33 @@ func TestCollectInferReposFromSystemd(t *testing.T) {
 	}
 }
 
+func TestCollectInferReposFromReaperConfigForOrgRunner(t *testing.T) {
+	t.Parallel()
+	opts := DefaultOptions()
+	opts.InferRepos = true
+	opts.IncludeETA = false
+	opts.SystemRunnersFn = func(context.Context) ([]runner.Status, error) {
+		return []runner.Status{{Repo: "advoq", Name: "civm-advoq-org"}}, nil
+	}
+	opts.ReposConfigFn = func() ([]string, error) {
+		return []string{"advoq/advoq"}, nil
+	}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "gh" {
+			t.Fatalf("command = %q, want gh", name)
+		}
+		return []byte("[]"), nil
+	}
+
+	report, err := Collect(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if report.Exit != 0 {
+		t.Fatalf("Exit = %d, want 0", report.Exit)
+	}
+}
+
 func TestCollectPartialErrorMarksExitNonZero(t *testing.T) {
 	opts := DefaultOptions()
 	opts.Repos = []string{"a/b"}
