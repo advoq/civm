@@ -12,10 +12,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,17 +67,21 @@ type Options struct {
 	// SystemRunnersFn permite injetar runners simulados em teste; quando
 	// nil, usa runner.List com o mesmo RunFn.
 	SystemRunnersFn func(ctx context.Context) ([]runner.Status, error)
+	// ReposConfigFn supplies the explicit fleet when only an org-level runner
+	// exists. The default reads CIVM_REAPER_REPOS from run-reaper.env.
+	ReposConfigFn func() ([]string, error)
 }
 
 // DefaultOptions retorna defaults conservadores.
 func DefaultOptions() Options {
 	return Options{
-		IncludeETA:   true,
-		Limit:        5,
-		HistoryLimit: 10,
-		Concurrency:  8,
-		Now:          time.Now,
-		RunFn:        defaultRun,
+		IncludeETA:    true,
+		Limit:         5,
+		HistoryLimit:  10,
+		Concurrency:   8,
+		Now:           time.Now,
+		RunFn:         defaultRun,
+		ReposConfigFn: defaultReposConfig,
 	}
 }
 
@@ -148,6 +154,12 @@ func resolveRepos(ctx context.Context, opts *Options) ([]string, error) {
 			return nil, fmt.Errorf("infer repos: %w", err)
 		}
 		repos = inferReposFromSystemd(systemd)
+		if len(repos) == 0 {
+			repos, err = opts.ReposConfigFn()
+			if err != nil {
+				return nil, fmt.Errorf("infer repos from config: %w", err)
+			}
+		}
 	}
 	if err := validateRepos(repos); err != nil {
 		return nil, err
@@ -371,6 +383,30 @@ func inferReposFromSystemd(systemd []runner.Status) []string {
 
 var validRepoShape = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
+func defaultReposConfig() ([]string, error) {
+	data, err := os.ReadFile("/etc/civm/run-reaper.env")
+	if os.IsNotExist(err) || os.IsPermission(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		key, value, found := strings.Cut(strings.TrimSpace(line), "=")
+		if !found || key != "CIVM_REAPER_REPOS" {
+			continue
+		}
+		var repos []string
+		for _, repo := range strings.Split(value, ",") {
+			if repo = strings.TrimSpace(repo); repo != "" {
+				repos = append(repos, repo)
+			}
+		}
+		return repos, nil
+	}
+	return nil, nil
+}
+
 func validateRepos(repos []string) error {
 	for _, r := range repos {
 		if err := civm.ValidateRepo(r); err != nil {
@@ -425,6 +461,9 @@ func applyDefaults(opts *Options) {
 	}
 	if opts.RunFn == nil {
 		opts.RunFn = defaultRun
+	}
+	if opts.ReposConfigFn == nil {
+		opts.ReposConfigFn = defaultReposConfig
 	}
 }
 

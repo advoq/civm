@@ -16,6 +16,26 @@
 # tem; daqui sai QUEM detem o slot, quando o contexto atual acabou (-> limpa+compacta +
 # avanca) e o grace que tolera o gap entre os workflows do MESMO contexto.
 
+function Ensure-PrQueueState {
+    param($State)
+    if ($null -eq $State) {
+        $State = [pscustomobject]@{}
+    }
+    $defaults = [ordered]@{
+        contexts = @()
+        currentPr = ''
+        currentIdleSinceUtc = ''
+        lastCompactHeadSha = ''
+        lastCompactContext = ''
+    }
+    foreach ($entry in $defaults.GetEnumerator()) {
+        if (-not ($State.PSObject.Properties.Name -contains $entry.Key)) {
+            $State | Add-Member -NotePropertyName $entry.Key -NotePropertyValue $entry.Value -Force
+        }
+    }
+    return $State
+}
+
 # Resolve-PrSlot decide a acao da fila a partir do estado observado. Retorna um objeto
 # com: action (grant|hold|boundary_advance|idle), currentPr (o contexto que passa a
 # deter o slot; '' = nenhum), idleSinceUtc (carimbo do grace, '' = limpo) e reason

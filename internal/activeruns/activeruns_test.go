@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -137,9 +138,14 @@ func TestCollectInferReposFromReaperConfigForOrgRunner(t *testing.T) {
 	opts.ReposConfigFn = func() ([]string, error) {
 		return []string{"advoq/advoq"}, nil
 	}
+	var calls int
 	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name != "gh" {
 			t.Fatalf("command = %q, want gh", name)
+		}
+		calls++
+		if !slices.Contains(args, "advoq/advoq") {
+			t.Fatalf("args = %v, want configured repo", args)
 		}
 		return []byte("[]"), nil
 	}
@@ -150,6 +156,9 @@ func TestCollectInferReposFromReaperConfigForOrgRunner(t *testing.T) {
 	}
 	if report.Exit != 0 {
 		t.Fatalf("Exit = %d, want 0", report.Exit)
+	}
+	if calls != 2 {
+		t.Fatalf("gh calls = %d, want 2 statuses", calls)
 	}
 }
 

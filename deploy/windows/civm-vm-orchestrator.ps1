@@ -591,13 +591,7 @@ function Invoke-PrQueuePushWave {
         $act = Get-PrActivity
         $pq = $null
         if (Test-Path -LiteralPath $PrQueuePath) { try { $pq = Get-Content -LiteralPath $PrQueuePath -Raw | ConvertFrom-Json } catch {} }
-        if ($null -eq $pq) { $pq = [pscustomobject]@{ contexts = @(); currentPr = ''; currentIdleSinceUtc = ''; lastCompactHeadSha = ''; lastCompactContext = '' } }
-        if (-not ($pq.PSObject.Properties.Name -contains 'lastCompactHeadSha')) {
-            $pq | Add-Member -NotePropertyName lastCompactHeadSha -NotePropertyValue '' -Force
-        }
-        if (-not ($pq.PSObject.Properties.Name -contains 'lastCompactContext')) {
-            $pq | Add-Member -NotePropertyName lastCompactContext -NotePropertyValue '' -Force
-        }
+        $pq = Ensure-PrQueueState $pq
         $seen = @{}; foreach ($c in @($pq.contexts)) { if ($null -ne $c) { $seen["$($c.id)"] = $c.firstSeenUtc } }
         $ordered = @()
         foreach ($c in @($pq.contexts)) { if ($null -ne $c -and $act.ContainsKey("$($c.id)")) { $ordered += [pscustomobject]@{ id = "$($c.id)"; firstSeenUtc = $c.firstSeenUtc } } }

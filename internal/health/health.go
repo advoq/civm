@@ -81,26 +81,28 @@ type Collector struct {
 	MemWarnFreeMB  int64
 	MemCritFreeMB  int64
 
-	StatfsFn      func(path string) (totalBytes, freeBytes uint64, err error)
-	MeminfoFn     func() (memAvailableKB int64, err error)
-	RunnerUnitsFn func(ctx context.Context) ([]string, error)
-	LastCleanupFn func(ctx context.Context) (*time.Time, string, error)
-	TimerStateFn  func(ctx context.Context, timer string) (TimerState, error)
+	StatfsFn        func(path string) (totalBytes, freeBytes uint64, err error)
+	MeminfoFn       func() (memAvailableKB int64, err error)
+	RunnerUnitsFn   func(ctx context.Context) ([]string, error)
+	LastCleanupFn   func(ctx context.Context) (*time.Time, string, error)
+	TimerStateFn    func(ctx context.Context, timer string) (TimerState, error)
+	ServiceResultFn func(ctx context.Context, service string) (string, error)
 }
 
 // NewDefaultCollector wires the production implementations.
 func NewDefaultCollector(workDir string) *Collector {
 	return &Collector{
-		WorkDir:        workDir,
-		DiskWarnFreeGB: 10,
-		DiskCritFreeGB: 3,
-		MemWarnFreeMB:  512,
-		MemCritFreeMB:  128,
-		StatfsFn:       defaultStatfs,
-		MeminfoFn:      defaultMeminfo,
-		RunnerUnitsFn:  defaultRunnerUnits,
-		LastCleanupFn:  defaultLastCleanup,
-		TimerStateFn:   defaultTimerState,
+		WorkDir:         workDir,
+		DiskWarnFreeGB:  10,
+		DiskCritFreeGB:  3,
+		MemWarnFreeMB:   512,
+		MemCritFreeMB:   128,
+		StatfsFn:        defaultStatfs,
+		MeminfoFn:       defaultMeminfo,
+		RunnerUnitsFn:   defaultRunnerUnits,
+		LastCleanupFn:   defaultLastCleanup,
+		TimerStateFn:    defaultTimerState,
+		ServiceResultFn: defaultServiceResult,
 	}
 }
 
@@ -109,6 +111,9 @@ func NewDefaultCollector(workDir string) *Collector {
 func (c *Collector) Collect(ctx context.Context) Report {
 	if c.TimerStateFn == nil {
 		c.TimerStateFn = defaultTimerState
+	}
+	if c.ServiceResultFn == nil {
+		c.ServiceResultFn = defaultServiceResult
 	}
 	var r Report
 	r.Checks = append(r.Checks, c.checkDisk())
@@ -119,8 +124,25 @@ func (c *Collector) Collect(ctx context.Context) Report {
 	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_RUNNER", "civmctl-runner-watchdog.timer", StatusWarn))
 	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_REVERSE", "civmctl-reverse-watchdog.timer", StatusWarn))
 	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_METRICS", "civmctl-metrics.timer", StatusWarn))
+	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_REAPER", "civmctl-run-reaper.timer", StatusCritical))
+	r.Checks = append(r.Checks, c.checkServiceResult(ctx, "SERVICE_REAPER", "civmctl-run-reaper.service", StatusCritical))
 	r.Checks = append(r.Checks, c.checkLastCleanup(ctx))
 	return r
+}
+
+func (c *Collector) checkServiceResult(ctx context.Context, name, service string, failedStatus Status) Check {
+	result, err := c.ServiceResultFn(ctx, service)
+	if err != nil {
+		return Check{Name: name, Detail: fmt.Sprintf("%s result unavailable: %v", service, err), Status: StatusWarn}
+	}
+	if result != "success" {
+		return Check{
+			Name:   name,
+			Detail: fmt.Sprintf("%s failed: result=%s", service, result),
+			Status: failedStatus,
+		}
+	}
+	return Check{Name: name, Detail: service + " result=success", Status: StatusOK}
 }
 
 func (c *Collector) checkDisk() Check {
@@ -366,6 +388,18 @@ func defaultTimerState(ctx context.Context, timer string) (TimerState, error) {
 		return state, fmt.Errorf("is-active: %w", activeErr)
 	}
 	return state, nil
+}
+
+func defaultServiceResult(ctx context.Context, service string) (string, error) {
+	out, err := exec.CommandContext(ctx, "systemctl", "show", service, "--property=Result", "--value").Output()
+	result := strings.TrimSpace(string(out))
+	if err != nil {
+		return result, fmt.Errorf("systemctl show Result: %w", err)
+	}
+	if result == "" {
+		return "", fmt.Errorf("systemctl show Result returned empty")
+	}
+	return result, nil
 }
 
 // readFile is a tiny wrapper to make defaultMeminfo testable via build tags
