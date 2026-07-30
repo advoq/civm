@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -273,7 +274,7 @@ func TestRunCacheTrimCoversNamedDirsUnderRunnerHome(t *testing.T) {
 	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
 	old := now.Add(-72 * time.Hour)
 	mfs := fstest.MapFS{
-		"home/emdev/actions-runner-a/_work/x":             {Data: []byte("x"), ModTime: old},
+		"home/emdev/actions-runner-a/_work/x":            {Data: []byte("x"), ModTime: old},
 		"home/emdev/.cache/go-build-acme-services/big.o": {Data: []byte("data"), ModTime: old},
 		"home/emdev/.cache/yarn-acme-web/dep.tgz":        {Data: []byte("data"), ModTime: old},
 	}
@@ -637,6 +638,251 @@ func TestDockerVolumePruneSafe_Error(t *testing.T) {
 	a := dockerVolumePruneSafe(context.Background(), opts)
 	if a.Err == nil || a.Executed {
 		t.Fatalf("esperava erro propagado e não-executado: %+v", a)
+	}
+}
+
+func TestManagedComposeVolumeNames_ClassifiesOnlyCIVolumes(t *testing.T) {
+	t.Parallel()
+	payload := []byte(`[
+	  {
+	    "Name": "advoq-org-29409521066_postgres_data",
+	    "Driver": "local",
+	    "Scope": "local",
+	    "Labels": {
+	      "com.docker.compose.config-hash": "abc",
+	      "com.docker.compose.project": "advoq-org-29409521066",
+	      "com.docker.compose.version": "5.3.1",
+	      "com.docker.compose.volume": "postgres_data"
+	    }
+	  },
+	  {
+	    "Name": "advoq-manual_postgres_data",
+	    "Driver": "local",
+	    "Scope": "local",
+	    "Labels": {
+	      "com.docker.compose.config-hash": "abc",
+	      "com.docker.compose.project": "advoq-manual",
+	      "com.docker.compose.version": "5.3.1",
+	      "com.docker.compose.volume": "postgres_data"
+	    }
+	  },
+	  {
+	    "Name": "advoq-org-29409521066_remote_data",
+	    "Driver": "nfs",
+	    "Scope": "global",
+	    "Labels": {
+	      "com.docker.compose.config-hash": "abc",
+	      "com.docker.compose.project": "advoq-org-29409521066",
+	      "com.docker.compose.version": "5.3.1",
+	      "com.docker.compose.volume": "remote_data"
+	    }
+	  },
+	  {
+	    "Name": "advoq-org-29409521067_postgres_data",
+	    "Driver": "local",
+	    "Scope": "local",
+	    "Labels": {
+	      "com.docker.compose.project": "advoq-org-29409521067",
+	      "com.docker.compose.version": "5.3.1",
+	      "com.docker.compose.volume": "postgres_data"
+	    }
+	  }
+	]`)
+
+	got, err := managedComposeVolumeNames(payload)
+	if err != nil {
+		t.Fatalf("managedComposeVolumeNames returned an error: %v", err)
+	}
+	want := []string{"advoq-org-29409521066_postgres_data"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("managed volumes = %v, want %v", got, want)
+	}
+}
+
+func TestManagedComposeVolumeNames_RejectsInvalidJSON(t *testing.T) {
+	t.Parallel()
+	if _, err := managedComposeVolumeNames([]byte(`{"Name":`)); err == nil {
+		t.Fatal("invalid JSON should fail closed")
+	}
+}
+
+func TestDockerManagedVolumePrune_RemovesExplicitNamesAndProvesPostcondition(t *testing.T) {
+	t.Parallel()
+	opts := testExecuteOptions()
+	opts.ActivityFn = func(context.Context) ([]Activity, error) { return nil, nil }
+	opts.IdleProbeDelay = 0
+	opts.LockActiveFn = func() (bool, error) { return false, nil }
+
+	listCalls := 0
+	dfCalls := 0
+	var listCommand string
+	var removeCommand string
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		command := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(command, "docker system df --format "):
+			dfCalls++
+			if dfCalls == 1 {
+				return []byte(`{"Type":"Local Volumes","Reclaimable":"10.44GB (100%)"}` + "\n"), nil
+			}
+			return []byte(`{"Type":"Local Volumes","Reclaimable":"0B (0%)"}` + "\n"), nil
+		case strings.HasPrefix(command, "docker volume ls "):
+			listCalls++
+			listCommand = command
+			if listCalls == 1 {
+				return []byte("advoq-org-29409521066_postgres_data\nadvoq-org-29409521066_redis_data\n"), nil
+			}
+			return nil, nil
+		case strings.HasPrefix(command, "docker volume inspect "):
+			return []byte(`[
+			  {
+			    "Name": "advoq-org-29409521066_postgres_data",
+			    "Driver": "local",
+			    "Scope": "local",
+			    "Labels": {
+			      "com.docker.compose.config-hash": "abc",
+			      "com.docker.compose.project": "advoq-org-29409521066",
+			      "com.docker.compose.version": "5.3.1",
+			      "com.docker.compose.volume": "postgres_data"
+			    }
+			  },
+			  {
+			    "Name": "advoq-org-29409521066_redis_data",
+			    "Driver": "local",
+			    "Scope": "local",
+			    "Labels": {
+			      "com.docker.compose.config-hash": "def",
+			      "com.docker.compose.project": "advoq-org-29409521066",
+			      "com.docker.compose.version": "5.3.1",
+			      "com.docker.compose.volume": "redis_data"
+			    }
+			  }
+			]`), nil
+		case strings.HasPrefix(command, "docker volume rm "):
+			removeCommand = command
+			return []byte("advoq-org-29409521066_postgres_data\nadvoq-org-29409521066_redis_data\n"), nil
+		default:
+			t.Fatalf("unexpected command: %s", command)
+			return nil, nil
+		}
+	}
+
+	a := dockerManagedVolumePrune(context.Background(), opts)
+
+	if a.Err != nil || !a.Executed {
+		t.Fatalf("managed prune failed: %+v", a)
+	}
+	if removeCommand != "docker volume rm advoq-org-29409521066_postgres_data advoq-org-29409521066_redis_data" {
+		t.Fatalf("removal was not explicit and ordered: %q", removeCommand)
+	}
+	if !strings.Contains(listCommand, "--filter dangling=true") {
+		t.Fatalf("inventory did not require unreferenced volumes: %q", listCommand)
+	}
+	if listCalls != 2 {
+		t.Fatalf("inventory should run before and after, calls=%d", listCalls)
+	}
+	if a.BytesFound != parseHumanBytes("10.44GB") || a.BytesFreed != parseHumanBytes("10.44GB") {
+		t.Fatalf("before and after bytes were not measured: %+v", a)
+	}
+}
+
+func TestDockerManagedVolumePrune_AbortsIfHostBecomesBusy(t *testing.T) {
+	t.Parallel()
+	opts := testExecuteOptions()
+	opts.IdleProbeDelay = 0
+	opts.ActivityFn = func(context.Context) ([]Activity, error) {
+		return []Activity{{PID: 123, Command: "Runner.Worker"}}, nil
+	}
+	removed := false
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		command := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(command, "docker system df --format "):
+			return []byte(`{"Type":"Local Volumes","Reclaimable":"10.44GB (100%)"}` + "\n"), nil
+		case strings.HasPrefix(command, "docker volume ls "):
+			return []byte("advoq-org-29409521066_postgres_data\n"), nil
+		case strings.HasPrefix(command, "docker volume inspect "):
+			return []byte(`[{
+			  "Name":"advoq-org-29409521066_postgres_data",
+			  "Driver":"local",
+			  "Scope":"local",
+			  "Labels":{
+			    "com.docker.compose.config-hash":"abc",
+			    "com.docker.compose.project":"advoq-org-29409521066",
+			    "com.docker.compose.version":"5.3.1",
+			    "com.docker.compose.volume":"postgres_data"
+			  }
+			}]`), nil
+		case strings.HasPrefix(command, "docker volume rm "):
+			removed = true
+		}
+		return nil, nil
+	}
+
+	a := dockerManagedVolumePrune(context.Background(), opts)
+	if a.Err == nil {
+		t.Fatal("activity between inventory and mutation should fail closed")
+	}
+	if removed {
+		t.Fatal("named volume was removed while the host was busy")
+	}
+}
+
+func TestDockerManagedVolumePrune_IsIdempotentWithoutTargets(t *testing.T) {
+	t.Parallel()
+	opts := testExecuteOptions()
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		command := name + " " + strings.Join(args, " ")
+		if strings.HasPrefix(command, "docker system df --format ") {
+			return []byte(`{"Type":"Local Volumes","Reclaimable":"0B (0%)"}` + "\n"), nil
+		}
+		if !strings.HasPrefix(command, "docker volume ls ") {
+			t.Fatalf("second execution without targets should not mutate: %s", command)
+		}
+		return nil, nil
+	}
+
+	for i := 0; i < 2; i++ {
+		a := dockerManagedVolumePrune(context.Background(), opts)
+		if a.Err != nil || !a.Executed {
+			t.Fatalf("idempotent execution %d failed: %+v", i+1, a)
+		}
+	}
+}
+
+func TestRun_ManagedVolumePruneRequiresBoundaryOptIn(t *testing.T) {
+	t.Parallel()
+	newOptions := func() (Options, *bool) {
+		opts := DefaultOptions()
+		opts.Execute = false
+		opts.AptClean = false
+		opts.WalkFn = func(string, fs.WalkDirFunc) error { return nil }
+		opts.GlobFn = func(string) ([]string, error) { return nil, nil }
+		called := false
+		opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+			command := name + " " + strings.Join(args, " ")
+			if strings.HasPrefix(command, "docker system df --format ") {
+				return []byte(`{"Type":"Local Volumes","Reclaimable":"0B (0%)"}` + "\n"), nil
+			}
+			if strings.HasPrefix(command, "docker volume ls ") {
+				called = true
+			}
+			return nil, nil
+		}
+		return opts, &called
+	}
+
+	defaultOpts, defaultCalled := newOptions()
+	Run(context.Background(), defaultOpts)
+	if *defaultCalled {
+		t.Fatal("routine cleanup must not inventory or remove named volumes")
+	}
+
+	boundaryOpts, boundaryCalled := newOptions()
+	boundaryOpts.ManagedVolumePrune = true
+	Run(context.Background(), boundaryOpts)
+	if !*boundaryCalled {
+		t.Fatal("explicit boundary should execute the managed-volume policy")
 	}
 }
 

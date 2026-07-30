@@ -35,7 +35,9 @@ The operation was canceled
 Foi exatamente o que derrubou `ms-billing` e `ms-core` no PR #1184
 (validation.md 2026-06-18 20:35). O `govulncheck` dos dois passou — o codigo
 compila; **nao era bug de codigo, era contencao de runner**. O deep-clean de
-disco (~58 GB livres) nao resolve: o problema e **concorrencia**, nao espaco.
+disco não resolve: o problema é **concorrência**, não espaço. O valor histórico
+de `~58 GB` livres é inalcançável no guest atual de `40 GiB`; ver
+`docs/HARDWARE.md` e issues #181/#182.
 
 Mantendo so o runner org, acme nunca roda 2 jobs simultaneos: a fila daquele
 unico runner serializa tudo. Medido: `runner busy peak = 1` durante o re-run do

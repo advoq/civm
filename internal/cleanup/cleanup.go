@@ -4,6 +4,7 @@ package cleanup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -84,6 +86,10 @@ type Options struct {
 	WorkThreshold      time.Duration
 	CodespaceThreshold time.Duration
 	DockerPrune        bool
+	// ManagedVolumePrune enables scoped named-volume removal only at a
+	// generation boundary while the host has closed admission. Routine timers
+	// and hooks keep it disabled.
+	ManagedVolumePrune bool
 	AptClean           bool
 	SkipIdleGuard      bool
 	// EmergencyBypassIdle stops deferring the SAFE reclaim (old /tmp, cache
@@ -258,6 +264,9 @@ func Run(ctx context.Context, opts Options) []Action {
 	out = append(out, cacheTrimActions(opts)...)
 	if opts.DockerPrune {
 		out = append(out, dockerPrune(ctx, opts))
+	}
+	if opts.ManagedVolumePrune {
+		out = append(out, dockerManagedVolumePrune(ctx, opts))
 	}
 	if opts.AptClean {
 		out = append(out, aptClean(ctx, opts))
@@ -650,6 +659,207 @@ func dockerVolumePruneSafe(ctx context.Context, opts Options) Action {
 		return a
 	}
 	a.BytesFreed = parseTotalReclaimed(string(out))
+	a.Executed = true
+	return a
+}
+
+var (
+	managedComposeProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*-[1-9][0-9]{5,}$`)
+	dockerVolumeNamePattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]+$`)
+)
+
+type dockerVolumeMetadata struct {
+	Name   string            `json:"Name"`
+	Driver string            `json:"Driver"`
+	Scope  string            `json:"Scope"`
+	Labels map[string]string `json:"Labels"`
+}
+
+type dockerSystemDFRow struct {
+	Type        string `json:"Type"`
+	Reclaimable string `json:"Reclaimable"`
+}
+
+// managedComposeVolumeNames classifies only local volumes created by a
+// run-scoped Compose project. Name, labels, and numeric suffix must agree;
+// ambiguous data is preserved.
+func managedComposeVolumeNames(payload []byte) ([]string, error) {
+	var volumes []dockerVolumeMetadata
+	if err := json.Unmarshal(payload, &volumes); err != nil {
+		return nil, fmt.Errorf("parse docker volume inspect: %w", err)
+	}
+
+	names := make([]string, 0, len(volumes))
+	seen := make(map[string]struct{}, len(volumes))
+	for _, volume := range volumes {
+		project := volume.Labels["com.docker.compose.project"]
+		composeVolume := volume.Labels["com.docker.compose.volume"]
+		if volume.Driver != "local" || volume.Scope != "local" ||
+			!managedComposeProjectPattern.MatchString(project) ||
+			volume.Labels["com.docker.compose.config-hash"] == "" ||
+			volume.Labels["com.docker.compose.version"] == "" ||
+			composeVolume == "" ||
+			!dockerVolumeNamePattern.MatchString(volume.Name) ||
+			volume.Name != project+"_"+composeVolume {
+			continue
+		}
+		if _, duplicate := seen[volume.Name]; duplicate {
+			continue
+		}
+		seen[volume.Name] = struct{}{}
+		names = append(names, volume.Name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+func listComposeVolumes(ctx context.Context, opts Options) ([]string, error) {
+	out, err := opts.RunFn(
+		ctx,
+		"docker",
+		"volume",
+		"ls",
+		"--filter",
+		"dangling=true",
+		"--filter",
+		"label=com.docker.compose.project",
+		"--format",
+		"{{.Name}}",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list compose volumes: %w", err)
+	}
+	var names []string
+	for _, line := range strings.Split(string(out), "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			continue
+		}
+		if !dockerVolumeNamePattern.MatchString(name) {
+			return nil, fmt.Errorf("docker returned unsafe volume name %q", name)
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+func inspectManagedComposeVolumes(ctx context.Context, opts Options, names []string) ([]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	args := append([]string{"volume", "inspect"}, names...)
+	out, err := opts.RunFn(ctx, "docker", args...)
+	if err != nil {
+		return nil, fmt.Errorf("inspect compose volumes: %w", err)
+	}
+	return managedComposeVolumeNames(out)
+}
+
+func dockerLocalVolumeReclaimable(ctx context.Context, opts Options) (int64, error) {
+	out, err := opts.RunFn(ctx, "docker", "system", "df", "--format", "{{json .}}")
+	if err != nil {
+		return 0, fmt.Errorf("measure local volume reclaimable: %w", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var row dockerSystemDFRow
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			return 0, fmt.Errorf("parse docker system df: %w", err)
+		}
+		if row.Type == "Local Volumes" {
+			fields := strings.Fields(row.Reclaimable)
+			if len(fields) == 0 {
+				return 0, errors.New("docker system df returned empty local volume size")
+			}
+			return parseHumanBytes(fields[0]), nil
+		}
+	}
+	return 0, errors.New("docker system df omitted Local Volumes")
+}
+
+// dockerManagedVolumePrune explicitly removes only managed run-scoped Compose
+// volumes. Unlike `docker volume prune -af`, it does not broaden the mutation
+// to every unreferenced named volume in the daemon.
+func dockerManagedVolumePrune(ctx context.Context, opts Options) Action {
+	a := Action{Name: "docker_managed_volumes", Path: "(docker managed compose volumes)"}
+	beforeBytes, err := dockerLocalVolumeReclaimable(ctx, opts)
+	if err != nil {
+		a.Err = err
+		return a
+	}
+	a.BytesFound = beforeBytes
+	listed, err := listComposeVolumes(ctx, opts)
+	if err != nil {
+		a.Err = err
+		return a
+	}
+	targets, err := inspectManagedComposeVolumes(ctx, opts, listed)
+	if err != nil {
+		a.Err = err
+		return a
+	}
+	a.Path = fmt.Sprintf("(docker managed compose volumes: %d)", len(targets))
+	if !opts.Execute {
+		return a
+	}
+	if len(targets) == 0 {
+		a.Executed = true
+		return a
+	}
+
+	// Recheck host idleness and the lock immediately before mutation. The
+	// earlier inventory does not authorize removal if a job started meanwhile.
+	if err := ensureIdle(ctx, opts); err != nil {
+		a.Err = fmt.Errorf("managed volume prune idle recheck: %w", err)
+		return a
+	}
+	if active, err := opts.LockActiveFn(); err != nil {
+		a.Err = fmt.Errorf("managed volume prune lock recheck: %w", err)
+		return a
+	} else if active {
+		a.Err = errors.New("managed volume prune blocked by docker-heavy lock")
+		return a
+	}
+
+	args := append([]string{"volume", "rm"}, targets...)
+	if _, err := opts.RunFn(ctx, "docker", args...); err != nil {
+		a.Err = fmt.Errorf("remove managed compose volumes: %w", err)
+		return a
+	}
+
+	remaining, err := listComposeVolumes(ctx, opts)
+	if err != nil {
+		a.Err = fmt.Errorf("managed volume postcondition: %w", err)
+		return a
+	}
+	remainingSet := make(map[string]struct{}, len(remaining))
+	for _, name := range remaining {
+		remainingSet[name] = struct{}{}
+	}
+	for _, target := range targets {
+		if _, found := remainingSet[target]; found {
+			a.Err = fmt.Errorf("managed volume postcondition: %q still exists", target)
+			return a
+		}
+	}
+	afterBytes, err := dockerLocalVolumeReclaimable(ctx, opts)
+	if err != nil {
+		a.Err = fmt.Errorf("managed volume byte postcondition: %w", err)
+		return a
+	}
+	if afterBytes > beforeBytes {
+		a.Err = fmt.Errorf(
+			"managed volume byte postcondition: reclaimable grew from %d to %d",
+			beforeBytes,
+			afterBytes,
+		)
+		return a
+	}
+	a.BytesFreed = beforeBytes - afterBytes
 	a.Executed = true
 	return a
 }
