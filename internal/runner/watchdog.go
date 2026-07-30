@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,8 +22,9 @@ import (
 )
 
 const (
-	DefaultWatchdogMarkerPath = "/var/lib/civm/runner-watchdog-reruns.json"
+	DefaultWatchdogMarkerPath = civm.DefaultRunnerWatchdogMarkerPath
 	DefaultWatchdogMaxRunAge  = 6 * time.Hour
+	DefaultQueueStallDwell    = 5 * time.Minute
 	defaultWatchdogRunLimit   = 20
 )
 
@@ -42,6 +44,7 @@ type WatchdogOptions struct {
 	CivmctlPath          string
 	HooksLogPath         string // shared hooks.jsonl tail read for the broken-runner sentinel (ITEM-10)
 	AutoRestartPerHour   int    // cap of sentinel-driven auto-restarts per unit per rolling hour
+	QueueStallDwell      time.Duration
 	RunFn                func(ctx context.Context, name string, args ...string) ([]byte, error)
 	NetworkFn            func(ctx context.Context, timeout time.Duration) error
 	ActivityFn           func(ctx context.Context) ([]idle.Activity, error)
@@ -52,9 +55,13 @@ type WatchdogOptions struct {
 	PullRequestFn        func(ctx context.Context, repo string, number int) (WatchdogPullRequest, error)
 	RunLogFn             func(ctx context.Context, repo string, runID int64) (string, error)
 	RerunFn              func(ctx context.Context, repo string, runID int64) error
+	QueueReposFn         func() ([]string, error)
+	QueuedCivmJobsFn     func(ctx context.Context, repos []string, now time.Time, maxAge time.Duration) (WatchdogQueueEvidence, error)
 	ReadFileFn           func(path string) ([]byte, error)
 	WriteFileFn          func(path string, data []byte, perm os.FileMode) error
 	MkdirAllFn           func(path string, perm os.FileMode) error
+	RenameFn             func(oldPath, newPath string) error
+	RemoveFn             func(path string) error
 	NowFn                func() time.Time
 	SleepFn              func(d time.Duration)
 	// RestartFn restarts a single broken runner unit. It deliberately does NOT
@@ -74,23 +81,43 @@ type WatchdogReport struct {
 }
 
 type WatchdogMetrics struct {
-	RunsConsidered  int `json:"runs_considered"`
-	RerunsTriggered int `json:"reruns_triggered"`
-	RerunsSkipped   int `json:"reruns_skipped"`
+	RunsConsidered   int `json:"runs_considered"`
+	RerunsTriggered  int `json:"reruns_triggered"`
+	RerunsSkipped    int `json:"reruns_skipped"`
+	QueueStalls      int `json:"queue_stalls"`
+	RunnerRestarts   int `json:"runner_restarts"`
+	StallsUnresolved int `json:"stalls_unresolved"`
 }
 
 type WatchdogEvent struct {
-	Event    string `json:"event"`
-	Severity string `json:"severity"`
-	Repo     string `json:"repo,omitempty"`
-	Unit     string `json:"unit,omitempty"`
-	Runner   string `json:"runner,omitempty"`
-	RunID    int64  `json:"run_id,omitempty"`
-	HeadSHA  string `json:"head_sha,omitempty"`
-	Reason   string `json:"reason,omitempty"`
-	Detail   string `json:"detail,omitempty"`
-	Executed bool   `json:"executed"`
-	Online   bool   `json:"online,omitempty"`
+	Event      string `json:"event"`
+	Severity   string `json:"severity"`
+	Repo       string `json:"repo,omitempty"`
+	Unit       string `json:"unit,omitempty"`
+	Runner     string `json:"runner,omitempty"`
+	RunID      int64  `json:"run_id,omitempty"`
+	HeadSHA    string `json:"head_sha,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+	Executed   bool   `json:"executed"`
+	Online     bool   `json:"online,omitempty"`
+	QueuedJobs int    `json:"queued_jobs,omitempty"`
+	AgeSeconds int64  `json:"age_seconds,omitempty"`
+}
+
+type WatchdogQueueEvidence struct {
+	EligibleJobs int
+	Signature    string
+}
+
+type watchdogQueuedRun struct {
+	ID        int64
+	CreatedAt time.Time
+}
+
+type watchdogQueuedCandidate struct {
+	CreatedAt time.Time
+	Identity  string
 }
 
 type WatchdogGitHubRunner struct {
@@ -149,11 +176,14 @@ func DefaultWatchdogOptions() WatchdogOptions {
 		MarkerPath:         DefaultWatchdogMarkerPath,
 		HooksLogPath:       civm.DefaultHooksLogPath,
 		AutoRestartPerHour: civm.DefaultRunnerAutoRestartPerHour,
+		QueueStallDwell:    DefaultQueueStallDwell,
 		RunFn:              defaultRun,
 		ActivityFn:         idle.DefaultActivities,
 		ReadFileFn:         os.ReadFile,
 		WriteFileFn:        os.WriteFile,
 		MkdirAllFn:         os.MkdirAll,
+		RenameFn:           os.Rename,
+		RemoveFn:           os.Remove,
 		NowFn:              time.Now,
 		SleepFn:            time.Sleep,
 		HookInstallFn:      hook.Install,
@@ -188,6 +218,7 @@ func Watchdog(ctx context.Context, opts WatchdogOptions) WatchdogReport {
 	if len(repos) == 0 {
 		localOnlineBeforeRepair := anyLocalRunnerOnline(systemd)
 		recoverWatchdogOrgBusyWithoutWorker(ctx, opts, systemd, &report)
+		recoverWatchdogOrgIdleWithQueue(ctx, opts, systemd, &report)
 		if err := restartWatchdogRunners(ctx, opts, systemd, nil, &report); err != nil {
 			report.Exit = 2
 			return report
@@ -445,6 +476,305 @@ func recoverWatchdogOrgBusyWithoutWorker(ctx context.Context, opts WatchdogOptio
 			return
 		}
 	}
+}
+
+func recoverWatchdogOrgIdleWithQueue(
+	ctx context.Context,
+	opts WatchdogOptions,
+	systemd []Status,
+	report *WatchdogReport,
+) {
+	var local *Status
+	for i := range systemd {
+		status := &systemd[i]
+		if status.UnitName == "" || status.Org == "" ||
+			status.ActiveState != "active" || status.SubState != "running" {
+			continue
+		}
+		if local != nil {
+			report.add(WatchdogEvent{
+				Event: "runner-restart-skipped", Severity: "warning",
+				Reason: "ambiguous-org-runner",
+				Detail: "mais de 1 runner org ativo; nenhuma unit escolhida",
+			})
+			return
+		}
+		local = status
+	}
+	if local == nil {
+		return
+	}
+
+	repos, err := opts.QueueReposFn()
+	if err != nil {
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "critical", Unit: local.UnitName,
+			Reason: "queue-repos-failed", Detail: err.Error(),
+		})
+		report.Exit = maxExit(report.Exit, 2)
+		return
+	}
+	if len(repos) == 0 {
+		return
+	}
+	report.Repos = append([]string(nil), repos...)
+	sort.Strings(report.Repos)
+
+	ghRunner, found, err := watchdogOrgRunner(ctx, opts, *local)
+	if err != nil {
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "warning", Unit: local.UnitName,
+			Reason: "github-org-runners-failed", Detail: err.Error(),
+		})
+		report.Exit = maxExit(report.Exit, 1)
+		return
+	}
+	if !found {
+		return
+	}
+
+	state, err := loadRerunState(opts)
+	if err != nil {
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "critical", Unit: local.UnitName,
+			Runner: ghRunner.Name, Reason: "marker-read-failed", Detail: err.Error(),
+		})
+		report.Exit = maxExit(report.Exit, 2)
+		return
+	}
+	incident, exists := state.QueueStalls[local.UnitName]
+	if ghRunner.Status == "online" && ghRunner.Busy {
+		clearQueueStallIncident(
+			opts,
+			state,
+			*local,
+			ghRunner,
+			exists,
+			"runner-consuming-job",
+			report,
+		)
+		return
+	}
+	if ghRunner.Status != "online" || ghRunner.Busy {
+		return
+	}
+
+	now := opts.NowFn()
+	evidence, err := opts.QueuedCivmJobsFn(ctx, repos, now, opts.MaxRunAge)
+	if err != nil {
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "warning", Unit: local.UnitName,
+			Runner: ghRunner.Name, Reason: "queued-jobs-unknown", Detail: err.Error(),
+		})
+		report.Exit = maxExit(report.Exit, 1)
+		return
+	}
+	if evidence.EligibleJobs == 0 {
+		clearQueueStallIncident(opts, state, *local, ghRunner, exists, "eligible-queue-empty", report)
+		return
+	}
+
+	idleResult := idle.Check(ctx, idle.Options{
+		ActivityFn: opts.ActivityFn,
+		ProbeDelay: opts.IdleProbeDelay,
+	})
+	if idleResult.Status != idle.StatusIdle {
+		reason := "host-busy"
+		detail := idle.FormatActivities(idleResult.Activities)
+		if idleResult.Status == idle.StatusUnknown {
+			reason = "host-idle-unknown"
+			detail = idleResult.Error
+		}
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "warning", Unit: local.UnitName,
+			Runner: ghRunner.Name, Reason: reason, Detail: detail,
+			QueuedJobs: evidence.EligibleJobs,
+		})
+		return
+	}
+
+	report.Metrics.QueueStalls++
+	if !exists || incident.Signature != evidence.Signature {
+		incident = queueStallIncident{Signature: evidence.Signature, FirstSeen: now}
+		if opts.Execute {
+			state.QueueStalls[local.UnitName] = incident
+			if err := writeRerunState(opts, state); err != nil {
+				report.add(WatchdogEvent{
+					Event: "runner-restart-skipped", Severity: "critical", Unit: local.UnitName,
+					Runner: ghRunner.Name, Reason: "marker-write-failed", Detail: err.Error(),
+				})
+				report.Exit = maxExit(report.Exit, 2)
+				return
+			}
+		}
+		report.add(WatchdogEvent{
+			Event: "queue-stall-armed", Severity: "warning", Unit: local.UnitName,
+			Runner: ghRunner.Name, Reason: "github-online-idle-with-civm-queue",
+			QueuedJobs: evidence.EligibleJobs, Executed: opts.Execute,
+		})
+		return
+	}
+
+	age := now.Sub(incident.FirstSeen)
+	if !incident.RestartedAt.IsZero() {
+		report.Metrics.StallsUnresolved++
+		report.add(WatchdogEvent{
+			Event: "queue-stall-unresolved", Severity: "critical", Unit: local.UnitName,
+			Runner: ghRunner.Name, Reason: "restart-did-not-advance-queue",
+			QueuedJobs: evidence.EligibleJobs, AgeSeconds: int64(age.Seconds()),
+		})
+		report.Exit = maxExit(report.Exit, 2)
+		return
+	}
+	if age < opts.QueueStallDwell {
+		report.add(WatchdogEvent{
+			Event: "queue-stall-observed", Severity: "warning", Unit: local.UnitName,
+			Runner: ghRunner.Name, Reason: "dwell-not-reached",
+			QueuedJobs: evidence.EligibleJobs, AgeSeconds: int64(age.Seconds()),
+		})
+		return
+	}
+	if !opts.Execute {
+		report.add(WatchdogEvent{
+			Event: "runner-restarted", Severity: "info", Unit: local.UnitName,
+			Runner: ghRunner.Name, Reason: "github-online-idle-with-civm-queue",
+			QueuedJobs: evidence.EligibleJobs, AgeSeconds: int64(age.Seconds()),
+		})
+		return
+	}
+
+	// Revalidate all three signals immediately before persisting the incident
+	// and mutating: GitHub session, eligible queue, and the full idle check.
+	if _, ready, err := watchdogOnlineIdleOrgRunner(ctx, opts, *local); err != nil || !ready {
+		detail := ""
+		if err != nil {
+			detail = err.Error()
+		}
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "warning", Unit: local.UnitName,
+			Runner: ghRunner.Name, Reason: "runner-state-changed", Detail: detail,
+		})
+		return
+	}
+	revalidated, err := opts.QueuedCivmJobsFn(ctx, repos, now, opts.MaxRunAge)
+	if err != nil || revalidated.EligibleJobs == 0 ||
+		revalidated.Signature != evidence.Signature {
+		detail := ""
+		if err != nil {
+			detail = err.Error()
+		}
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "warning", Unit: local.UnitName,
+			Runner: ghRunner.Name, Reason: "queue-state-changed", Detail: detail,
+		})
+		return
+	}
+	idleResult = idle.Check(ctx, idle.Options{
+		ActivityFn: opts.ActivityFn,
+		ProbeDelay: opts.IdleProbeDelay,
+	})
+	if idleResult.Status != idle.StatusIdle {
+		reason := "host-busy"
+		if idleResult.Status == idle.StatusUnknown {
+			reason = "host-idle-unknown"
+		}
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "warning", Unit: local.UnitName,
+			Runner: ghRunner.Name, Reason: reason,
+		})
+		return
+	}
+
+	incident.RestartedAt = now
+	state.QueueStalls[local.UnitName] = incident
+	if err := writeRerunState(opts, state); err != nil {
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "critical", Unit: local.UnitName,
+			Runner: ghRunner.Name, Reason: "marker-write-failed", Detail: err.Error(),
+		})
+		report.Exit = maxExit(report.Exit, 2)
+		return
+	}
+
+	event := WatchdogEvent{
+		Event: "runner-restarted", Severity: "info", Unit: local.UnitName,
+		Runner: ghRunner.Name, Reason: "github-online-idle-with-civm-queue",
+		QueuedJobs: evidence.EligibleJobs, AgeSeconds: int64(age.Seconds()),
+		Executed: true,
+	}
+	if err := opts.RestartFn(ctx, local.UnitName); err != nil {
+		event.Severity = "critical"
+		event.Detail = err.Error()
+		report.Exit = maxExit(report.Exit, 2)
+	}
+	report.Metrics.RunnerRestarts++
+	report.add(event)
+}
+
+func clearQueueStallIncident(
+	opts WatchdogOptions,
+	state rerunState,
+	local Status,
+	ghRunner WatchdogGitHubRunner,
+	exists bool,
+	reason string,
+	report *WatchdogReport,
+) {
+	if !exists {
+		return
+	}
+	event := WatchdogEvent{
+		Event: "queue-stall-recovered", Severity: "info", Unit: local.UnitName,
+		Runner: ghRunner.Name, Reason: reason, Executed: opts.Execute,
+	}
+	if !opts.Execute {
+		report.add(event)
+		return
+	}
+	delete(state.QueueStalls, local.UnitName)
+	if err := writeRerunState(opts, state); err != nil {
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "critical", Unit: local.UnitName,
+			Runner: ghRunner.Name, Reason: "marker-write-failed", Detail: err.Error(),
+		})
+		report.Exit = maxExit(report.Exit, 2)
+		return
+	}
+	report.add(event)
+}
+
+func watchdogOnlineIdleOrgRunner(
+	ctx context.Context,
+	opts WatchdogOptions,
+	local Status,
+) (WatchdogGitHubRunner, bool, error) {
+	gh, found, err := watchdogOrgRunner(ctx, opts, local)
+	if err != nil || !found {
+		return WatchdogGitHubRunner{}, false, err
+	}
+	if gh.Status == "online" && !gh.Busy {
+		return gh, true, nil
+	}
+	return WatchdogGitHubRunner{}, false, nil
+}
+
+func watchdogOrgRunner(
+	ctx context.Context,
+	opts WatchdogOptions,
+	local Status,
+) (WatchdogGitHubRunner, bool, error) {
+	runners, err := listWatchdogGitHubOrgRunners(ctx, local.Org, opts.RunFn)
+	if err != nil {
+		return WatchdogGitHubRunner{}, false, err
+	}
+	for _, gh := range runners {
+		if gh.Name == local.Name &&
+			hasWatchdogLabel(gh.Labels, "self-hosted") &&
+			hasWatchdogLabel(gh.Labels, "civm") {
+			return gh, true, nil
+		}
+	}
+	return WatchdogGitHubRunner{}, false, nil
 }
 
 func hasLocalRunnerWorker(ctx context.Context, opts WatchdogOptions) bool {
@@ -988,13 +1318,24 @@ type autoRestartWindow struct {
 	LastActed   time.Time `json:"last_acted,omitempty"`
 }
 
+type queueStallIncident struct {
+	Signature   string    `json:"signature"`
+	FirstSeen   time.Time `json:"first_seen"`
+	RestartedAt time.Time `json:"restarted_at,omitempty"`
+}
+
 type rerunState struct {
-	Reruns       map[string]RerunMarker       `json:"reruns"`
-	AutoRestarts map[string]autoRestartWindow `json:"auto_restarts,omitempty"`
+	Reruns       map[string]RerunMarker        `json:"reruns"`
+	AutoRestarts map[string]autoRestartWindow  `json:"auto_restarts,omitempty"`
+	QueueStalls  map[string]queueStallIncident `json:"queue_stalls,omitempty"`
 }
 
 func loadRerunState(opts WatchdogOptions) (rerunState, error) {
-	state := rerunState{Reruns: map[string]RerunMarker{}, AutoRestarts: map[string]autoRestartWindow{}}
+	state := rerunState{
+		Reruns:       map[string]RerunMarker{},
+		AutoRestarts: map[string]autoRestartWindow{},
+		QueueStalls:  map[string]queueStallIncident{},
+	}
 	data, err := opts.ReadFileFn(opts.MarkerPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1014,6 +1355,9 @@ func loadRerunState(opts WatchdogOptions) (rerunState, error) {
 	if state.AutoRestarts == nil {
 		state.AutoRestarts = map[string]autoRestartWindow{}
 	}
+	if state.QueueStalls == nil {
+		state.QueueStalls = map[string]queueStallIncident{}
+	}
 	return state, nil
 }
 
@@ -1027,6 +1371,19 @@ func writeRerunState(opts WatchdogOptions, state rerunState) error {
 		return err
 	}
 	data = append(data, '\n')
+	if opts.RenameFn != nil {
+		tmpPath := opts.MarkerPath + ".tmp"
+		if err := opts.WriteFileFn(tmpPath, data, 0644); err != nil {
+			return err
+		}
+		if err := opts.RenameFn(tmpPath, opts.MarkerPath); err != nil {
+			if opts.RemoveFn != nil {
+				_ = opts.RemoveFn(tmpPath)
+			}
+			return err
+		}
+		return nil
+	}
 	return opts.WriteFileFn(opts.MarkerPath, data, 0644)
 }
 
@@ -1057,6 +1414,7 @@ func applyWatchdogScalarDefaults(opts *WatchdogOptions, defaults WatchdogOptions
 		{func() bool { return opts.MarkerPath == "" }, func() { opts.MarkerPath = defaults.MarkerPath }},
 		{func() bool { return opts.HooksLogPath == "" }, func() { opts.HooksLogPath = defaults.HooksLogPath }},
 		{func() bool { return opts.AutoRestartPerHour == 0 }, func() { opts.AutoRestartPerHour = defaults.AutoRestartPerHour }},
+		{func() bool { return opts.QueueStallDwell == 0 }, func() { opts.QueueStallDwell = defaults.QueueStallDwell }},
 	}
 	for _, d := range scalarDefaults {
 		if d.isZero() {
@@ -1086,6 +1444,12 @@ func applyWatchdogIOFnDefaults(opts *WatchdogOptions, defaults WatchdogOptions) 
 	}
 	if opts.MkdirAllFn == nil {
 		opts.MkdirAllFn = defaults.MkdirAllFn
+	}
+	if opts.RenameFn == nil {
+		opts.RenameFn = defaults.RenameFn
+	}
+	if opts.RemoveFn == nil {
+		opts.RemoveFn = defaults.RemoveFn
 	}
 	if opts.NowFn == nil {
 		opts.NowFn = defaults.NowFn
@@ -1138,6 +1502,19 @@ func applyWatchdogCommandFnDefaults(opts *WatchdogOptions) {
 			return err
 		}
 	}
+	if opts.QueueReposFn == nil {
+		opts.QueueReposFn = defaultWatchdogQueueRepos
+	}
+	if opts.QueuedCivmJobsFn == nil {
+		opts.QueuedCivmJobsFn = func(
+			ctx context.Context,
+			repos []string,
+			now time.Time,
+			maxAge time.Duration,
+		) (WatchdogQueueEvidence, error) {
+			return listQueuedCivmJobs(ctx, repos, now, maxAge, opts.RunFn)
+		}
+	}
 	if opts.NetworkFn == nil {
 		opts.NetworkFn = func(ctx context.Context, timeout time.Duration) error {
 			networkCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -1168,6 +1545,9 @@ func validateWatchdogOptions(opts WatchdogOptions) error {
 	}
 	if opts.RunLimit < 1 || opts.RunLimit > 100 {
 		return fmt.Errorf("run limit deve ficar entre 1 e 100")
+	}
+	if opts.QueueStallDwell <= 0 {
+		return fmt.Errorf("queue stall dwell deve ser >0")
 	}
 	if strings.ContainsRune(opts.MarkerPath, 0) || !filepath.IsAbs(filepath.Clean(opts.MarkerPath)) {
 		return fmt.Errorf("marker path deve ser absoluto e seguro")
@@ -1207,6 +1587,173 @@ func parseWatchdogGitHubRunners(scope string, data []byte) ([]WatchdogGitHubRunn
 		runners = append(runners, item)
 	}
 	return runners, nil
+}
+
+func defaultWatchdogQueueRepos() ([]string, error) {
+	raw := strings.TrimSpace(os.Getenv("CIVM_REAPER_REPOS"))
+	if raw == "" {
+		return nil, nil
+	}
+	var repos []string
+	seen := map[string]struct{}{}
+	for _, repo := range strings.Split(raw, ",") {
+		repo = strings.TrimSpace(repo)
+		if repo == "" {
+			continue
+		}
+		if err := civm.ValidateRepo(repo); err != nil {
+			return nil, fmt.Errorf("CIVM_REAPER_REPOS: %w", err)
+		}
+		if _, duplicate := seen[repo]; duplicate {
+			continue
+		}
+		seen[repo] = struct{}{}
+		repos = append(repos, repo)
+	}
+	sort.Strings(repos)
+	return repos, nil
+}
+
+func listQueuedCivmJobs(
+	ctx context.Context,
+	repos []string,
+	now time.Time,
+	maxAge time.Duration,
+	runFn func(context.Context, string, ...string) ([]byte, error),
+) (WatchdogQueueEvidence, error) {
+	var candidates []watchdogQueuedCandidate
+	seen := make(map[string]struct{})
+	for _, repo := range repos {
+		if err := civm.ValidateRepo(repo); err != nil {
+			return WatchdogQueueEvidence{}, err
+		}
+		runs, err := listFreshQueuedRuns(ctx, repo, now, maxAge, runFn)
+		if err != nil {
+			return WatchdogQueueEvidence{}, err
+		}
+		for _, run := range runs {
+			jobIDs, err := listEligibleCivmJobIDs(ctx, repo, run.ID, runFn)
+			if err != nil {
+				return WatchdogQueueEvidence{}, err
+			}
+			for _, jobID := range jobIDs {
+				identity := fmt.Sprintf("%s/%020d/%020d", repo, run.ID, jobID)
+				if _, duplicate := seen[identity]; duplicate {
+					continue
+				}
+				seen[identity] = struct{}{}
+				candidates = append(candidates, watchdogQueuedCandidate{
+					CreatedAt: run.CreatedAt,
+					Identity:  identity,
+				})
+			}
+			if len(jobIDs) > 0 {
+				break
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return WatchdogQueueEvidence{}, nil
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].CreatedAt.Equal(candidates[j].CreatedAt) {
+			return candidates[i].Identity < candidates[j].Identity
+		}
+		return candidates[i].CreatedAt.Before(candidates[j].CreatedAt)
+	})
+	oldest := sha256.Sum256([]byte(candidates[0].Identity))
+	return WatchdogQueueEvidence{
+		EligibleJobs: len(candidates),
+		Signature:    fmt.Sprintf("%x", oldest),
+	}, nil
+}
+
+func listFreshQueuedRuns(
+	ctx context.Context,
+	repo string,
+	now time.Time,
+	maxAge time.Duration,
+	runFn func(context.Context, string, ...string) ([]byte, error),
+) ([]watchdogQueuedRun, error) {
+	endpoint := fmt.Sprintf("/repos/%s/actions/runs?per_page=100&status=queued", repo)
+	out, err := runFn(ctx, "gh", "api", "--paginate", "--slurp", endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("list queued runs for %s: %w", repo, err)
+	}
+	var pages []struct {
+		WorkflowRuns []struct {
+			ID        int64     `json:"id"`
+			Status    string    `json:"status"`
+			CreatedAt time.Time `json:"created_at"`
+		} `json:"workflow_runs"`
+	}
+	if err := json.Unmarshal(out, &pages); err != nil {
+		return nil, fmt.Errorf("parse queued runs for %s: %w", repo, err)
+	}
+	var runs []watchdogQueuedRun
+	seen := make(map[int64]struct{})
+	for _, page := range pages {
+		for _, run := range page.WorkflowRuns {
+			age := now.Sub(run.CreatedAt)
+			if run.Status != "queued" || run.ID <= 0 || run.CreatedAt.IsZero() ||
+				age < 0 || age > maxAge {
+				continue
+			}
+			if _, duplicate := seen[run.ID]; duplicate {
+				continue
+			}
+			seen[run.ID] = struct{}{}
+			runs = append(runs, watchdogQueuedRun{ID: run.ID, CreatedAt: run.CreatedAt})
+		}
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		if runs[i].CreatedAt.Equal(runs[j].CreatedAt) {
+			return runs[i].ID < runs[j].ID
+		}
+		return runs[i].CreatedAt.Before(runs[j].CreatedAt)
+	})
+	return runs, nil
+}
+
+func listEligibleCivmJobIDs(
+	ctx context.Context,
+	repo string,
+	runID int64,
+	runFn func(context.Context, string, ...string) ([]byte, error),
+) ([]int64, error) {
+	endpoint := fmt.Sprintf("/repos/%s/actions/runs/%d/jobs?filter=latest&per_page=100", repo, runID)
+	out, err := runFn(ctx, "gh", "api", "--paginate", "--slurp", endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("list queued jobs for %s: %w", repo, err)
+	}
+	var pages []struct {
+		Jobs []struct {
+			ID     int64    `json:"id"`
+			Status string   `json:"status"`
+			Labels []string `json:"labels"`
+		} `json:"jobs"`
+	}
+	if err := json.Unmarshal(out, &pages); err != nil {
+		return nil, fmt.Errorf("parse queued jobs for %s: %w", repo, err)
+	}
+	var ids []int64
+	seen := make(map[int64]struct{})
+	for _, page := range pages {
+		for _, job := range page.Jobs {
+			if job.Status != "queued" || job.ID <= 0 ||
+				!hasWatchdogLabel(job.Labels, "self-hosted") ||
+				!hasWatchdogLabel(job.Labels, "civm") {
+				continue
+			}
+			if _, duplicate := seen[job.ID]; duplicate {
+				continue
+			}
+			seen[job.ID] = struct{}{}
+			ids = append(ids, job.ID)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids, nil
 }
 
 func listWatchdogRuns(ctx context.Context, repo string, limit int, runFn func(context.Context, string, ...string) ([]byte, error)) ([]WatchdogRun, error) {
@@ -1520,6 +2067,13 @@ func (r WatchdogReport) Render(w io.Writer) {
 	fmt.Fprintf(w, "civmctl runner watchdog: %s | exit=%d | runner_online=%v\n", mode, r.Exit, r.RunnerOnline)
 	fmt.Fprintf(w, "Rerun metrics: runs_considered=%d reruns_triggered=%d reruns_skipped=%d\n",
 		r.Metrics.RunsConsidered, r.Metrics.RerunsTriggered, r.Metrics.RerunsSkipped)
+	fmt.Fprintf(
+		w,
+		"Queue metrics: stalls=%d runner_restarts=%d unresolved=%d\n",
+		r.Metrics.QueueStalls,
+		r.Metrics.RunnerRestarts,
+		r.Metrics.StallsUnresolved,
+	)
 	if len(r.Repos) > 0 {
 		fmt.Fprintf(w, "Repos: %s\n", strings.Join(r.Repos, ","))
 	}
@@ -1543,6 +2097,9 @@ func (r WatchdogReport) Render(w io.Writer) {
 		}
 		if event.RunID != 0 {
 			target = fmt.Sprintf("%s run=%d", target, event.RunID)
+		}
+		if event.QueuedJobs != 0 {
+			detail = fmt.Sprintf("%s queued=%d age_seconds=%d", detail, event.QueuedJobs, event.AgeSeconds)
 		}
 		fmt.Fprintf(w, "  %-18s %-8s %-64s %s\n", event.Event, event.Severity, target, detail)
 	}

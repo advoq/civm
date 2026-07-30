@@ -75,7 +75,7 @@ Full multi-runner / disk / host notes: `runbooks/MULTI-PROJECT-RUNNER.md`.
 | `civmctl version-pins` | imprime versoes alvo (paridade com `ubuntu-latest`) |
 | `civmctl parity [--json]` | valida ferramentas instaladas na VM contra os pins autoritativos |
 | `civmctl bootstrap [--execute]` | provisiona VM (default: dry-run) |
-| `civmctl cleanup [--execute]` | limpa Docker, /tmp, artefatos antigos de _work e apt cache; preserva `_work/_tool` e `_work/_actions`; em `--execute` aborta se detectar job/build ativo |
+| `civmctl cleanup [--execute] [--managed-volumes]` | limpa Docker, /tmp, artefatos antigos de _work e apt cache; preserva `_work/_tool` e `_work/_actions`; `--managed-volumes` é opt-in do boundary fechado e remove por nome apenas volumes Compose classificados; em `--execute` aborta se detectar job/build ativo |
 | `civmctl health` | health check (disk, mem, runners, ultimo cleanup) |
 | `civmctl doctor [--repos=auto\|owner/repo,...\|none] [--json]` | visão read-only consolidada: host, hooks, systemd runners e GitHub runners; `auto` infere repos pelos services locais |
 | `civmctl idle-check [--json]` | detector read-only de ociosidade: exit `0=idle`, `1=busy`, `2=unknown` |
@@ -91,7 +91,7 @@ Full multi-runner / disk / host notes: `runbooks/MULTI-PROJECT-RUNNER.md`.
 | `civmctl runner list` | lista runners systemd na VM (parsed; suporta `--json`) |
 | `civmctl runner restart` | systemctl restart por --short ou --unit; verifica is-active após delay |
 | `civmctl runner upgrade` | upgrade in-place de versão (preserva .runner/.credentials/_work) |
-| `civmctl runner watchdog [--execute] [--repos=auto\|owner/repo,...] [--rerun-network-failures] [--max-run-age=6h]` | repara hooks, reinicia runners offline/failed em VM idle; `auto` lê `.runner` quando possível; rerun automático é opt-in e só considera runs recentes |
+| `civmctl runner watchdog [--execute] [--repos=auto\|owner/repo,...] [--queue-stall-dwell=5m] [--rerun-network-failures]` | repara hooks/runners e detecta sessão org `online,busy=false` sem consumo de fila `self-hosted,civm`; idle-check completo e exatamente 1 restart por incidente; rerun de workflow continua opt-in |
 | `civmctl reverse-watchdog` | alerta se disk-watchdog timer parou de disparar (>2h default) |
 | `civmctl capacity [--json]` | readiness read-only: disco, services runner, workers ativos e `accepting_jobs` |
 | `civmctl metrics dump` | grava métricas Prometheus textfile para node_exporter |

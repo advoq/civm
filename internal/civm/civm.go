@@ -61,6 +61,7 @@ const (
 	// DefaultRunnerAutoRestartPerHour caps watchdog auto-restarts per runner
 	// unit per rolling hour (anti restart-loop, RF-6 / ITEM-10 / DT-8).
 	DefaultRunnerAutoRestartPerHour = 3
+	DefaultRunnerWatchdogMarkerPath = "/var/lib/civm/runner-watchdog-reruns.json"
 	// DefaultHooksLogPath is the shared civm hook event log (one JSONL record
 	// per job-started/job-completed). The runner watchdog reads its tail to
 	// detect a broken-runner sentinel.

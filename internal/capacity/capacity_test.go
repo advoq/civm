@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -68,6 +69,108 @@ func TestCheckBlocksWhenTotalZero(t *testing.T) {
 	r := Check(context.Background(), opts)
 	if r.AcceptingJobs {
 		t.Fatalf("expected blocked when total=0: %+v", r)
+	}
+}
+
+func TestCheckBlocksWhenRunnerQueueStalled(t *testing.T) {
+	opts := DefaultOptions()
+	opts.StatfsFn = func(string) (uint64, uint64, error) {
+		return 100 << 30, 60 << 30, nil
+	}
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.QueueStallFn = func() (bool, string, error) {
+		return true, "actions.runner.advoq.civm-advoq-org.service", nil
+	}
+
+	report := Check(context.Background(), opts)
+	if report.AcceptingJobs || !report.QueueStalled ||
+		!strings.Contains(report.Reason, "queue stall") {
+		t.Fatalf("queue stall should block capacity: %+v", report)
+	}
+}
+
+func TestCheckFailsClosedWhenQueueStateIsInvalid(t *testing.T) {
+	opts := DefaultOptions()
+	opts.StatfsFn = func(string) (uint64, uint64, error) {
+		return 100 << 30, 60 << 30, nil
+	}
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.QueueStallFn = func() (bool, string, error) {
+		return false, "", errors.New("invalid marker")
+	}
+
+	report := Check(context.Background(), opts)
+	if report.AcceptingJobs || !strings.Contains(report.Reason, "queue state") {
+		t.Fatalf("invalid queue state should fail closed: %+v", report)
+	}
+}
+
+func TestQueueStallFromFileClassifiesMarkerStates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		content     string
+		writeFile   bool
+		wantStalled bool
+		wantUnit    string
+		wantErr     bool
+	}{
+		{
+			name:      "missing marker",
+			writeFile: false,
+		},
+		{
+			name:      "empty marker",
+			writeFile: true,
+			content:   " \n",
+		},
+		{
+			name:      "malformed marker",
+			writeFile: true,
+			content:   "{",
+			wantErr:   true,
+		},
+		{
+			name:      "marker without active signature",
+			writeFile: true,
+			content:   `{"queue_stalls":{"runner-b":{"signature":" "}}}`,
+		},
+		{
+			name:        "active incidents return deterministic unit",
+			writeFile:   true,
+			content:     `{"queue_stalls":{"runner-b":{"signature":"sig-b"},"runner-a":{"signature":"sig-a"}}}`,
+			wantStalled: true,
+			wantUnit:    "runner-a",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := t.TempDir() + "/runner-watchdog.json"
+			if tt.writeFile {
+				if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+					t.Fatalf("write marker: %v", err)
+				}
+			}
+
+			stalled, unit, err := queueStallFromFile(path)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("queueStallFromFile() error = %v, wantErr=%v", err, tt.wantErr)
+			}
+			if stalled != tt.wantStalled || unit != tt.wantUnit {
+				t.Fatalf(
+					"queueStallFromFile() = (%v, %q), want (%v, %q)",
+					stalled,
+					unit,
+					tt.wantStalled,
+					tt.wantUnit,
+				)
+			}
+		})
 	}
 }
 

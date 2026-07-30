@@ -20,6 +20,7 @@ func TestRunnerWatchdogServiceLoadsCredentialEnvironmentFile(t *testing.T) {
 	for _, want := range []string{
 		"User=root",
 		"EnvironmentFile=-/etc/civm/runner-watchdog.env",
+		"EnvironmentFile=-/etc/civm/run-reaper.env",
 		"civmctl runner watchdog --execute --repos=auto --json",
 	} {
 		if !strings.Contains(unit, want) {

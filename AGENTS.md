@@ -118,6 +118,7 @@ sudo civmctl bootstrap --target=ubuntu-latest
 # Cleanup manual (systemd timer faz automaticamente diariamente)
 civmctl cleanup --dry-run
 civmctl cleanup --execute
+civmctl cleanup --dry-run --managed-volumes  # somente boundary fechado
 
 # Health check
 civmctl parity
@@ -230,6 +231,9 @@ commit, push, rollback ou alteração automática em peer repo.
   ou build Docker ativo; não contornar esse guard durante CI. O cleanup preserva
   `_work/_tool` e `_work/_actions` para não rebaixar a VM a downloads frios em
   todo job.
+- `--managed-volumes` é exclusivo do boundary com admissão fechada: remove por
+  nome somente volumes Compose classificados. Timer/hook não habilita essa
+  flag; prune named global é proibido.
 - Não usar `civmctl runner restart/remove/upgrade --execute` durante job em
   curso. Esses comandos agora também abortam fail-closed se `idle-check`
   encontrar `Runner.Worker`, `_work` ou build Docker ativo. `runner remove`
@@ -242,6 +246,10 @@ commit, push, rollback ou alteração automática em peer repo.
   falha transiente de rede/checkout. Em `--repos=auto`, o watchdog tenta ler
   `.runner` antes do fallback pelo unit name; marcador local:
   `/var/lib/civm/runner-watchdog-reruns.json`.
+- Sessão org online/ociosa com fila elegível usa `CIVM_REAPER_REPOS`, dwell de
+  `5 min`, idle-check completo e 1 restart por incidente. `unresolved` bloqueia
+  capacidade até a fila avançar/sumir ou o runner comprovar consumo;
+  marker inválido falha fechado.
 - Não usar `civmctl runner add` sem token GitHub válido (peer repo precisa
   registrar seu próprio runner).
 

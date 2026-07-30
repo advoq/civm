@@ -50,6 +50,11 @@ func runRunnerWatchdog(args []string) int {
 	maxRunAge := fs.Duration("max-run-age", runner.DefaultWatchdogMaxRunAge, "idade maxima de run elegivel para rerun")
 	networkTimeout := fs.Duration("network-timeout", 10*time.Second, "timeout do probe de conectividade GitHub")
 	restartDelay := fs.Duration("restart-delay", 10*time.Second, "delay entre restart systemd e is-active")
+	queueStallDwell := fs.Duration(
+		"queue-stall-dwell",
+		runner.DefaultQueueStallDwell,
+		"janela minima da mesma fila elegivel antes de reiniciar sessao online/ociosa",
+	)
 	markerPath := fs.String("marker-path", runner.DefaultWatchdogMarkerPath, "arquivo local de marker anti-loop")
 	hooksDir := fs.String("hooks-dir", hook.DefaultHooksDir, "diretorio dos hooks gerenciados")
 	runnerGlob := fs.String("runner-glob", hook.DefaultRunnerGlob, "glob dos diretorios actions-runner*")
@@ -64,6 +69,10 @@ func runRunnerWatchdog(args []string) int {
 		fmt.Fprintln(os.Stderr, "erro nos args de runner watchdog: --max-run-age deve ser >0")
 		return exitUsage
 	}
+	if *queueStallDwell <= 0 {
+		fmt.Fprintln(os.Stderr, "erro nos args de runner watchdog: --queue-stall-dwell deve ser >0")
+		return exitUsage
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	opts := runner.DefaultWatchdogOptions()
@@ -72,6 +81,7 @@ func runRunnerWatchdog(args []string) int {
 	opts.MaxRunAge = *maxRunAge
 	opts.NetworkTimeout = *networkTimeout
 	opts.RestartDelay = *restartDelay
+	opts.QueueStallDwell = *queueStallDwell
 	opts.MarkerPath = *markerPath
 	opts.HooksDir = *hooksDir
 	opts.RunnerGlob = *runnerGlob

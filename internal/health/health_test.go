@@ -39,9 +39,33 @@ func TestCollect_AllOK(t *testing.T) {
 	if r.Exit() != 0 {
 		t.Errorf("Exit = %d, want 0", r.Exit())
 	}
-	if len(r.Checks) != 11 {
-		t.Errorf("len(Checks) = %d, want 11", len(r.Checks))
+	if len(r.Checks) != 12 {
+		t.Errorf("len(Checks) = %d, want 12", len(r.Checks))
 	}
+}
+
+func TestCollect_RunnerWatchdogServiceFailedIsCritical(t *testing.T) {
+	t.Parallel()
+	c := okCollector()
+	c.ServiceStateFn = func(_ context.Context, service string) (ServiceState, error) {
+		if service == "civmctl-runner-watchdog.service" {
+			return ServiceState{LoadState: "loaded", Result: "exit-code"}, nil
+		}
+		return ServiceState{LoadState: "loaded", Result: "success"}, nil
+	}
+
+	r := c.Collect(context.Background())
+	if r.Exit() != int(StatusCritical) {
+		t.Fatalf("Exit = %d, want critical", r.Exit())
+	}
+	for _, check := range r.Checks {
+		if check.Name == "SERVICE_RUNNER_WATCHDOG" &&
+			check.Status == StatusCritical &&
+			strings.Contains(check.Detail, "exit-code") {
+			return
+		}
+	}
+	t.Fatalf("runner watchdog service failure not reported: %+v", r.Checks)
 }
 
 func TestCollect_ReaperTimerActiveServiceFailedIsCritical(t *testing.T) {
@@ -275,8 +299,8 @@ func TestRenderJSON_StructValid(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
 		t.Fatalf("output nao e JSON valido: %v", err)
 	}
-	if len(parsed.Checks) != 11 {
-		t.Errorf("Checks len = %d, want 11", len(parsed.Checks))
+	if len(parsed.Checks) != 12 {
+		t.Errorf("Checks len = %d, want 12", len(parsed.Checks))
 	}
 	if parsed.Exit != 0 {
 		t.Errorf("Exit = %d, want 0", parsed.Exit)

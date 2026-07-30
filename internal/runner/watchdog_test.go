@@ -3,8 +3,10 @@ package runner
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -657,6 +659,299 @@ func TestWatchdogTreatsHealthyOrgRunnerWithoutRepoAsWarning(t *testing.T) {
 	}
 }
 
+func TestWatchdogRestartsOnlineIdleOrgRunnerWithPersistentCivmQueueOnce(t *testing.T) {
+	t.Parallel()
+	now := testWatchdogNow
+	opts := baseWatchdogOptions(t)
+	opts.Repos = nil
+	opts.InferRepos = true
+	opts.QueueStallDwell = 5 * time.Minute
+	opts.IdleProbeDelay = 0
+	opts.NowFn = func() time.Time { return now }
+	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
+		return []Status{{
+			UnitName:    "actions.runner.advoq.civm-advoq-org.service",
+			Repo:        "advoq",
+			Org:         "advoq",
+			Name:        "civm-advoq-org",
+			ActiveState: "active",
+			SubState:    "running",
+		}}, nil
+	}
+	opts.QueueReposFn = func() ([]string, error) {
+		return []string{"advoq/advoq"}, nil
+	}
+	opts.QueuedCivmJobsFn = func(
+		context.Context,
+		[]string,
+		time.Time,
+		time.Duration,
+	) (WatchdogQueueEvidence, error) {
+		return WatchdogQueueEvidence{
+			EligibleJobs: 16,
+			Signature:    "oldest-advoq-job",
+		}, nil
+	}
+	runnerBusy := false
+	workerActive := false
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		if workerActive {
+			return []idle.Activity{{PID: 42, Command: "Runner.Worker run"}}, nil
+		}
+		return nil, nil
+	}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		switch call {
+		case "systemctl show actions.runner.advoq.civm-advoq-org.service --property=WorkingDirectory --value":
+			return []byte("/home/emedev/actions-runner-advoq-org\n"), nil
+		case "gh api /orgs/advoq/actions/runners":
+			return []byte(fmt.Sprintf(
+				`{"runners":[{"id":1,"name":"civm-advoq-org","status":"online","busy":%t,"labels":[{"name":"self-hosted"},{"name":"civm"}]}]}`,
+				runnerBusy,
+			)), nil
+		default:
+			return []byte("active\n"), nil
+		}
+	}
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if path == opts.MarkerPath {
+			return os.ReadFile(path)
+		}
+		if strings.HasSuffix(path, "/.runner") {
+			return []byte(`{"gitHubUrl":"https://github.com/advoq"}`), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	restarts := 0
+	opts.RestartFn = func(_ context.Context, unit string) error {
+		if unit != "actions.runner.advoq.civm-advoq-org.service" {
+			t.Fatalf("unexpected unit: %s", unit)
+		}
+		restarts++
+		return nil
+	}
+
+	first := Watchdog(context.Background(), opts)
+	if restarts != 0 || !hasWatchdogEvent(first, "queue-stall-armed") {
+		t.Fatalf("first sample should only arm: restarts=%d events=%+v", restarts, first.Events)
+	}
+	if strings.Join(first.Repos, ",") != "advoq/advoq" {
+		t.Fatalf("queue fleet missing from report: %+v", first.Repos)
+	}
+
+	now = now.Add(6 * time.Minute)
+	second := Watchdog(context.Background(), opts)
+	if restarts != 1 || !hasWatchdogEventWithReason(second, "runner-restarted", "github-online-idle-with-civm-queue") {
+		t.Fatalf("after dwell should restart once: restarts=%d events=%+v", restarts, second.Events)
+	}
+
+	now = now.Add(2 * time.Hour)
+	third := Watchdog(context.Background(), opts)
+	if restarts != 1 {
+		t.Fatalf("same incident restarted %dx; want exactly once", restarts)
+	}
+	if !hasWatchdogEvent(third, "queue-stall-unresolved") || third.Exit != 2 {
+		t.Fatalf("persistent incident should become critical and unresolved: %+v", third)
+	}
+
+	runnerBusy = true
+	workerActive = true
+	fourth := Watchdog(context.Background(), opts)
+	if !hasWatchdogEventWithReason(fourth, "queue-stall-recovered", "runner-consuming-job") {
+		t.Fatalf("a busy runner with a Worker should clear the incident: %+v", fourth.Events)
+	}
+	state, err := loadRerunState(opts)
+	if err != nil {
+		t.Fatalf("load state after recovery: %v", err)
+	}
+	if _, exists := state.QueueStalls["actions.runner.advoq.civm-advoq-org.service"]; exists {
+		t.Fatalf("recovered queue stall remained persisted: %+v", state.QueueStalls)
+	}
+}
+
+func TestWatchdogQueueStallFailsClosedWhenIdleUnknown(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.Repos = nil
+	opts.InferRepos = true
+	opts.IdleProbeDelay = 0
+	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
+		return []Status{{
+			UnitName:    "actions.runner.advoq.civm-advoq-org.service",
+			Org:         "advoq",
+			Name:        "civm-advoq-org",
+			ActiveState: "active",
+			SubState:    "running",
+		}}, nil
+	}
+	opts.QueueReposFn = func() ([]string, error) { return []string{"advoq/advoq"}, nil }
+	opts.QueuedCivmJobsFn = func(
+		context.Context,
+		[]string,
+		time.Time,
+		time.Duration,
+	) (WatchdogQueueEvidence, error) {
+		return WatchdogQueueEvidence{EligibleJobs: 1, Signature: "same-job"}, nil
+	}
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		return nil, errors.New("process probe failed")
+	}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		switch call {
+		case "systemctl show actions.runner.advoq.civm-advoq-org.service --property=WorkingDirectory --value":
+			return []byte("/home/emedev/actions-runner-advoq-org\n"), nil
+		case "gh api /orgs/advoq/actions/runners":
+			return []byte(`{"runners":[{"name":"civm-advoq-org","status":"online","busy":false,"labels":[{"name":"self-hosted"},{"name":"civm"}]}]}`), nil
+		default:
+			return nil, nil
+		}
+	}
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if path == opts.MarkerPath {
+			return os.ReadFile(path)
+		}
+		return []byte(`{"gitHubUrl":"https://github.com/advoq"}`), nil
+	}
+	restarts := 0
+	opts.RestartFn = func(context.Context, string) error { restarts++; return nil }
+
+	report := Watchdog(context.Background(), opts)
+	if restarts != 0 || !hasWatchdogEventWithReason(report, "runner-restart-skipped", "host-idle-unknown") {
+		t.Fatalf("unknown idle state should fail closed: restarts=%d report=%+v", restarts, report)
+	}
+}
+
+func TestWatchdogQueueStallRevalidatesIdleBeforeRestart(t *testing.T) {
+	t.Parallel()
+	now := testWatchdogNow
+	opts := baseWatchdogOptions(t)
+	opts.Repos = nil
+	opts.InferRepos = true
+	opts.QueueStallDwell = time.Minute
+	opts.IdleProbeDelay = 0
+	opts.NowFn = func() time.Time { return now }
+	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
+		return []Status{{
+			UnitName:    "actions.runner.advoq.civm-advoq-org.service",
+			Org:         "advoq",
+			Name:        "civm-advoq-org",
+			ActiveState: "active",
+			SubState:    "running",
+		}}, nil
+	}
+	opts.QueueReposFn = func() ([]string, error) { return []string{"advoq/advoq"}, nil }
+	opts.QueuedCivmJobsFn = func(
+		context.Context,
+		[]string,
+		time.Time,
+		time.Duration,
+	) (WatchdogQueueEvidence, error) {
+		return WatchdogQueueEvidence{EligibleJobs: 1, Signature: "oldest"}, nil
+	}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		switch call {
+		case "systemctl show actions.runner.advoq.civm-advoq-org.service --property=WorkingDirectory --value":
+			return []byte("/home/emedev/actions-runner-advoq-org\n"), nil
+		case "gh api /orgs/advoq/actions/runners":
+			return []byte(`{"runners":[{"name":"civm-advoq-org","status":"online","busy":false,"labels":[{"name":"self-hosted"},{"name":"civm"}]}]}`), nil
+		default:
+			return nil, nil
+		}
+	}
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if path == opts.MarkerPath {
+			return os.ReadFile(path)
+		}
+		return []byte(`{"gitHubUrl":"https://github.com/advoq"}`), nil
+	}
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
+	Watchdog(context.Background(), opts)
+
+	now = now.Add(2 * time.Minute)
+	activityCalls := 0
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		activityCalls++
+		if activityCalls >= 4 {
+			return []idle.Activity{{PID: 99, Command: "Runner.Worker run"}}, nil
+		}
+		return nil, nil
+	}
+	restarts := 0
+	opts.RestartFn = func(context.Context, string) error { restarts++; return nil }
+
+	report := Watchdog(context.Background(), opts)
+	if restarts != 0 || !hasWatchdogEventWithReason(report, "runner-restart-skipped", "host-busy") {
+		t.Fatalf("Worker during revalidation should abort: restarts=%d events=%+v", restarts, report.Events)
+	}
+}
+
+func TestListQueuedCivmJobsPaginatesFiltersAndSignsOldest(t *testing.T) {
+	t.Parallel()
+	now := testWatchdogNow
+	runFn := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		switch call {
+		case "gh api --paginate --slurp /repos/advoq/advoq/actions/runs?per_page=100&status=queued":
+			return []byte(`[{"workflow_runs":[
+			  {"id":10,"status":"queued","created_at":"2026-05-19T11:50:00Z"},
+			  {"id":11,"status":"queued","created_at":"2026-05-19T11:49:00Z"},
+			  {"id":12,"status":"queued","created_at":"2026-05-18T01:00:00Z"}
+			]},{"workflow_runs":[
+			  {"id":13,"status":"queued","created_at":"2026-05-19T11:55:00Z"}
+			]}]`), nil
+		case "gh api --paginate --slurp /repos/advoq/advoq/actions/runs/10/jobs?filter=latest&per_page=100":
+			return []byte(`[{"jobs":[
+			  {"id":100,"status":"queued","labels":["self-hosted","civm"]},
+			  {"id":101,"status":"queued","labels":["ubuntu-latest"]}
+			]},{"jobs":[{"id":103,"status":"in_progress","labels":["self-hosted","civm"]}]}]`), nil
+		case "gh api --paginate --slurp /repos/advoq/advoq/actions/runs/11/jobs?filter=latest&per_page=100":
+			return []byte(`[{"jobs":[{"id":102,"status":"in_progress","labels":["self-hosted","civm"]}]}]`), nil
+		case "gh api --paginate --slurp /repos/advoq/docs/actions/runs?per_page=100&status=queued":
+			return []byte(`[{"workflow_runs":[
+			  {"id":20,"status":"queued","created_at":"2026-05-19T11:40:00Z"}
+			]}]`), nil
+		case "gh api --paginate --slurp /repos/advoq/docs/actions/runs/20/jobs?filter=latest&per_page=100":
+			return []byte(`[{"jobs":[]},{"jobs":[
+			  {"id":200,"status":"queued","labels":["civm","self-hosted"]}
+			]}]`), nil
+		default:
+			t.Fatalf("unexpected endpoint: %s", call)
+			return nil, nil
+		}
+	}
+
+	got, err := listQueuedCivmJobs(
+		context.Background(),
+		[]string{"advoq/advoq", "advoq/docs"},
+		now,
+		6*time.Hour,
+		runFn,
+	)
+	if err != nil {
+		t.Fatalf("listQueuedCivmJobs: %v", err)
+	}
+	oldestIdentity := "advoq/docs/00000000000000000020/00000000000000000200"
+	wantSignature := fmt.Sprintf("%x", sha256.Sum256([]byte(oldestIdentity)))
+	if got.EligibleJobs != 2 || got.Signature != wantSignature {
+		t.Fatalf("queue evidence = %+v, want jobs=2 signature=%s", got, wantSignature)
+	}
+}
+
+func TestDefaultWatchdogQueueReposValidatesAndDeduplicates(t *testing.T) {
+	t.Setenv("CIVM_REAPER_REPOS", "advoq/docs, advoq/advoq,advoq/docs")
+	got, err := defaultWatchdogQueueRepos()
+	if err != nil {
+		t.Fatalf("defaultWatchdogQueueRepos: %v", err)
+	}
+	want := []string{"advoq/advoq", "advoq/docs"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("repos=%v, want=%v", got, want)
+	}
+}
+
 func TestWatchdogRestartsOrgRunnerBusyWithoutLocalWorker(t *testing.T) {
 	t.Parallel()
 	opts := baseWatchdogOptions(t)
@@ -902,6 +1197,7 @@ func TestWatchdogTriggersNetworkRerunAndWritesMarker(t *testing.T) {
 		written = string(data)
 		return nil
 	}
+	opts.RenameFn = func(string, string) error { return nil }
 
 	report := Watchdog(context.Background(), opts)
 	if report.Exit != 0 {

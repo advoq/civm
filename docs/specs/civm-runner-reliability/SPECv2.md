@@ -7,6 +7,11 @@ issues: []
 
 # SPECv2 — Confiabilidade do runner civm: equivalente gratuito e auto-curável do GitHub Actions
 
+> Extensão de 30/07/2026: queue stall de runner org online/ocioso usa
+> assinatura persistente, dwell, idle-check completo e exatamente 1 restart
+> por incidente. Fonte focada:
+> `../stalled-runner-recovery/{PRD,SPEC,IMPL}.md`.
+
 > Versão melhorada após auditoria do PASSO 2.5 (4 perspectivas, verificada contra o código vivo em
 > `/home/emdev/codespace/civm` e contra o estado do box).
 > Baseline preservado: `SPEC.md` (mantido como está; este arquivo é a camada de overrides).

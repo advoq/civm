@@ -63,12 +63,17 @@ func buildSamples(r capacity.Report, mem memwatchdog.Result) []metrics.Metric {
 	if r.AcceptingJobs {
 		accepting = 1
 	}
+	queueStalled := 0.0
+	if r.QueueStalled {
+		queueStalled = 1
+	}
 	return []metrics.Metric{
 		{Name: "civm_disk_used_pct", Help: "Percentual de disco utilizado no path monitorado", Type: metrics.TypeGauge, Value: float64(r.DiskUsedPct)},
 		{Name: "civm_disk_free_gb", Help: "Disco livre em GB", Type: metrics.TypeGauge, Value: float64(r.DiskFreeGB)},
 		{Name: "civm_disk_total_gb", Help: "Disco total em GB", Type: metrics.TypeGauge, Value: float64(r.DiskTotalGB)},
 		{Name: "civm_runner_services_active", Help: "Quantidade de services actions.runner.*", Type: metrics.TypeGauge, Value: float64(r.RunnerServices)},
 		{Name: "civm_runner_workers_active", Help: "Quantidade de workers Runner.Worker em execução", Type: metrics.TypeGauge, Value: float64(r.RunnerWorkers)},
+		{Name: "civm_runner_queue_stalled", Help: "1 se o watchdog detectou fila civm sem consumo; 0 caso contrário", Type: metrics.TypeGauge, Value: queueStalled},
 		{Name: "civm_accepting_jobs", Help: "1 se runner está aceitando jobs (disco abaixo do threshold); 0 caso contrário", Type: metrics.TypeGauge, Value: accepting},
 		// Pressao de memoria (CIVM-4 / ADR-107): o admit ja gateia jobs heavy por
 		// RAM, mas ate aqui a pressao era invisivel no Prometheus — sem como
