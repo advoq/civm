@@ -435,12 +435,10 @@ func recoverWatchdogOrgBusyWithoutWorker(ctx context.Context, opts WatchdogOptio
 			})
 			continue
 		}
-		matchedBusy := false
 		for _, gh := range runners {
 			if gh.Name != local.Name || gh.Status != "online" || !gh.Busy {
 				continue
 			}
-			matchedBusy = true
 			event := WatchdogEvent{
 				Event: "runner-restarted", Severity: "info", Unit: local.UnitName,
 				Runner: gh.Name, Reason: "github-busy-without-local-worker", Executed: opts.Execute,
@@ -534,9 +532,7 @@ func recoverWatchdogOrgBusyWithoutWorker(ctx context.Context, opts WatchdogOptio
 			report.add(event)
 			return
 		}
-		if !matchedBusy {
-			clearPendingWatchdogOrgBusyDwell(opts, []Status{local}, report)
-		}
+		clearPendingWatchdogOrgBusyDwell(opts, []Status{local}, report)
 	}
 }
 
@@ -1168,7 +1164,7 @@ func defaultWatchdogRestart(ctx context.Context, opts WatchdogOptions, unit stri
 	if _, err := opts.RunFn(ctx, "sudo", "systemctl", "kill", "--kill-who=all", "--signal=SIGKILL", unit); err != nil {
 		empty, proofErr := watchdogUnitCgroupEmpty(ctx, opts, unit)
 		if proofErr != nil {
-			return fmt.Errorf("systemctl kill %s cgroup: %w (empty proof: %v)", unit, err, proofErr)
+			return fmt.Errorf("systemctl kill %s cgroup: %v (empty proof: %w)", unit, err, proofErr)
 		}
 		if !empty {
 			return fmt.Errorf("systemctl kill %s cgroup: %w (residual PIDs remain)", unit, err)
