@@ -201,12 +201,10 @@ func (fakeEntry) Info() (os.FileInfo, error) { return nil, nil }
 
 func fakeDirEntry(name string) os.DirEntry { return fakeEntry(name) }
 
-// TestJobCompletedPreservesHotCachesUnderHome valida que job-completed
-// NÃO remove os caches em $HOME (.cache/go-build, .npm, .yarn, .pnpm-store).
-// Esses caches são caros de reconstruir e o wipe a cada job quebrava
-// builds concorrentes na VM compartilhada. Disk pressure cleanup (via
-// job-started com disco alto) ainda os limpa.
-func TestJobCompletedPreservesHotCachesUnderHome(t *testing.T) {
+// TestJobCompletedPurgesHotCachesWhenIdle reproduz os 6,5 GB de caches quentes
+// que sobreviveram ao boundary e reduziram o headroom do E2E seguinte. Sem
+// sibling ativo, esses caches regeneraveis devem ser efemeros como no CI pago.
+func TestJobCompletedPurgesHotCachesWhenIdle(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("RUNNER_TEMP", "")
@@ -221,6 +219,11 @@ func TestJobCompletedPreservesHotCachesUnderHome(t *testing.T) {
 		filepath.Join(home, ".npm", "_cacache"),
 		filepath.Join(home, ".yarn", "cache"),
 		filepath.Join(home, ".pnpm-store"),
+	}
+	for _, cache := range cachePathsUnderHome {
+		if err := os.MkdirAll(cache, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	var removed []string
@@ -243,11 +246,62 @@ func TestJobCompletedPreservesHotCachesUnderHome(t *testing.T) {
 		t.Fatalf("decision=%v, want cleanup-applied", res.Decision)
 	}
 	for _, cache := range cachePathsUnderHome {
-		for _, r := range removed {
-			if r == cache {
-				t.Errorf("job-completed removed hot cache %s — go-build em particular invalida builds concorrentes", cache)
+		found := false
+		for _, got := range removed {
+			if got == cache {
+				found = true
+				break
 			}
 		}
+		if !found {
+			t.Errorf("job-completed idle nao removeu cache quente %s", cache)
+		}
+	}
+}
+
+func TestJobCompletedPreservesHotCachesWithSibling(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("RUNNER_TEMP", "")
+	t.Setenv("GITHUB_WORKSPACE", "")
+	t.Setenv("GITHUB_REPOSITORY", "")
+	t.Setenv("GITHUB_RUN_ID", "")
+	cache := filepath.Join(home, ".cache", "go-build")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var removed []string
+	opts := DefaultOptionsFromEnv(EventJobCompleted)
+	opts.Execute = true
+	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 60, nil }
+	opts.RemoveAllFn = func(p string) error { removed = append(removed, p); return nil }
+	opts.RunFn = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	opts.MkdirAllFn = func(string, os.FileMode) error { return nil }
+	opts.LogPath = ""
+	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
+	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		return []idle.Activity{{
+			PID:     999,
+			Command: "go test /home/civm-test/actions-runner-sibling/_work/acme/app",
+		}}, nil
+	}
+
+	res := Run(context.Background(), opts)
+	for _, got := range removed {
+		if got == cache {
+			t.Fatalf("job-completed removeu cache com sibling ativo: %s", got)
+		}
+	}
+	foundDeferred := false
+	for _, action := range res.Actions {
+		if action.Name == "cache_trim_deferred_sibling_build" {
+			foundDeferred = true
+		}
+	}
+	if !foundDeferred {
+		t.Fatalf("esperado defer observavel com sibling ativo: %+v", res.Actions)
 	}
 }
 
