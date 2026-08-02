@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.22.17](https://github.com/advoq/civm/compare/v1.22.16...v1.22.17) (2026-08-02)
+
+
+### Bug Fixes
+
+* purge hot caches at idle boundaries ([04a1b6a](https://github.com/advoq/civm/commit/04a1b6a4f34ce14ed9755d1018859828399b80ac))
+* purge hot caches at idle boundaries ([5a3dc71](https://github.com/advoq/civm/commit/5a3dc717154de8eda50d234adcf2dcec2accde87))
+* reap completed compose containers ([0f64185](https://github.com/advoq/civm/commit/0f64185e5a608ae247a68454f6465ab6eb004027)), closes [#205](https://github.com/advoq/civm/issues/205)
+
 ## [1.22.16](https://github.com/advoq/civm/compare/v1.22.15...v1.22.16) (2026-08-02)
 
 
