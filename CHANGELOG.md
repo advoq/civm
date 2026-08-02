@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.22.21](https://github.com/advoq/civm/compare/v1.22.20...v1.22.21) (2026-08-02)
+
+
+### Bug Fixes
+
+* **runner:** dwell and gracefully restart watchdog ([a7cc16b](https://github.com/advoq/civm/commit/a7cc16b3b15baa120772d2816fe86b275a5d43e1))
+* **runner:** evitar restart falso no pos-job ([6d59ed4](https://github.com/advoq/civm/commit/6d59ed4386cf515ab474eb8f4095a0f60718f627))
+* **runner:** preserve both cgroup errors ([6e2fda4](https://github.com/advoq/civm/commit/6e2fda4d45a5a5ec209a7dcddac11378b73a1e03))
+* **runner:** satisfy lint for watchdog recovery ([f545fc9](https://github.com/advoq/civm/commit/f545fc9ca06cb7427777e1af893abc2e0c8157b4))
+
 ## [1.22.20](https://github.com/advoq/civm/compare/v1.22.19...v1.22.20) (2026-08-02)
 
 
