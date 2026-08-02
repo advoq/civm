@@ -1233,6 +1233,7 @@ func TestDefaultWatchdogRestartKeepsListenerFrozenUntilRestart(t *testing.T) {
 	}
 	want := []string{
 		"sudo systemctl freeze actions.runner.advoq.civm-advoq-org.service",
+		"sudo systemctl kill --kill-who=all --signal=SIGKILL actions.runner.advoq.civm-advoq-org.service",
 		"sudo systemctl restart actions.runner.advoq.civm-advoq-org.service",
 		"sudo systemctl thaw actions.runner.advoq.civm-advoq-org.service",
 		"systemctl is-active actions.runner.advoq.civm-advoq-org.service",

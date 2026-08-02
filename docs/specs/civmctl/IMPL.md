@@ -78,7 +78,8 @@ documentado neste arquivo. Rollout em VM real deve ser registrado em
 - ✅ **RF-9** `runner watchdog`: repara hooks, reinicia runner offline/failed
   e, quando opt-in, reroda 1x falha transiente de rede/checkout em PR aberto
   criado nas últimas 6h, com marcador local por `run_id/head_sha` e métricas
-  `runs_considered`/`reruns_triggered`/`reruns_skipped`
+  `runs_considered`/`reruns_triggered`/`reruns_skipped`; purge fail-closed do
+  cgroup antes do restart elimina listeners órfãos após OOM
 - ✅ **RF-10** Help auto-gerado para todos subcomandos
 
 ## RNFs cumpridos

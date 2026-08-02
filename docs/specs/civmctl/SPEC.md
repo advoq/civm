@@ -27,6 +27,10 @@ Este SPEC nasceu no bootstrap do `civmctl`; o hardening posterior adiciona:
   vez falhas transientes de rede/checkout em PR aberto recente. O timer
   systemd padrão não passa `--rerun-network-failures`. Guard anti-loop:
   `/var/lib/civm/runner-watchdog-reruns.json`.
+- Antes do restart, o watchdog congela a unit ativa, repete o probe de
+  `Runner.Worker` e mata todos os processos do cgroup. Isso remove
+  `Runner.Listener`/`RunnerService.js` órfãos que `KillMode=process` pode
+  preservar após OOM; falha no purge bloqueia o restart.
 - `runner watchdog --repos=auto` resolve repo pelo `.runner` do diretório
   real do service quando possível, preservando owners/repos com hífen, e usa
   o parser legado do unit name como fallback best-effort.

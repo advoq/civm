@@ -282,6 +282,13 @@ padrão usa `civmctl runner watchdog --execute --repos=auto --json`; não passa
 `.runner` do diretório real do service para preservar owners/repos com hífen;
 se falhar, usa o parser legado do unit name.
 
+As units geradas pelo Actions Runner usam `KillMode=process`. Se um OOM mata
+`runsvc.sh`, filhos `Runner.Listener`/`RunnerService.js` podem continuar no
+cgroup e fazer o listener novo repetir conflito de sessão. O watchdog congela
+a unit ativa, prova `Runner.Worker=0`, executa `systemctl kill
+--kill-who=all --signal=SIGKILL` e só depois reinicia. Qualquer falha no purge
+aborta o restart; não contorne o guard com kill manual durante job.
+
 Para runner de organização que aparece `busy` no GitHub sem `Runner.Worker`
 local, o watchdog tenta um restart e persiste cooldown de 1h. Eventos
 `org-busy-cooldown` são esperados enquanto o índice remoto continuar stale;

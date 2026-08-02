@@ -1083,6 +1083,14 @@ func defaultWatchdogRestart(ctx context.Context, opts WatchdogOptions, unit stri
 	if frozen && hasLocalRunnerWorker(ctx, opts) {
 		return errWatchdogRunnerBecameBusy
 	}
+	// Actions Runner units are generated with KillMode=process. After an OOM,
+	// runsvc.sh may be dead while RunnerService.js/Runner.Listener stay alive in
+	// the unit cgroup; a plain restart then creates a second listener that loops
+	// on broker session conflict. The final Worker probe above makes a full
+	// cgroup purge safe. Fail closed if systemd cannot prove that purge.
+	if _, err := opts.RunFn(ctx, "sudo", "systemctl", "kill", "--kill-who=all", "--signal=SIGKILL", unit); err != nil {
+		return fmt.Errorf("systemctl kill %s cgroup: %w", unit, err)
+	}
 	if _, err := opts.RunFn(ctx, "sudo", "systemctl", "restart", unit); err != nil {
 		return fmt.Errorf("systemctl restart %s: %w", unit, err)
 	}
