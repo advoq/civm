@@ -150,16 +150,22 @@ mesmo commit (invariante #14).
 
 Quando humano pede execução autônoma ("continue", "faça tudo", "auto"):
 
-1. **Pause após 3 commits locais consecutivos** em civm. Reportar estado
-   e pedir confirmação antes de seguir.
-2. **Pause obrigatoriamente após mudança em `cmd/civmctl/**`** se afetar
+1. **Pause obrigatoriamente após mudança em `cmd/civmctl/**`** se afetar
    subcomando `bootstrap` ou `cleanup` (lógica de mutação no host).
-3. **Pause obrigatoriamente ao adicionar dep externa** (`go get` non-stdlib).
-4. **Pause se classifier negar** edição em peer repo — não contornar, pedir
+2. **Pause obrigatoriamente ao adicionar dep externa** (`go get` non-stdlib).
+3. **Pause se classifier negar** edição em peer repo — não contornar, pedir
    autorização.
-5. **Pause antes de `gh repo create`** — sempre humano confirma.
+4. **Pause antes de `gh repo create`** — sempre humano confirma.
 
 Sem resposta no ponto de pausa, **não continuar** — aguardar.
+
+## Owner do host e watchdog
+
+`civm-host-orchestrator` é o owner C# ativo de admissão, power-state e
+compactação. `civm-vm-orchestrator` permanece `Disabled` como rollback.
+`civm-watchdog` somente detecta owner zero/dual, heartbeat C# maior que 45 min,
+last result falho e `processBlockedReason`; ele nunca inicia, habilita,
+desabilita ou substitui o owner.
 
 ## Verificação pós-release
 

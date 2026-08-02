@@ -173,15 +173,16 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
      reverse-watchdog e metrics
 
 2. **Scale-to-zero no host (orchestrator):** a VM pesada não fica ligada
-   ociosa. Uma Scheduled Task minúscula no host Windows
-   (`deploy/windows/civm-vm-orchestrator.ps1`, ~1 min) é o **único dono**
-   do power-state: liga a VM sob demanda quando há job na fila, e na
-   fronteira de cada PR (ocioso ≥ N min) faz full clean + Stop-VM +
-   `Optimize-VHD`, devolvendo RAM e disco ao Windows entre rajadas. Pisos
-   de segurança de disco: warn 28 GB (limpeza online) / panic 18 GB
-   (compacta mesmo ocupado). Detalhes em
-   `docs/specs/orchestrator-scale-to-zero/` (SPEC) e
-   `runbooks/RUNBOOK-HOST-VHDX-MAINTENANCE.md` (manutenção/break-glass).
+   ociosa. A Scheduled Task `civm-host-orchestrator` é o **único dono ativo**
+   do power-state; o PowerShell `civm-vm-orchestrator` permanece `Disabled`
+   para rollback. Cada geração `<contexto>@<head_sha>` mantém a admissão
+   fechada até provar cleanup guest (`--managed-volumes`), `fstrim`,
+   `Optimize-VHD`, boot e listener pronto. Assim, um push novo só entra após
+   a fronteira limpa do SHA anterior. O detector independente
+   `civm-watchdog` verifica owner único, heartbeat C# e latch de processo sem
+   iniciar, habilitar ou trocar o owner. Detalhes em
+   `runbooks/HOST-ORCHESTRATOR-SETUP.md` e
+   `runbooks/RUNBOOK-HOST-VHDX-MAINTENANCE.md`.
 
 3. **Cada peer repo** referencia `runs-on: [self-hosted, civm]` em
    seu próprio `.github/workflows/ci.yml`.

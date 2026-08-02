@@ -46,25 +46,24 @@ slog.InfoContext(ctx, "hook job-started",
 JSON por evento** (campos `ts`/`timestamp`, `level`, `event`, `vm`, + dados).
 ERROR/CRITICAL também vão pra stderr.
 
-- **Orchestrator scale-to-zero (dono vivo do power-state, desde 2026-06-17):**
-  `civm-vm-orchestrator.ps1` escreve em **`V:\civm-orchestrator.log`** (campos
-  `ts`, `level`, `event`, + dados). Catálogo de eventos: `tick` (cada decisão:
-  `vm`, `queued`, `running`, `idle_min`, `v_free_gb`, `can_panic`),
-  `vm_started`, `idle_debounce`, `stop_aborted_active_job`,
-  `disk_warn`/`disk_warn_clean` (piso warn 28 GB: limpeza online segura),
-  `disk_panic` (piso panic 18 GB: compacta mesmo com job ativo), `reclaim_start`,
-  `reclaim_post_off_remeasure`, `reclaim_skip_insufficient_slack`,
-  `reclaim_skip_locked`, `reclaim_abort_vm_not_off`, `reclaim_done`,
-  `reclaim_no_progress`, `guest_full_clean`, mais os `*_warn`/`*_probe_failed`
-  best-effort (`vfree_probe_failed`, `guest_active_probe_failed`,
-  `guest_full_clean_warn`, `disk_warn_clean_warn`) e `orchestrator_error`. Fonte
-  de verdade: `docs/specs/orchestrator-scale-to-zero/SPEC.md`.
+- **Orchestrator scale-to-zero (dono vivo C#):** a task
+  `civm-host-orchestrator` escreve JSONL em **`V:\civm-host-shadow.jsonl`**.
+  Cada tick registra decisão, estado da VM, fila, geração
+  `<contexto>@<head_sha>`, resultado da limpeza/compactação, broker-ready,
+  publicação e latch de processo. O watchdog independente grava o snapshot
+  atual em **`V:\civm-watchdog-status.txt`** e o histórico em
+  **`V:\civm-watchdog.log`**; owner zero/dual, heartbeat >45 min, last result
+  falho ou `processBlockedReason` produzem `DRIFT`. Ele é detect-only.
+- **Orchestrator PowerShell legado (rollback, `Disabled`):**
+  `civm-vm-orchestrator.ps1` escrevia em **`V:\civm-orchestrator.log`** com
+  eventos `tick`, `vm_started`, `disk_warn`, `disk_panic`, `reclaim_*`,
+  `guest_full_clean` e `orchestrator_error`. O catálogo permanece para leitura
+  histórica; não é o emissor vivo após o cutover C#.
 - **Mecanismo de reclaim antigo (SUPERSEDED 2026-06-17, tasks `Disabled`):** o
   `civm-vhdx-autoreclaim`/`optimize`/`optimize-watchdog` escreviam em
   `V:\civm-hyperv-maintenance.log` com eventos `autoreclaim_*`, `optimize_*`,
   `emergency_reclaim_*`, `watchdog_*`. Catálogo preservado para leitura
-  histórica; esses eventos não saem mais em operação normal — o orchestrator é
-  o emissor vivo.
+  histórica; esses eventos não saem mais em operação normal.
 
 **Hooks de job:** registram em `hooks.jsonl` (uma linha por job-started/finished,
 com `WorkRoot`, disco, cleanup aplicado).
