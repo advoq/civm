@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.22.14](https://github.com/advoq/civm/compare/v1.22.13...v1.22.14) (2026-08-02)
+
+
+### Bug Fixes
+
+* **reaper:** accept completed workflow race ([1f28b30](https://github.com/advoq/civm/commit/1f28b30bd71e5780fd8fec01ba0e770680098b30))
+* **reaper:** accept completed workflow race ([3272b5c](https://github.com/advoq/civm/commit/3272b5c1dca8f8c98bd420c074d9a54a73feb552))
+
 ## [1.22.13](https://github.com/advoq/civm/compare/v1.22.12...v1.22.13) (2026-08-02)
 
 
