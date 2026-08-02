@@ -497,12 +497,34 @@ func TestGHEnvFromFileLoadsTokenWithoutExposingOtherValues(t *testing.T) {
 	}
 }
 
-func TestGHEnvFromFileFailsClosedWithoutToken(t *testing.T) {
+func TestGHEnvFromFileLoadsExistingGHConfigDirectory(t *testing.T) {
+	t.Parallel()
+	env, err := ghEnvFromFile(func(string) ([]byte, error) {
+		return []byte("GH_CONFIG_DIR=/home/runner/.config/gh\nCIVM_REAPER_REPOS=advoq/advoq\n"), nil
+	})
+	if err != nil {
+		t.Fatalf("ghEnvFromFile config dir err = %v", err)
+	}
+	if len(env) != 1 || env[0] != "GH_CONFIG_DIR=/home/runner/.config/gh" {
+		t.Fatalf("ghEnvFromFile config dir env = %v", env)
+	}
+}
+
+func TestGHEnvFromFileFailsClosedWithoutAuthSource(t *testing.T) {
 	t.Parallel()
 	if _, err := ghEnvFromFile(func(string) ([]byte, error) {
 		return []byte("CIVM_REAPER_REPOS=advoq/advoq\n"), nil
 	}); err == nil {
-		t.Fatal("ghEnvFromFile must reject a credential file without GH_TOKEN")
+		t.Fatal("ghEnvFromFile must reject a file without GitHub auth")
+	}
+}
+
+func TestGHEnvFromFileRejectsRelativeConfigDirectory(t *testing.T) {
+	t.Parallel()
+	if _, err := ghEnvFromFile(func(string) ([]byte, error) {
+		return []byte("GH_CONFIG_DIR=../gh\n"), nil
+	}); err == nil {
+		t.Fatal("ghEnvFromFile must reject a relative GH_CONFIG_DIR")
 	}
 }
 
