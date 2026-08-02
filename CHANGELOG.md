@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.22.19](https://github.com/advoq/civm/compare/v1.22.18...v1.22.19) (2026-08-02)
+
+
+### Bug Fixes
+
+* preserve SSH stderr during VHDX drain ([5d6a6bd](https://github.com/advoq/civm/commit/5d6a6bd4038d9ecad8c885198e83288ba16f5fe0))
+* preserve SSH stderr during VHDX drain ([13e45b4](https://github.com/advoq/civm/commit/13e45b4ce926b2f0a0f8761037d0cdee66a17128)), closes [#210](https://github.com/advoq/civm/issues/210)
+
 ## [1.22.18](https://github.com/advoq/civm/compare/v1.22.17...v1.22.18) (2026-08-02)
 
 
