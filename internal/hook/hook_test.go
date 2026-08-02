@@ -221,7 +221,7 @@ func TestJobCompletedPurgesHotCachesWhenIdle(t *testing.T) {
 		filepath.Join(home, ".pnpm-store"),
 	}
 	for _, cache := range cachePathsUnderHome {
-		if err := os.MkdirAll(cache, 0o755); err != nil {
+		if err := os.MkdirAll(cache, 0o750); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -267,7 +267,7 @@ func TestJobCompletedPreservesHotCachesWithSibling(t *testing.T) {
 	t.Setenv("GITHUB_REPOSITORY", "")
 	t.Setenv("GITHUB_RUN_ID", "")
 	cache := filepath.Join(home, ".cache", "go-build")
-	if err := os.MkdirAll(cache, 0o755); err != nil {
+	if err := os.MkdirAll(cache, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
