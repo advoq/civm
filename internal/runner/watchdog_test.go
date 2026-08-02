@@ -582,9 +582,12 @@ func TestWatchdogRestartsFailedOrgRunnerWhenReposCannotBeInferred(t *testing.T) 
 
 func TestWatchdogOrgBusyRestartHasOneHourCooldown(t *testing.T) {
 	t.Parallel()
+	now := testWatchdogNow
 	opts := baseWatchdogOptions(t)
 	opts.RestartDelay = 0
 	opts.IdleProbeDelay = 0
+	opts.QueueStallDwell = 5 * time.Minute
+	opts.NowFn = func() time.Time { return now }
 	opts.Repos = nil
 	opts.InferRepos = true
 	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
@@ -621,12 +624,77 @@ func TestWatchdogOrgBusyRestartHasOneHourCooldown(t *testing.T) {
 	}
 
 	first := Watchdog(context.Background(), opts)
-	second := Watchdog(context.Background(), opts)
-	if first.Exit != 0 || second.Exit != 0 || restarts != 1 {
-		t.Fatalf("first=%+v second=%+v restarts=%d, want one restart", first, second, restarts)
+	if first.Exit != 0 || restarts != 0 ||
+		!hasWatchdogEventWithReason(first, "runner-restart-skipped", "org-busy-dwell") {
+		t.Fatalf("first=%+v restarts=%d, want persistent dwell arm", first, restarts)
 	}
-	if !hasWatchdogEventWithReason(second, "runner-restart-skipped", "org-busy-cooldown") {
-		t.Fatalf("second events=%+v, want cooldown", second.Events)
+	now = now.Add(6 * time.Minute)
+	second := Watchdog(context.Background(), opts)
+	third := Watchdog(context.Background(), opts)
+	if second.Exit != 0 || third.Exit != 0 || restarts != 1 {
+		t.Fatalf("second=%+v third=%+v restarts=%d, want one restart after dwell", second, third, restarts)
+	}
+	if !hasWatchdogEventWithReason(third, "runner-restart-skipped", "org-busy-cooldown") {
+		t.Fatalf("third events=%+v, want cooldown", third.Events)
+	}
+}
+
+func TestWatchdogOrgBusyDwellClearsWhenWorkerAppears(t *testing.T) {
+	t.Parallel()
+	now := testWatchdogNow
+	opts := baseWatchdogOptions(t)
+	opts.IdleProbeDelay = 0
+	opts.QueueStallDwell = 5 * time.Minute
+	opts.NowFn = func() time.Time { return now }
+	opts.Repos = nil
+	opts.InferRepos = true
+	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
+		return []Status{{
+			UnitName: "actions.runner.advoq.civm-advoq-org.service", Repo: "advoq",
+			Name: "civm-advoq-org", ActiveState: "active", SubState: "running",
+		}}, nil
+	}
+	workerActive := false
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		if workerActive {
+			return []idle.Activity{{PID: 42, Command: "Runner.Worker run"}}, nil
+		}
+		return nil, nil
+	}
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		switch call {
+		case "systemctl show actions.runner.advoq.civm-advoq-org.service --property=WorkingDirectory --value":
+			return []byte("/home/emedev/actions-runner-advoq-org\n"), nil
+		case "gh api /orgs/advoq/actions/runners":
+			return []byte(`{"runners":[{"name":"civm-advoq-org","status":"online","busy":true}]}`), nil
+		default:
+			return nil, nil
+		}
+	}
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if path == opts.MarkerPath {
+			return os.ReadFile(path)
+		}
+		if strings.HasSuffix(path, "/.runner") {
+			return []byte(`{"gitHubUrl":"https://github.com/advoq"}`), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	restarts := 0
+	opts.RestartFn = func(context.Context, string) error { restarts++; return nil }
+
+	first := Watchdog(context.Background(), opts)
+	workerActive = true
+	now = now.Add(time.Minute)
+	second := Watchdog(context.Background(), opts)
+	workerActive = false
+	now = now.Add(10 * time.Minute)
+	third := Watchdog(context.Background(), opts)
+	if restarts != 0 ||
+		!hasWatchdogEventWithReason(first, "runner-restart-skipped", "org-busy-dwell") ||
+		!hasWatchdogEventWithReason(third, "runner-restart-skipped", "org-busy-dwell") {
+		t.Fatalf("dwell survived real Worker: restarts=%d first=%+v second=%+v third=%+v", restarts, first, second, third)
 	}
 }
 
@@ -1233,9 +1301,9 @@ func TestDefaultWatchdogRestartKeepsListenerFrozenUntilRestart(t *testing.T) {
 	}
 	want := []string{
 		"sudo systemctl freeze actions.runner.advoq.civm-advoq-org.service",
+		"sudo systemctl stop actions.runner.advoq.civm-advoq-org.service",
 		"sudo systemctl kill --kill-who=all --signal=SIGKILL actions.runner.advoq.civm-advoq-org.service",
 		"sudo systemctl restart actions.runner.advoq.civm-advoq-org.service",
-		"sudo systemctl thaw actions.runner.advoq.civm-advoq-org.service",
 		"systemctl is-active actions.runner.advoq.civm-advoq-org.service",
 	}
 	if strings.Join(calls, "\n") != strings.Join(want, "\n") {
@@ -1329,10 +1397,18 @@ func TestDefaultWatchdogRestartFailsClosedWhenCgroupPurgeFails(t *testing.T) {
 			return []byte("failed\n"), errors.New("exit status 3")
 		case "sudo systemctl kill --kill-who=all --signal=SIGKILL actions.runner.advoq.civm-advoq-org.service":
 			return nil, errors.New("access denied")
+		case "systemctl show actions.runner.advoq.civm-advoq-org.service --property=ControlGroup --value":
+			return []byte("/system.slice/actions.runner.advoq.civm-advoq-org.service\n"), nil
 		case "sudo systemctl restart actions.runner.advoq.civm-advoq-org.service":
 			restarts++
 		}
 		return nil, nil
+	}
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if strings.HasSuffix(path, "/cgroup.procs") {
+			return []byte("123\n"), nil
+		}
+		return nil, os.ErrNotExist
 	}
 
 	err := defaultWatchdogRestart(
@@ -1345,6 +1421,44 @@ func TestDefaultWatchdogRestartFailsClosedWhenCgroupPurgeFails(t *testing.T) {
 	}
 	if restarts != 0 {
 		t.Fatalf("restarts = %d, want 0 after purge failure", restarts)
+	}
+}
+
+func TestDefaultWatchdogRestartAcceptsKillRaceWhenCgroupIsEmpty(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.RestartDelay = 0
+	restarts := 0
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		switch call {
+		case "sudo systemctl kill --kill-who=all --signal=SIGKILL actions.runner.advoq.civm-advoq-org.service":
+			return nil, errors.New("exit status 1: Invalid argument")
+		case "systemctl show actions.runner.advoq.civm-advoq-org.service --property=ControlGroup --value":
+			return []byte("/system.slice/actions.runner.advoq.civm-advoq-org.service\n"), nil
+		case "sudo systemctl restart actions.runner.advoq.civm-advoq-org.service":
+			restarts++
+		case "systemctl is-active actions.runner.advoq.civm-advoq-org.service":
+			return []byte("active\n"), nil
+		}
+		return nil, nil
+	}
+	opts.ReadFileFn = func(path string) ([]byte, error) {
+		if strings.HasSuffix(path, "/cgroup.procs") {
+			return nil, os.ErrNotExist
+		}
+		return nil, os.ErrNotExist
+	}
+
+	if err := defaultWatchdogRestart(
+		context.Background(),
+		opts,
+		"actions.runner.advoq.civm-advoq-org.service",
+	); err != nil {
+		t.Fatalf("defaultWatchdogRestart: %v", err)
+	}
+	if restarts != 1 {
+		t.Fatalf("restarts = %d, want 1 after empty cgroup proof", restarts)
 	}
 }
 

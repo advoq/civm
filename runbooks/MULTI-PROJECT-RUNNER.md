@@ -285,13 +285,15 @@ se falhar, usa o parser legado do unit name.
 As units geradas pelo Actions Runner usam `KillMode=process`. Se um OOM mata
 `runsvc.sh`, filhos `Runner.Listener`/`RunnerService.js` podem continuar no
 cgroup e fazer o listener novo repetir conflito de sessão. O watchdog congela
-a unit ativa, prova `Runner.Worker=0`, executa `systemctl kill
---kill-who=all --signal=SIGKILL` e só depois reinicia. Qualquer falha no purge
-aborta o restart; não contorne o guard com kill manual durante job.
+a unit ativa, prova `Runner.Worker=0`, tenta um stop gracioso, purga resíduos
+com `systemctl kill --kill-who=all --signal=SIGKILL` e só depois reinicia. Um
+erro do kill só é benigno quando `cgroup.procs` prova zero PIDs; falha de prova
+aborta o restart. Não contorne o guard com kill manual durante job.
 
 Para runner de organização que aparece `busy` no GitHub sem `Runner.Worker`
-local, o watchdog tenta um restart e persiste cooldown de 1h. Eventos
-`org-busy-cooldown` são esperados enquanto o índice remoto continuar stale;
+local, o watchdog primeiro exige 5 minutos contínuos dessa divergência. Um
+Worker real limpa o dwell; só depois o watchdog tenta um restart e persiste
+cooldown de 1h. Eventos `org-busy-dwell` e `org-busy-cooldown` são esperados;
 mais de um `runner-restarted` por hora com motivo
 `github-busy-without-local-worker` indica binário antigo ou marker ilegível.
 
