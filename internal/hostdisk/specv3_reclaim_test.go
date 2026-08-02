@@ -155,3 +155,23 @@ func TestOptimizeMaintenanceUsesSudo(t *testing.T) {
 		}
 	}
 }
+
+// The optimize script runs with ErrorActionPreference=Stop, but OpenSSH writes
+// normal remote stderr (including civmctl's supervised-operation warning) to
+// PowerShell's error stream. The wrapper must capture both streams and decide
+// from the native exit code, otherwise it terminates SSH mid-drain and can leave
+// runner services stopped without a maintenance state snapshot.
+func TestOptimizeSshCapturesStderrWithoutThrowing(t *testing.T) {
+	body := readWindowsScript(t, "civm-vhdx-optimize.ps1")
+	for _, want := range []string{
+		"$oldPreference = $ErrorActionPreference",
+		"$ErrorActionPreference = 'Continue'",
+		"$exitCode = $LASTEXITCODE",
+		"$ErrorActionPreference = $oldPreference",
+		"ExitCode = $exitCode",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("civm-vhdx-optimize.ps1 missing stderr-safe SSH capture %q", want)
+		}
+	}
+}

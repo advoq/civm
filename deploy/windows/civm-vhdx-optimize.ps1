@@ -165,9 +165,21 @@ function Invoke-GuestSsh {
         $sshArgs += @('-o', 'IdentitiesOnly=yes', '-i', $SshKeyPath)
     }
     $sshArgs += @($GuestSshTarget, $RemoteCommand)
-    $output = & ssh @sshArgs 2>&1
+    # OpenSSH maps remote stderr to PowerShell's error stream. With the script's
+    # global ErrorActionPreference=Stop, an informational civmctl warning would
+    # otherwise terminate ssh mid-command before we can inspect LASTEXITCODE.
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $output = $null
+    $exitCode = 255
+    try {
+        $output = & ssh @sshArgs 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $oldPreference
+    }
     return [pscustomobject]@{
-        ExitCode = $LASTEXITCODE
+        ExitCode = $exitCode
         Output   = ($output | Out-String).Trim()
     }
 }
