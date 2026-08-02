@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.11](https://github.com/advoq/civm/compare/v1.22.10...v1.22.11) (2026-08-02)
+
+
+### Bug Fixes
+
+* **runner:** honor maintenance drain in watchdog ([#187](https://github.com/advoq/civm/issues/187)) ([c475662](https://github.com/advoq/civm/commit/c475662bc59cb6ef566a435efe975206e438c7b3))
+
 ## [1.22.10](https://github.com/advoq/civm/compare/v1.22.9...v1.22.10) (2026-08-02)
 
 
