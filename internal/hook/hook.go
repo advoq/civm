@@ -6,6 +6,7 @@ package hook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -381,6 +382,10 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	cleanupIsIdle := cacheTrimIsIdle(ctx, opts, ownDirs)
 	if cleanupIsIdle {
 		for _, c := range caps {
+			if !purgeCaches {
+				actions = append(actions, purgeCacheAtIdle(opts, c.path))
+				continue
+			}
 			actions = append(actions, trimCacheByAge(opts, c.path, c.maxBytes, c.minProtect))
 		}
 	} else {
@@ -905,6 +910,27 @@ func trimCacheByAge(opts Options, root string, maxBytes int64, minProtect time.D
 	a := Action{Name: "cache_trim", Path: r.Path, BytesFound: r.BytesFound, BytesFreed: r.BytesFreed, Executed: r.Executed}
 	if r.Err != nil {
 		a.Error = r.Err.Error()
+	}
+	return a
+}
+
+// purgeCacheAtIdle remove um cache regeneravel inteiro somente no boundary de
+// job-completed que ja provou ausencia de sibling. O path deve ser descendente
+// estrito de HOME; env degradado ou path amplo falha fechado.
+func purgeCacheAtIdle(opts Options, path string) Action {
+	a := Action{Name: "cache_purge_idle", Path: path, Executed: opts.Execute}
+	home := filepath.Clean(os.Getenv("HOME"))
+	clean := filepath.Clean(path)
+	rel, err := filepath.Rel(home, clean)
+	if err != nil || home == "." || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		a.Error = "unsafe cache path outside HOME"
+		return a
+	}
+	if !opts.Execute {
+		return a
+	}
+	if err := opts.RemoveAllFn(clean); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		a.Error = err.Error()
 	}
 	return a
 }
