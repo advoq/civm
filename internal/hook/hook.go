@@ -433,6 +433,7 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	// (purgeCaches=true, job-started) o run mal começou e suas imagens ainda serão
 	// usadas, então o reap por label NÃO roda ali.
 	if !purgeCaches {
+		actions = append(actions, reapRunContainers(opts, ctx)...)
 		actions = append(actions, reapRunImages(opts, ctx)...)
 		// O reap por label nao cobre imagens vendor nem imagens que o build
 		// tagueou sem o label do compose. Quando nao existe sibling ativo, o
@@ -512,6 +513,52 @@ func reapRunImages(opts Options, ctx context.Context) []Action {
 			"--filter", "label="+civm.DefaultDockerComposeProjectLabel+"="+scope))
 	}
 	return actions
+}
+
+// reapRunContainers remove containers vivos ou parados do compose project que
+// acabou. O filtro por label do slot/run cobre serviços sem bind mount no _work,
+// que killWorkRootContainers não enxerga, sem alcançar um sibling.
+func reapRunContainers(opts Options, ctx context.Context) []Action {
+	scopes := runImageReapScopes(opts)
+	if len(scopes) == 0 {
+		return []Action{{
+			Name: "docker_run_container_reap_skipped",
+			Path: "(no compose project in env)",
+		}}
+	}
+	a := Action{Name: "docker_run_container_reap", Executed: opts.Execute}
+	if !opts.Execute {
+		return []Action{a}
+	}
+	cmdCtx, cancel := context.WithTimeout(ctx,
+		time.Duration(civm.DefaultRoutineCleanupCmdTimeoutSecs)*time.Second)
+	defer cancel()
+	seen := make(map[string]struct{})
+	var ids []string
+	for _, scope := range scopes {
+		out, err := opts.RunFn(cmdCtx, "docker", "ps", "-aq", "--filter",
+			"label="+civm.DefaultDockerComposeProjectLabel+"="+scope)
+		if err != nil {
+			a.Warning = strings.TrimSpace(a.Warning + " list " + scope + ": " + err.Error())
+			continue
+		}
+		for _, id := range strings.Fields(string(out)) {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return []Action{a}
+	}
+	if _, err := opts.RunFn(cmdCtx, "docker", append([]string{"rm", "-f"}, ids...)...); err != nil {
+		a.Warning = strings.TrimSpace(a.Warning + " remove: " + err.Error())
+		return []Action{a}
+	}
+	a.Path = fmt.Sprintf("reaped %d compose container(s)", len(ids))
+	return []Action{a}
 }
 
 func cleanWorkRoot(ctx context.Context, opts Options, root string, preserveActiveWorkspace bool) Action {
