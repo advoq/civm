@@ -55,7 +55,7 @@ func fixture(open map[string]string, runs []Run, cancelled *[]int64) Options {
 func TestReapCancelsClosedPRRunsOnly(t *testing.T) {
 	open := map[string]string{"feature/open-1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	runs := []Run{
-		{ID: 1, Event: "pull_request", Status: "queued", Branch: "feature/open-1"},      // keep: open PR
+		{ID: 1, Event: "pull_request", Status: "queued", Branch: "feature/open-1"},       // keep: open PR
 		{ID: 2, Event: "pull_request", Status: "queued", Branch: "fix/closed-pr"},        // reap
 		{ID: 3, Event: "pull_request_target", Status: "in_progress", Branch: "old/gone"}, // reap
 		{ID: 4, Event: "push", Status: "queued", Branch: "main"},                         // keep: not a PR event
@@ -155,11 +155,11 @@ func TestReapInvalidRepoSkipped(t *testing.T) {
 func TestReapCancelFailureSetsExit(t *testing.T) {
 	runs := []Run{{ID: 9, Event: "pull_request", Status: "queued", Branch: "fix/closed"}}
 	opts := Options{
-		Repos:          []string{"acme/app"},
-		Execute:        true,
-		OpenHeadsFn: func(_ context.Context, _ string) (map[string]string, error) { return nil, nil },
-		ActiveRunsFn:   func(_ context.Context, _ string) ([]Run, error) { return runs, nil },
-		CancelFn:       func(_ context.Context, _ string, _ int64) error { return context.DeadlineExceeded },
+		Repos:        []string{"acme/app"},
+		Execute:      true,
+		OpenHeadsFn:  func(_ context.Context, _ string) (map[string]string, error) { return nil, nil },
+		ActiveRunsFn: func(_ context.Context, _ string) ([]Run, error) { return runs, nil },
+		CancelFn:     func(_ context.Context, _ string, _ int64) error { return context.DeadlineExceeded },
 	}
 	report := Reap(context.Background(), opts)
 	if report.Exit != 1 {
@@ -346,6 +346,20 @@ func TestCancelRunAlreadyCompletedWrapsSentinel(t *testing.T) {
 	}
 }
 
+// TestCancelRunWorkflowAlreadyCompletedWrapsSentinel reproduces the live
+// race observed on 2026-08-02: a superseded run completes between the active
+// list scan and the cancel request, and GitHub includes "workflow" in the
+// HTTP 409 message. The outcome is as benign as the older wording.
+func TestCancelRunWorkflowAlreadyCompletedWrapsSentinel(t *testing.T) {
+	runFn := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, fmt.Errorf("gh: Cannot cancel a workflow run that is completed. (HTTP 409)")
+	}
+	err := cancelRun(context.Background(), "acme/app", 30745127312, runFn)
+	if !errors.Is(err, ErrRunAlreadyCompleted) {
+		t.Fatalf("err = %v, want errors.Is(err, ErrRunAlreadyCompleted)", err)
+	}
+}
+
 // TestCancelRunGenuineFailureDoesNotMatchSentinel guards against
 // over-matching: a real, unrelated cancel failure (rate limit, auth, network)
 // must never be misclassified as the benign ghost-run case.
@@ -371,10 +385,10 @@ func TestCancelRunGenuineFailureDoesNotMatchSentinel(t *testing.T) {
 func TestReapAlreadyCompletedGhostIsInfoNotFailure(t *testing.T) {
 	runs := []Run{{ID: 26423751663, Event: "pull_request", Status: "queued", Branch: "feature/add-finance-module"}}
 	opts := Options{
-		Repos:          []string{"acme/app"},
-		Execute:        true,
-		OpenHeadsFn: func(_ context.Context, _ string) (map[string]string, error) { return nil, nil },
-		ActiveRunsFn:   func(_ context.Context, _ string) ([]Run, error) { return runs, nil },
+		Repos:        []string{"acme/app"},
+		Execute:      true,
+		OpenHeadsFn:  func(_ context.Context, _ string) (map[string]string, error) { return nil, nil },
+		ActiveRunsFn: func(_ context.Context, _ string) ([]Run, error) { return runs, nil },
 		CancelFn: func(_ context.Context, _ string, _ int64) error {
 			return fmt.Errorf("%w: force-cancel and cancel both rejected", ErrRunAlreadyCompleted)
 		},
@@ -407,11 +421,11 @@ func TestReapCancelsSupersededSHAOnOpenPR(t *testing.T) {
 	// Branch still open at tip "bbbb..."; older run on "aaaa..." must reap.
 	open := map[string]string{"feature/open-1": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
 	runs := []Run{
-		{ID: 1, Event: "pull_request", Status: "queued", Branch: "feature/open-1", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, // current tip — keep
-		{ID: 2, Event: "pull_request", Status: "queued", Branch: "feature/open-1", HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, // superseded
+		{ID: 1, Event: "pull_request", Status: "queued", Branch: "feature/open-1", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},      // current tip — keep
+		{ID: 2, Event: "pull_request", Status: "queued", Branch: "feature/open-1", HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},      // superseded
 		{ID: 3, Event: "pull_request", Status: "in_progress", Branch: "feature/open-1", HeadSHA: "cccccccccccccccccccccccccccccccccccccccc"}, // superseded
-		{ID: 4, Event: "push", Status: "queued", Branch: "feature/open-1", HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},     // not a PR event — keep
-		{ID: 5, Event: "pull_request", Status: "queued", Branch: "feature/open-1", HeadSHA: ""},                                      // empty sha — keep fail-safe
+		{ID: 4, Event: "push", Status: "queued", Branch: "feature/open-1", HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},              // not a PR event — keep
+		{ID: 5, Event: "pull_request", Status: "queued", Branch: "feature/open-1", HeadSHA: ""},                                              // empty sha — keep fail-safe
 	}
 	var cancelled []int64
 	report := Reap(context.Background(), fixture(open, runs, &cancelled))
