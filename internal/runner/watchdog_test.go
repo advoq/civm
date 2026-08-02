@@ -56,6 +56,51 @@ func baseWatchdogOptions(t *testing.T) WatchdogOptions {
 	return opts
 }
 
+// A maintenance drain deliberately stops the listener while queued work may
+// still exist. The watchdog must not reinterpret that stopped unit as broken
+// and restart it behind the operator's back.
+func TestWatchdogMaintenanceStateSkipsEveryMutation(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.MaintenanceStatePath = t.TempDir() + "/maintenance.json"
+	if err := os.WriteFile(opts.MaintenanceStatePath, []byte(`{"drained_at":"2026-08-02T08:44:44Z"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	networkCalls := 0
+	statusCalls := 0
+	hookCalls := 0
+	restartCalls := 0
+	opts.NetworkFn = func(context.Context, time.Duration) error {
+		networkCalls++
+		return nil
+	}
+	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
+		statusCalls++
+		return nil, nil
+	}
+	opts.HookInstallFn = func(context.Context, hook.InstallOptions) hook.InstallResult {
+		hookCalls++
+		return hook.InstallResult{}
+	}
+	opts.RestartFn = func(context.Context, string) error {
+		restartCalls++
+		return nil
+	}
+
+	report := Watchdog(context.Background(), opts)
+	if report.Exit != 0 {
+		t.Fatalf("Exit = %d, want 0; events=%+v", report.Exit, report.Events)
+	}
+	if !hasWatchdogEventWithReason(report, "runner-restart-skipped", "maintenance-active") {
+		t.Fatalf("events = %+v, want runner-restart-skipped maintenance-active", report.Events)
+	}
+	if networkCalls != 0 || statusCalls != 0 || hookCalls != 0 || restartCalls != 0 {
+		t.Fatalf("maintenance mutated/probed remote state: network=%d status=%d hooks=%d restarts=%d",
+			networkCalls, statusCalls, hookCalls, restartCalls)
+	}
+}
+
 func TestWatchdogNetworkDownDoesNotMutate(t *testing.T) {
 	t.Parallel()
 	opts := baseWatchdogOptions(t)
