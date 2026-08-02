@@ -497,6 +497,19 @@ func TestGHEnvFromFileLoadsTokenWithoutExposingOtherValues(t *testing.T) {
 	}
 }
 
+func TestGHEnvFromFileLoadsExistingGHConfigDirectory(t *testing.T) {
+	t.Parallel()
+	env, err := ghEnvFromFile(func(string) ([]byte, error) {
+		return []byte("GH_CONFIG_DIR=/home/runner/.config/gh\nCIVM_REAPER_REPOS=advoq/advoq\n"), nil
+	})
+	if err != nil {
+		t.Fatalf("ghEnvFromFile config dir err = %v", err)
+	}
+	if len(env) != 1 || env[0] != "GH_CONFIG_DIR=/home/runner/.config/gh" {
+		t.Fatalf("ghEnvFromFile config dir env = %v", env)
+	}
+}
+
 func TestGHEnvFromFileFailsClosedWithoutToken(t *testing.T) {
 	t.Parallel()
 	if _, err := ghEnvFromFile(func(string) ([]byte, error) {
