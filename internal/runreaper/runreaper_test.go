@@ -346,6 +346,20 @@ func TestCancelRunAlreadyCompletedWrapsSentinel(t *testing.T) {
 	}
 }
 
+// TestCancelRunWorkflowAlreadyCompletedWrapsSentinel reproduces the live
+// race observed on 2026-08-02: a superseded run completes between the active
+// list scan and the cancel request, and GitHub includes "workflow" in the
+// HTTP 409 message. The outcome is as benign as the older wording.
+func TestCancelRunWorkflowAlreadyCompletedWrapsSentinel(t *testing.T) {
+	runFn := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, fmt.Errorf("gh: Cannot cancel a workflow run that is completed. (HTTP 409)")
+	}
+	err := cancelRun(context.Background(), "acme/app", 30745127312, runFn)
+	if !errors.Is(err, ErrRunAlreadyCompleted) {
+		t.Fatalf("err = %v, want errors.Is(err, ErrRunAlreadyCompleted)", err)
+	}
+}
+
 // TestCancelRunGenuineFailureDoesNotMatchSentinel guards against
 // over-matching: a real, unrelated cancel failure (rate limit, auth, network)
 // must never be misclassified as the benign ghost-run case.
