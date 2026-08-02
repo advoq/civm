@@ -100,6 +100,9 @@ const (
 	DefaultCacheYarnMaxGB         = 12
 	DefaultCachePNPMMaxGB         = 5
 	DefaultCacheGolangciLintMaxGB = 2
+	// Browser binaries are regenerable. Keep a pressure-mode backstop while the
+	// idle job-completed boundary removes the directory entirely for paid-CI parity.
+	DefaultCachePlaywrightMaxGB = 2
 
 	// Filtro do buildx prune em modo rotineiro: mantém o build cache quente < 24h
 	// em vez do agressivo system prune --volumes. (O filtro de image prune por

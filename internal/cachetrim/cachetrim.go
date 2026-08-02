@@ -153,6 +153,7 @@ func Caps(homes []string, deps Deps) []Cap {
 	family(civm.DefaultCacheGoBuildMaxGB, 0, true, ".cache/go-build*")
 	family(civm.DefaultCacheYarnMaxGB, 2, false, ".cache/yarn*", ".yarn-berry-*", ".yarn/cache")
 	family(civm.DefaultCacheGolangciLintMaxGB, 0, true, ".cache/golangci-lint*")
+	family(civm.DefaultCachePlaywrightMaxGB, 0, true, ".cache/ms-playwright")
 	// npm/pnpm use a single well-known dir per home (no named variants) and the
 	// budget is not divided, so no division skew — they enter per home
 	// unconditionally (trim/wipe on an absent dir is a no-op).

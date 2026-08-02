@@ -216,6 +216,7 @@ func TestJobCompletedPurgesHotCachesWhenIdle(t *testing.T) {
 	// removê-los, vamos detectar via RemoveAllFn captura.
 	cachePathsUnderHome := []string{
 		filepath.Join(home, ".cache", "go-build"),
+		filepath.Join(home, ".cache", "ms-playwright"),
 		filepath.Join(home, ".npm", "_cacache"),
 		filepath.Join(home, ".yarn", "cache"),
 		filepath.Join(home, ".pnpm-store"),
