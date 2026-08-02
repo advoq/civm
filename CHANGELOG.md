@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.22.15](https://github.com/advoq/civm/compare/v1.22.14...v1.22.15) (2026-08-02)
+
+
+### Bug Fixes
+
+* **watchdog:** fence runner before restart ([921e63a](https://github.com/advoq/civm/commit/921e63aaadcd10a70ec6691c5d28cf466de33d6b))
+* **watchdog:** fence runner before restart ([7fb1c90](https://github.com/advoq/civm/commit/7fb1c90186d9f0896e45d9926fd25ecd543b79ad))
+
 ## [1.22.14](https://github.com/advoq/civm/compare/v1.22.13...v1.22.14) (2026-08-02)
 
 
