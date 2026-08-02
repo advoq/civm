@@ -69,6 +69,9 @@ func (r *recorder) options(statePath string) Options {
 					return nil, err
 				}
 			}
+			if strings.Contains(strings.Join(args, " "), "actions/runners?per_page=100") {
+				return []byte(`[{"runners":[{"id":11,"name":"runner-1"},{"id":12,"name":"runner-2"},{"id":71,"name":"civm-advoq-org"}]}]`), nil
+			}
 			return nil, nil
 		},
 		IdleCheckFn: func(context.Context) bool { return r.idle },
@@ -162,6 +165,9 @@ func TestEnterWritesStateAndDrainsBothRunners(t *testing.T) {
 	if deletes != 2 {
 		t.Fatalf("gh DELETE label calls = %d, want 2 (calls=%v)", deletes, rec.ghCalls)
 	}
+	if !hasGHCall(rec.ghCalls, "api --method DELETE repos/acme/civm/actions/runners/11/labels/civm") {
+		t.Fatalf("missing repository runner label DELETE: %v", rec.ghCalls)
+	}
 }
 
 func TestEnterAndExitUseOrganizationRunnerLabelAPI(t *testing.T) {
@@ -200,6 +206,35 @@ func TestEnterAndExitUseOrganizationRunnerLabelAPI(t *testing.T) {
 	}
 	if !hasGHCall(rec.ghCalls, "api --method POST orgs/advoq/actions/runners/71/labels -f labels[]=civm") {
 		t.Fatalf("missing organization label POST: %v", rec.ghCalls)
+	}
+}
+
+func TestEnterReposFilterIncludesOrganizationRunnerForOwnedRepo(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	rec.listOutput = "  " + unitOrg + "  loaded active running GitHub Actions Runner\n"
+	statePath := filepath.Join(t.TempDir(), "maintenance.json")
+	opts := rec.options(statePath)
+	opts.Repos = []string{"advoq/advoq", "advoq/civm"}
+
+	state, err := Enter(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Enter filtered org runner err = %v", err)
+	}
+	if len(state.Runners) != 1 || state.Runners[0].Name != "civm-advoq-org" {
+		t.Fatalf("filtered organization runners = %+v", state.Runners)
+	}
+}
+
+func TestResolveRunnerIDRejectsDuplicateName(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	opts := rec.options(filepath.Join(t.TempDir(), "maintenance.json"))
+	opts.GHFn = func(context.Context, ...string) ([]byte, error) {
+		return []byte(`[{"runners":[{"id":70,"name":"civm-advoq-org"}]},{"runners":[{"id":71,"name":"civm-advoq-org"}]}]`), nil
+	}
+	if _, err := resolveRunnerID(context.Background(), opts, "orgs/advoq", "civm-advoq-org"); err == nil {
+		t.Fatal("resolveRunnerID must reject duplicate runner names")
 	}
 }
 
@@ -249,6 +284,9 @@ func TestExitRestoresRecordedStateAndDeletesIt(t *testing.T) {
 	}
 	if posts != 2 {
 		t.Fatalf("gh POST label calls = %d, want 2 (calls=%v)", posts, rec.ghCalls)
+	}
+	if !hasGHCall(rec.ghCalls, "api --method POST repos/acme/civm/actions/runners/11/labels -f labels[]=civm") {
+		t.Fatalf("missing repository runner label POST: %v", rec.ghCalls)
 	}
 	if len(rec.removed) != 1 || rec.removed[0] != statePath {
 		t.Fatalf("removed = %v, want [%s]", rec.removed, statePath)
