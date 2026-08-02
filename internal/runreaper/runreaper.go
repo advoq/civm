@@ -70,10 +70,10 @@ type Run struct {
 // Options configures Reap. The Fn fields are injected in tests; production
 // defaults are wired by applyDefaults.
 type Options struct {
-	Repos             []string
-	Execute           bool
-	MaxCancelPerRepo  int
-	RunFn             func(ctx context.Context, name string, args ...string) ([]byte, error)
+	Repos            []string
+	Execute          bool
+	MaxCancelPerRepo int
+	RunFn            func(ctx context.Context, name string, args ...string) ([]byte, error)
 	// OpenHeadsFn returns headRefName → headRefOid for every open PR in the
 	// repo. Presence of a key means the branch still has an open PR; the value
 	// is the PR's current tip and is used to detect superseded pushes.
@@ -404,6 +404,8 @@ func cancelRun(ctx context.Context, repo string, runID int64, runFn func(context
 //
 // Known live strings (validation.md 2026-06-17 + 2026-07-09):
 //   - "Cannot cancel a run that is completed."
+//   - "Cannot cancel a workflow run that is completed." (HTTP 409; run
+//     completed between the active-list scan and the cancel request)
 //   - "Cannot cancel a workflow re-run that has not yet queued." (HTTP 409;
 //     May-2026 ghosts still listed as status=queued for months)
 func isAlreadyCompletedError(err error) bool {
@@ -412,6 +414,7 @@ func isAlreadyCompletedError(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "cannot cancel a run that is completed") ||
+		strings.Contains(msg, "cannot cancel a workflow run that is completed") ||
 		strings.Contains(msg, "cannot cancel a workflow re-run that has not yet queued")
 }
 
