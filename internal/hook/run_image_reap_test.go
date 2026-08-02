@@ -79,6 +79,56 @@ func TestJobCompletedReapsOwnRunImages(t *testing.T) {
 	}
 }
 
+// TestJobCompletedIdlePrunesAllUnusedDockerState reproduz o vazamento que
+// deixou imagens tagueadas e volumes nomeados de um E2E concluido na box. Sem
+// sibling ativo, o boundary de job-completed deve restaurar o daemon ao estado
+// efemero esperado pelo proximo job.
+func TestJobCompletedIdlePrunesAllUnusedDockerState(t *testing.T) {
+	run := &reapTestRunFn{}
+	opts := baseReapOpts(t, run)
+
+	Run(context.Background(), opts)
+
+	joined := strings.Join(run.commands, "\n")
+	for _, want := range []string{
+		"docker image prune -a -f",
+		"docker volume prune -a -f",
+	} {
+		found := false
+		for _, got := range run.commands {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("job-completed idle deve executar %q\nGot:\n%s", want, joined)
+		}
+	}
+}
+
+// TestJobCompletedSiblingSkipsUnscopedPruneAll trava o guard cross-runner: um
+// sibling ativo pode ter acabado de pullar uma imagem ou criado um volume ainda
+// sem container, portanto o reap global deve ser adiado.
+func TestJobCompletedSiblingSkipsUnscopedPruneAll(t *testing.T) {
+	run := &reapTestRunFn{}
+	opts := baseReapOpts(t, run)
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		return []idle.Activity{{
+			PID:     999,
+			Command: "node /home/civm-test/actions-runner-sibling/_work/acme/app next build",
+		}}, nil
+	}
+
+	Run(context.Background(), opts)
+
+	for _, cmd := range run.commands {
+		if cmd == "docker image prune -a -f" || cmd == "docker volume prune -a -f" {
+			t.Fatalf("sibling ativo deve adiar prune global, got: %q", cmd)
+		}
+	}
+}
+
 // TestRunImageReapNeverUnscopedPruneAll é o guard de segurança central: o reap
 // SÓ pode usar `image prune -a` COM um filtro de label. Um `image prune -a` sem
 // label removeria qualquer imagem taggeada sem container — incluindo a base de
