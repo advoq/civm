@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.22.16](https://github.com/advoq/civm/compare/v1.22.15...v1.22.16) (2026-08-02)
+
+
+### Bug Fixes
+
+* restore Docker clean slate after idle jobs ([34bf4e9](https://github.com/advoq/civm/commit/34bf4e913e81ed537e59b8f8f53e7a153201def5))
+* restore Docker clean slate after idle jobs ([014758b](https://github.com/advoq/civm/commit/014758b7522f62af51190eea4b56c26d4c9817d7))
+
 ## [1.22.15](https://github.com/advoq/civm/compare/v1.22.14...v1.22.15) (2026-08-02)
 
 
