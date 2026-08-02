@@ -39,6 +39,7 @@ type WatchdogOptions struct {
 	MaxRunAge            time.Duration
 	RunLimit             int
 	MarkerPath           string
+	MaintenanceStatePath string
 	HooksDir             string
 	RunnerGlob           string
 	CivmctlPath          string
@@ -62,6 +63,7 @@ type WatchdogOptions struct {
 	MkdirAllFn           func(path string, perm os.FileMode) error
 	RenameFn             func(oldPath, newPath string) error
 	RemoveFn             func(path string) error
+	MaintenanceActiveFn  func(path string) (bool, error)
 	NowFn                func() time.Time
 	SleepFn              func(d time.Duration)
 	// RestartFn restarts a single broken runner unit. It deliberately does NOT
@@ -166,27 +168,29 @@ type FailureClassification struct {
 
 func DefaultWatchdogOptions() WatchdogOptions {
 	return WatchdogOptions{
-		Execute:            false,
-		InferRepos:         true,
-		NetworkTimeout:     10 * time.Second,
-		RestartDelay:       10 * time.Second,
-		IdleProbeDelay:     2 * time.Second,
-		MaxRunAge:          DefaultWatchdogMaxRunAge,
-		RunLimit:           defaultWatchdogRunLimit,
-		MarkerPath:         DefaultWatchdogMarkerPath,
-		HooksLogPath:       civm.DefaultHooksLogPath,
-		AutoRestartPerHour: civm.DefaultRunnerAutoRestartPerHour,
-		QueueStallDwell:    DefaultQueueStallDwell,
-		RunFn:              defaultRun,
-		ActivityFn:         idle.DefaultActivities,
-		ReadFileFn:         os.ReadFile,
-		WriteFileFn:        os.WriteFile,
-		MkdirAllFn:         os.MkdirAll,
-		RenameFn:           os.Rename,
-		RemoveFn:           os.Remove,
-		NowFn:              time.Now,
-		SleepFn:            time.Sleep,
-		HookInstallFn:      hook.Install,
+		Execute:              false,
+		InferRepos:           true,
+		NetworkTimeout:       10 * time.Second,
+		RestartDelay:         10 * time.Second,
+		IdleProbeDelay:       2 * time.Second,
+		MaxRunAge:            DefaultWatchdogMaxRunAge,
+		RunLimit:             defaultWatchdogRunLimit,
+		MarkerPath:           DefaultWatchdogMarkerPath,
+		MaintenanceStatePath: civm.DefaultMaintenanceStatePath,
+		HooksLogPath:         civm.DefaultHooksLogPath,
+		AutoRestartPerHour:   civm.DefaultRunnerAutoRestartPerHour,
+		QueueStallDwell:      DefaultQueueStallDwell,
+		RunFn:                defaultRun,
+		ActivityFn:           idle.DefaultActivities,
+		ReadFileFn:           os.ReadFile,
+		WriteFileFn:          os.WriteFile,
+		MkdirAllFn:           os.MkdirAll,
+		RenameFn:             os.Rename,
+		RemoveFn:             os.Remove,
+		MaintenanceActiveFn:  defaultMaintenanceActive,
+		NowFn:                time.Now,
+		SleepFn:              time.Sleep,
+		HookInstallFn:        hook.Install,
 	}
 }
 
@@ -196,6 +200,22 @@ func Watchdog(ctx context.Context, opts WatchdogOptions) WatchdogReport {
 	if err := validateWatchdogOptions(opts); err != nil {
 		report.add(WatchdogEvent{Event: "watchdog-invalid", Severity: "critical", Reason: "invalid-options", Detail: err.Error()})
 		report.Exit = 2
+		return report
+	}
+	maintenanceActive, err := opts.MaintenanceActiveFn(opts.MaintenanceStatePath)
+	if err != nil {
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "critical",
+			Reason: "maintenance-state-unknown", Detail: err.Error(),
+		})
+		report.Exit = 1
+		return report
+	}
+	if maintenanceActive {
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "info",
+			Reason: "maintenance-active",
+		})
 		return report
 	}
 	if err := opts.NetworkFn(ctx, opts.NetworkTimeout); err != nil {
@@ -293,6 +313,17 @@ func Watchdog(ctx context.Context, opts WatchdogOptions) WatchdogReport {
 		report.Exit = 2
 	}
 	return report
+}
+
+func defaultMaintenanceActive(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
 }
 
 func repairWatchdogHooks(ctx context.Context, opts WatchdogOptions, report *WatchdogReport) error {
@@ -1412,6 +1443,7 @@ func applyWatchdogScalarDefaults(opts *WatchdogOptions, defaults WatchdogOptions
 		{func() bool { return opts.MaxRunAge == 0 }, func() { opts.MaxRunAge = defaults.MaxRunAge }},
 		{func() bool { return opts.RunLimit == 0 }, func() { opts.RunLimit = defaults.RunLimit }},
 		{func() bool { return opts.MarkerPath == "" }, func() { opts.MarkerPath = defaults.MarkerPath }},
+		{func() bool { return opts.MaintenanceStatePath == "" }, func() { opts.MaintenanceStatePath = defaults.MaintenanceStatePath }},
 		{func() bool { return opts.HooksLogPath == "" }, func() { opts.HooksLogPath = defaults.HooksLogPath }},
 		{func() bool { return opts.AutoRestartPerHour == 0 }, func() { opts.AutoRestartPerHour = defaults.AutoRestartPerHour }},
 		{func() bool { return opts.QueueStallDwell == 0 }, func() { opts.QueueStallDwell = defaults.QueueStallDwell }},
@@ -1450,6 +1482,9 @@ func applyWatchdogIOFnDefaults(opts *WatchdogOptions, defaults WatchdogOptions) 
 	}
 	if opts.RemoveFn == nil {
 		opts.RemoveFn = defaults.RemoveFn
+	}
+	if opts.MaintenanceActiveFn == nil {
+		opts.MaintenanceActiveFn = defaults.MaintenanceActiveFn
 	}
 	if opts.NowFn == nil {
 		opts.NowFn = defaults.NowFn

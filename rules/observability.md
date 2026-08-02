@@ -29,6 +29,11 @@ habilitado junto com cleanup, disk-watchdog, mem-watchdog, runner-watchdog e
 reverse-watchdog. Metrics missing é warning; cleanup e disk-watchdog missing
 continuam críticos.
 
+O runner-watchdog emite `runner-restart-skipped/maintenance-active` com exit 0
+quando o snapshot `/var/lib/civm/maintenance.json` existe. Erro ao consultar o
+snapshot emite `maintenance-state-unknown`, sai 1 e não toca rede, hooks nem
+systemd. Um `runner-restarted` durante maintenance é violação crítica.
+
 ## Logs estruturados
 
 **Go (civmctl):** `slog.JSONHandler` é o handler default. Nunca `fmt.Println` ou

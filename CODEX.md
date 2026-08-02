@@ -78,6 +78,9 @@ Para runner org `online,busy=false` com fila `self-hosted,civm`, lê a fleet de
 `CIVM_REAPER_REPOS`, exige a mesma assinatura por `5 min` e idle-check completo,
 persiste antes de agir e permite exatamente 1 restart por incidente. Sem
 recuperação, marca `unresolved`; nunca reabre o budget após 1 hora.
+Se `/var/lib/civm/maintenance.json` existir, o watchdog retorna antes de rede,
+hooks e systemd com `maintenance-active`; leitura ambígua também bloqueia
+restart. Assim, `maintenance enter` não disputa o listener com o timer.
 `civmctl-metrics.timer` roda read-only e grava apenas o textfile Prometheus
 em `/var/lib/node_exporter/textfile_collector/civm.prom`.
 
