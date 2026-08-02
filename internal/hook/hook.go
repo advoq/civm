@@ -378,7 +378,8 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	for _, r := range roots {
 		ownDirs = append(ownDirs, filepath.Dir(r)+string(os.PathSeparator))
 	}
-	if cacheTrimIsIdle(ctx, opts, ownDirs) {
+	cleanupIsIdle := cacheTrimIsIdle(ctx, opts, ownDirs)
+	if cleanupIsIdle {
 		for _, c := range caps {
 			actions = append(actions, trimCacheByAge(opts, c.path, c.maxBytes, c.minProtect))
 		}
@@ -428,9 +429,24 @@ func cleanup(opts Options, ctx context.Context, purgeCaches bool) []Action {
 	// usadas, então o reap por label NÃO roda ali.
 	if !purgeCaches {
 		actions = append(actions, reapRunImages(opts, ctx)...)
+		// O reap por label nao cobre imagens vendor nem imagens que o build
+		// tagueou sem o label do compose. Quando nao existe sibling ativo, o
+		// daemon inteiro pertence ao boundary concluido: remover toda imagem
+		// unused restaura o clean-slate do proximo job. O mesmo gate protege
+		// volumes nomeados, que `volume prune -f` preserva por default.
+		if cleanupIsIdle {
+			actions = append(actions, commandActionWarn(opts, ctx,
+				"docker_image_prune_idle", "docker", "image", "prune", "-a", "-f"))
+		}
 	}
 	actions = append(actions, commandActionWarn(opts, ctx, "docker_container_prune", "docker", "container", "prune", "-f"))
-	actions = append(actions, commandActionWarn(opts, ctx, "docker_volume_prune", "docker", "volume", "prune", "-f"))
+	if !purgeCaches && cleanupIsIdle {
+		actions = append(actions, commandActionWarn(opts, ctx,
+			"docker_volume_prune_idle", "docker", "volume", "prune", "-a", "-f"))
+	} else {
+		actions = append(actions, commandActionWarn(opts, ctx,
+			"docker_volume_prune", "docker", "volume", "prune", "-f"))
+	}
 	// apt_clean, journal_vacuum and fstrim are opportunistic disk reclaim and
 	// must also be best-effort. apt-get clean returns exit 100 when a sibling
 	// job holds the dpkg/apt lock, and a fatal cleanup error at job-started

@@ -79,14 +79,67 @@ func TestJobCompletedReapsOwnRunImages(t *testing.T) {
 	}
 }
 
-// TestRunImageReapNeverUnscopedPruneAll é o guard de segurança central: o reap
-// SÓ pode usar `image prune -a` COM um filtro de label. Um `image prune -a` sem
-// label removeria qualquer imagem taggeada sem container — incluindo a base de
-// vendor que um sibling acabou de pull e ainda não subiu container (o "No such
-// image" race que o PR #135 removeu de vez do path online).
-func TestRunImageReapNeverUnscopedPruneAll(t *testing.T) {
+// TestJobCompletedIdlePrunesAllUnusedDockerState reproduz o vazamento que
+// deixou imagens tagueadas e volumes nomeados de um E2E concluido na box. Sem
+// sibling ativo, o boundary de job-completed deve restaurar o daemon ao estado
+// efemero esperado pelo proximo job.
+func TestJobCompletedIdlePrunesAllUnusedDockerState(t *testing.T) {
 	run := &reapTestRunFn{}
 	opts := baseReapOpts(t, run)
+
+	Run(context.Background(), opts)
+
+	joined := strings.Join(run.commands, "\n")
+	for _, want := range []string{
+		"docker image prune -a -f",
+		"docker volume prune -a -f",
+	} {
+		found := false
+		for _, got := range run.commands {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("job-completed idle deve executar %q\nGot:\n%s", want, joined)
+		}
+	}
+}
+
+// TestJobCompletedSiblingSkipsUnscopedPruneAll trava o guard cross-runner: um
+// sibling ativo pode ter acabado de pullar uma imagem ou criado um volume ainda
+// sem container, portanto o reap global deve ser adiado.
+func TestJobCompletedSiblingSkipsUnscopedPruneAll(t *testing.T) {
+	run := &reapTestRunFn{}
+	opts := baseReapOpts(t, run)
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		return []idle.Activity{{
+			PID:     999,
+			Command: "node /home/civm-test/actions-runner-sibling/_work/acme/app next build",
+		}}, nil
+	}
+
+	Run(context.Background(), opts)
+
+	for _, cmd := range run.commands {
+		if cmd == "docker image prune -a -f" || cmd == "docker volume prune -a -f" {
+			t.Fatalf("sibling ativo deve adiar prune global, got: %q", cmd)
+		}
+	}
+}
+
+// TestRunImageReapNeverUnscopedPruneAllWithSibling é o guard de segurança
+// central: com sibling ativo, `image prune -a` só pode usar filtro por label.
+func TestRunImageReapNeverUnscopedPruneAllWithSibling(t *testing.T) {
+	run := &reapTestRunFn{}
+	opts := baseReapOpts(t, run)
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		return []idle.Activity{{
+			PID:     999,
+			Command: "node /home/civm-test/actions-runner-sibling/_work/acme/app next build",
+		}}, nil
+	}
 
 	Run(context.Background(), opts)
 
@@ -101,11 +154,9 @@ func TestRunImageReapNeverUnscopedPruneAll(t *testing.T) {
 	}
 }
 
-// TestRunImageReapNoSlotIsNoop prova o fail-safe: sem CIVM_RUNNER_SLOT nem
-// COMPOSE_PROJECT_NAME no env (env degradado) não há como escopar o reap a este
-// runner com segurança, então NENHUM `image prune -a` roda. Reapar sem escopo
-// reabriria o race cross-runner.
-func TestRunImageReapNoSlotIsNoop(t *testing.T) {
+// TestRunImageReapNoSlotSkipsScopedPrune prova o fail-safe: sem identidade do
+// runner, nenhum reap filtrado por compose project é emitido.
+func TestRunImageReapNoSlotSkipsScopedPrune(t *testing.T) {
 	run := &reapTestRunFn{}
 	opts := baseReapOpts(t, run)
 	// Simula .env sem as chaves de isolamento: DefaultOptionsFromEnv lê o env uma
@@ -115,8 +166,8 @@ func TestRunImageReapNoSlotIsNoop(t *testing.T) {
 	Run(context.Background(), opts)
 
 	for _, cmd := range run.commands {
-		if strings.Contains(cmd, "image prune -a") {
-			t.Fatalf("sem slot/projeto no env, nenhum image prune -a pode rodar (fail-safe), got: %q", cmd)
+		if strings.Contains(cmd, "--filter label=com.docker.compose.project=") {
+			t.Fatalf("sem slot/projeto no env, reap escopado deve ser no-op, got: %q", cmd)
 		}
 	}
 }

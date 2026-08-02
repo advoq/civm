@@ -1088,10 +1088,14 @@ func TestJobCompletedUsesGentleDockerSequence(t *testing.T) {
 	opts.LogPath = ""
 	opts.WorkRoot = "/home/civm-test/actions-runner/_work"
 	opts.ReadDirFn = func(string) ([]os.DirEntry, error) { return nil, nil }
-	// Hermetico: sem isso, DefaultOptionsFromEnv usa o ps scan real e na box da
-	// CI (outros runners buildando) o cache trim defere -> o teste do trim falha.
-	// ActivityFn idle (nenhuma atividade) força o cenario idle.
-	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) { return nil, nil }
+	// Um sibling ativo força a sequência concorrente/gentle. O caminho idle tem
+	// cobertura própria e pode usar prune global após o boundary.
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		return []idle.Activity{{
+			PID:     999,
+			Command: "node /home/civm-test/actions-runner-sibling/_work/acme/app next build",
+		}}, nil
+	}
 
 	Run(context.Background(), opts)
 
