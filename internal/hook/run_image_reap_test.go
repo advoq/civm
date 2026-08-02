@@ -22,6 +22,7 @@ import (
 type reapTestRunFn struct {
 	commands []string
 	failOn   string // se != "", retorna erro quando o comando contém esta substring
+	outputs  map[string]string
 }
 
 func (r *reapTestRunFn) fn(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -29,6 +30,9 @@ func (r *reapTestRunFn) fn(_ context.Context, name string, args ...string) ([]by
 	r.commands = append(r.commands, cmd)
 	if r.failOn != "" && strings.Contains(cmd, r.failOn) {
 		return nil, fmt.Errorf("simulated failure for %q", r.failOn)
+	}
+	if out, ok := r.outputs[cmd]; ok {
+		return []byte(out), nil
 	}
 	return nil, nil
 }
@@ -76,6 +80,41 @@ func TestJobCompletedReapsOwnRunImages(t *testing.T) {
 	}
 	if !strings.Contains(joined, wantRun) {
 		t.Errorf("job-completed deve reapar as imagens do compose project per-run %q\nGot:\n%s", wantRun, joined)
+	}
+}
+
+func TestJobCompletedReapsOwnRunContainersWithoutBindMount(t *testing.T) {
+	querySlot := "docker ps -aq --filter label=com.docker.compose.project=acme"
+	queryRun := "docker ps -aq --filter label=com.docker.compose.project=acme-555"
+	run := &reapTestRunFn{outputs: map[string]string{
+		querySlot: "cid-slot\nshared\n",
+		queryRun:  "cid-run\nshared\n",
+	}}
+	opts := baseReapOpts(t, run)
+
+	Run(context.Background(), opts)
+
+	joined := strings.Join(run.commands, "\n")
+	for _, want := range []string{querySlot, queryRun, "docker rm -f cid-slot shared cid-run"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("job-completed deve reapar container escopado %q\nGot:\n%s", want, joined)
+		}
+	}
+}
+
+func TestJobStartedDoesNotReapRunContainers(t *testing.T) {
+	run := &reapTestRunFn{}
+	opts := baseReapOpts(t, run)
+	opts.Event = EventJobStarted
+	opts.PreCleanupPct = 50
+	opts.StatfsFn = func(string) (uint64, uint64, error) { return 100, 20, nil }
+
+	Run(context.Background(), opts)
+
+	for _, cmd := range run.commands {
+		if strings.Contains(cmd, "ps -aq --filter label=com.docker.compose.project=") {
+			t.Fatalf("job-started nao deve reapar containers do run atual: %q", cmd)
+		}
 	}
 }
 
