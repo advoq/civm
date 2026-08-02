@@ -564,7 +564,7 @@ func defaultRun(ctx context.Context, name string, args ...string) ([]byte, error
 
 func defaultGH(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "gh", args...)
-	if os.Getenv("GH_TOKEN") == "" && os.Getenv("GITHUB_TOKEN") == "" {
+	if os.Getenv("GH_TOKEN") == "" && os.Getenv("GITHUB_TOKEN") == "" && os.Getenv("GH_CONFIG_DIR") == "" {
 		extra, err := ghEnvFromFile(os.ReadFile)
 		if err != nil {
 			return nil, err
@@ -579,12 +579,19 @@ func ghEnvFromFile(readFile func(string) ([]byte, error)) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ler credencial GitHub de %s: %w", runReaperEnvPath, err)
 	}
+	var authEnv []string
+	seen := make(map[string]bool, 2)
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "GH_TOKEN=") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || (key != "GH_TOKEN" && key != "GH_CONFIG_DIR") {
 			continue
 		}
-		value := strings.TrimSpace(strings.TrimPrefix(line, "GH_TOKEN="))
+		if seen[key] {
+			return nil, fmt.Errorf("%s duplicado no arquivo de credencial", key)
+		}
+		seen[key] = true
+		value = strings.TrimSpace(value)
 		if len(value) >= 2 {
 			if (value[0] == '\'' && value[len(value)-1] == '\'') ||
 				(value[0] == '"' && value[len(value)-1] == '"') {
@@ -592,11 +599,21 @@ func ghEnvFromFile(readFile func(string) ([]byte, error)) ([]string, error) {
 			}
 		}
 		if value == "" || strings.ContainsAny(value, "\x00\r\n") {
-			return nil, errors.New("GH_TOKEN ausente ou invalido no arquivo de credencial")
+			return nil, fmt.Errorf("%s ausente ou invalido no arquivo de credencial", key)
 		}
-		return []string{"GH_TOKEN=" + value}, nil
+		if key == "GH_CONFIG_DIR" {
+			clean := filepath.Clean(value)
+			if !filepath.IsAbs(clean) || clean == string(filepath.Separator) {
+				return nil, errors.New("GH_CONFIG_DIR deve ser caminho absoluto e especifico")
+			}
+			value = clean
+		}
+		authEnv = append(authEnv, key+"="+value)
 	}
-	return nil, errors.New("GH_TOKEN ausente no arquivo de credencial")
+	if len(authEnv) == 0 {
+		return nil, errors.New("GH_TOKEN ou GH_CONFIG_DIR ausente no arquivo de credencial")
+	}
+	return authEnv, nil
 }
 
 func defaultIdleCheck(ctx context.Context) bool {
