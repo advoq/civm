@@ -171,6 +171,11 @@ Backfill = **N/A — Day-0**.
 ### `internal/hook/hook.go` — ITEM-2/ITEM-3/ITEM-8/ITEM-11
 
 - **O que muda:**
+  - **Maintenance é soberano:** antes de rede ou enumeração systemd, o
+    watchdog consulta `/var/lib/civm/maintenance.json`. Snapshot presente
+    retorna `runner-restart-skipped/maintenance-active` com exit 0 e zero
+    mutações; consulta ambígua retorna `maintenance-state-unknown`, exit 1 e
+    zero mutações. O timer nunca pode ressuscitar listener drenado.
   - `Options` ganha `Ctx`-awareness: `cleanWorkRoot` e `trimCacheByAge` passam a receber/usar `ctx` (RF-8/DT-2) — a assinatura interna passa `ctx context.Context` (vinda de `cleanup(opts, ctx, ...)`, que já recebe ctx em `hook.go:163`). Escalada e `WalkDir` checam `ctx.Err()` entre entradas.
   - `cleanWorkRoot` (`hook.go:211-250`): no laço de entradas, troca `opts.RemoveAllFn(path)` por `safedelete.Remove(ctx, sdOpts, path)` onde `sdOpts.GuardFn` valida "filho direto de um `safeWorkRoot()`"; **acumula** erros (`a.Error` recebe o primeiro, mas o laço **continua**) em vez de `return` na primeira falha; grava `escalated` por entrada (campo novo no `Action`, abaixo).
   - `Action` (`hook.go:41-49`): adiciona `Escalation string json:"escalation,omitempty"` (`none|ok|failed`) para o contador de decisões (RF-8/DT-13).
@@ -223,7 +228,13 @@ Backfill = **N/A — Day-0**.
   - `WatchdogOptions` ganha `HooksLogPath string` (default `/var/log/civm/hooks.jsonl`) e `AutoRestartPerHour int` (default `civm.DefaultRunnerAutoRestartPerHour`), injetáveis.
 - **Requisitos:** RF-6. DT-8.
 - **Impacto:** `systemctl status civmctl-runner-watchdog` deixa de aparecer em `systemctl --failed` num skip host-busy; runner quebrado auto-recupera dentro do limite. Aditivo nos options.
-- **Testes:** host-busy skip → `report.Exit == 0` (sem `maxExit(...,1)`); host-idle-unknown skip → `Exit == 0`; sentinela de runner quebrado (`work_root escalation=failed` recente) → `runner.Restart` da unidade correta (mock `RunFn`), evento `runner-auto-restarted`; teto atingido → WARN sem restart; sentinela ausente → nenhum restart; falha real (hook-install) → ainda exit 2.
+- **Testes:** maintenance presente/ambígua → zero rede/systemd/hooks/restart;
+  host-busy skip → `report.Exit == 0` (sem `maxExit(...,1)`);
+  host-idle-unknown skip → `Exit == 0`; sentinela de runner quebrado
+  (`work_root escalation=failed` recente) → `runner.Restart` da unidade correta
+  (mock `RunFn`), evento `runner-auto-restarted`; teto atingido → WARN sem
+  restart; sentinela ausente → nenhum restart; falha real (hook-install) →
+  ainda exit 2.
 - **Disciplina Kahneman:** #5 — ver Mapa.
 
 ### `internal/hostdisk/hostdisk.go` — ITEM-5 (parte host obs)

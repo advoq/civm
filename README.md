@@ -304,6 +304,9 @@ execução manual ou drop-in com `--rerun-network-failures --max-run-age=6h`.
 O guard anti-loop fica em `/var/lib/civm/runner-watchdog-reruns.json` e o
 relatório inclui `metrics.runs_considered`, `metrics.reruns_triggered` e
 `metrics.reruns_skipped`.
+Enquanto `/var/lib/civm/maintenance.json` existir, o watchdog retorna
+`maintenance-active` antes de rede, hooks ou systemd e nunca religa o listener
+drenado. Falha ao consultar esse estado também bloqueia mutações.
 
 ## Histórico
 

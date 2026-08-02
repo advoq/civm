@@ -252,6 +252,9 @@ commit, push, rollback ou alteração automática em peer repo.
   falha transiente de rede/checkout. Em `--repos=auto`, o watchdog tenta ler
   `.runner` antes do fallback pelo unit name; marcador local:
   `/var/lib/civm/runner-watchdog-reruns.json`.
+  Durante `maintenance enter`, a presença de
+  `/var/lib/civm/maintenance.json` bloqueia qualquer reparo/restart; estado
+  ilegível também falha fechado. Nunca contornar esse guard para drenar CI.
 - Sessão org online/ociosa com fila elegível usa `CIVM_REAPER_REPOS`, dwell de
   `5 min`, idle-check completo e 1 restart por incidente. `unresolved` bloqueia
   capacidade até a fila avançar/sumir ou o runner comprovar consumo;

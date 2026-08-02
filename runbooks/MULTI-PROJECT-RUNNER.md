@@ -271,6 +271,9 @@ sudo civmctl runner watchdog --execute --repos=owner/repo --rerun-network-failur
 ```
 
 O serviço systemd roda a cada ~2min depois do boot. Primeiro testa
+`/var/lib/civm/maintenance.json`: se o snapshot existe, retorna
+`maintenance-active` antes de rede, hooks ou systemd; se não puder consultar,
+falha fechado com `maintenance-state-unknown`. Só fora de maintenance testa
 conectividade com GitHub. Se a rede estiver fora, sai `1` com evento
 `network-down` e não muta nada. Quando a rede volta, exige host idle,
 reconcilia hooks e reinicia units `actions.runner.*` offline/failed. O timer

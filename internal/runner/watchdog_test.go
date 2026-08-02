@@ -101,6 +101,30 @@ func TestWatchdogMaintenanceStateSkipsEveryMutation(t *testing.T) {
 	}
 }
 
+func TestWatchdogMaintenanceStateUnknownFailsClosed(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.MaintenanceActiveFn = func(string) (bool, error) {
+		return false, errors.New("permission denied")
+	}
+	restartCalls := 0
+	opts.RestartFn = func(context.Context, string) error {
+		restartCalls++
+		return nil
+	}
+
+	report := Watchdog(context.Background(), opts)
+	if report.Exit != 1 {
+		t.Fatalf("Exit = %d, want 1; events=%+v", report.Exit, report.Events)
+	}
+	if !hasWatchdogEventWithReason(report, "runner-restart-skipped", "maintenance-state-unknown") {
+		t.Fatalf("events = %+v, want maintenance-state-unknown", report.Events)
+	}
+	if restartCalls != 0 {
+		t.Fatalf("restart calls = %d, want 0", restartCalls)
+	}
+}
+
 func TestWatchdogNetworkDownDoesNotMutate(t *testing.T) {
 	t.Parallel()
 	opts := baseWatchdogOptions(t)
