@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.12](https://github.com/advoq/civm/compare/v1.22.11...v1.22.12) (2026-08-02)
+
+
+### Bug Fixes
+
+* drain organization runner labels safely ([#190](https://github.com/advoq/civm/issues/190)) ([1afaa42](https://github.com/advoq/civm/commit/1afaa42523f0c3d49d84450dd161011d78e19f20))
+
 ## [1.22.11](https://github.com/advoq/civm/compare/v1.22.10...v1.22.11) (2026-08-02)
 
 
