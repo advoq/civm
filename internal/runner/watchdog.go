@@ -1164,7 +1164,7 @@ func defaultWatchdogRestart(ctx context.Context, opts WatchdogOptions, unit stri
 	if _, err := opts.RunFn(ctx, "sudo", "systemctl", "kill", "--kill-who=all", "--signal=SIGKILL", unit); err != nil {
 		empty, proofErr := watchdogUnitCgroupEmpty(ctx, opts, unit)
 		if proofErr != nil {
-			return fmt.Errorf("systemctl kill %s cgroup: %v (empty proof: %w)", unit, err, proofErr)
+			return fmt.Errorf("systemctl kill %s cgroup and empty proof: %w", unit, errors.Join(err, proofErr))
 		}
 		if !empty {
 			return fmt.Errorf("systemctl kill %s cgroup: %w (residual PIDs remain)", unit, err)
