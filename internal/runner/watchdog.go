@@ -28,6 +28,8 @@ const (
 	defaultWatchdogRunLimit   = 20
 )
 
+var errWatchdogRunnerBecameBusy = errors.New("runner became busy while restart was fenced")
+
 type WatchdogOptions struct {
 	Execute              bool
 	Repos                []string
@@ -66,10 +68,9 @@ type WatchdogOptions struct {
 	MaintenanceActiveFn  func(path string) (bool, error)
 	NowFn                func() time.Time
 	SleepFn              func(d time.Duration)
-	// RestartFn restarts a single broken runner unit. It deliberately does NOT
-	// gate on host-idle (unlike runner.Restart): a wedged unit must recover even
-	// while OTHER runners on the shared box are busy — restarting one unit does
-	// not disturb another unit's job. Injected for hermetic tests.
+	// RestartFn restarts a single broken runner unit. The production default
+	// fences the target unit and rechecks Runner.Worker before mutating, closing
+	// the listener-admission TOCTOU window. Injected for hermetic tests.
 	RestartFn func(ctx context.Context, unit string) error
 }
 
@@ -394,16 +395,14 @@ func restartWatchdogRunners(ctx context.Context, opts WatchdogOptions, systemd [
 			})
 			continue
 		}
-		if _, err := opts.RunFn(ctx, "sudo", "systemctl", "restart", unit); err != nil {
-			event.Severity = "critical"
-			event.Detail = fmt.Sprintf("systemctl restart: %v", err)
-			report.add(event)
-			return err
-		}
-		opts.SleepFn(opts.RestartDelay)
-		out, _ := opts.RunFn(ctx, "systemctl", "is-active", unit)
-		if strings.TrimSpace(string(out)) != "active" {
-			err := fmt.Errorf("%s is-active=%q", unit, strings.TrimSpace(string(out)))
+		if err := opts.RestartFn(ctx, unit); err != nil {
+			if errors.Is(err, errWatchdogRunnerBecameBusy) {
+				report.add(WatchdogEvent{
+					Event: "runner-restart-skipped", Severity: "warning", Unit: unit,
+					Reason: "host-busy-after-freeze", Detail: err.Error(),
+				})
+				continue
+			}
 			event.Severity = "critical"
 			event.Detail = err.Error()
 			report.add(event)
@@ -487,18 +486,16 @@ func recoverWatchdogOrgBusyWithoutWorker(ctx context.Context, opts WatchdogOptio
 				report.Exit = maxExit(report.Exit, 2)
 				return
 			}
-			if _, err := opts.RunFn(ctx, "sudo", "systemctl", "restart", local.UnitName); err != nil {
+			if err := opts.RestartFn(ctx, local.UnitName); err != nil {
+				if errors.Is(err, errWatchdogRunnerBecameBusy) {
+					report.add(WatchdogEvent{
+						Event: "runner-restart-skipped", Severity: "warning", Unit: local.UnitName,
+						Runner: gh.Name, Reason: "host-busy-after-freeze", Detail: err.Error(),
+					})
+					return
+				}
 				event.Severity = "critical"
-				event.Detail = fmt.Sprintf("systemctl restart: %v", err)
-				report.add(event)
-				report.Exit = maxExit(report.Exit, 2)
-				return
-			}
-			opts.SleepFn(opts.RestartDelay)
-			out, _ := opts.RunFn(ctx, "systemctl", "is-active", local.UnitName)
-			if strings.TrimSpace(string(out)) != "active" {
-				event.Severity = "critical"
-				event.Detail = fmt.Sprintf("%s is-active=%q", local.UnitName, strings.TrimSpace(string(out)))
+				event.Detail = err.Error()
 				report.add(event)
 				report.Exit = maxExit(report.Exit, 2)
 				return
@@ -734,6 +731,24 @@ func recoverWatchdogOrgIdleWithQueue(
 		Executed: true,
 	}
 	if err := opts.RestartFn(ctx, local.UnitName); err != nil {
+		if errors.Is(err, errWatchdogRunnerBecameBusy) {
+			incident.RestartedAt = time.Time{}
+			state.QueueStalls[local.UnitName] = incident
+			if writeErr := writeRerunState(opts, state); writeErr != nil {
+				report.add(WatchdogEvent{
+					Event: "runner-restart-skipped", Severity: "critical", Unit: local.UnitName,
+					Runner: ghRunner.Name, Reason: "marker-write-failed", Detail: writeErr.Error(),
+				})
+				report.Exit = maxExit(report.Exit, 2)
+				return
+			}
+			report.add(WatchdogEvent{
+				Event: "runner-restart-skipped", Severity: "warning", Unit: local.UnitName,
+				Runner: ghRunner.Name, Reason: "host-busy-after-freeze", Detail: err.Error(),
+				QueuedJobs: evidence.EligibleJobs,
+			})
+			return
+		}
 		event.Severity = "critical"
 		event.Detail = err.Error()
 		report.Exit = maxExit(report.Exit, 2)
@@ -1024,6 +1039,13 @@ func executeRestarts(ctx context.Context, opts WatchdogOptions, toRestart []stri
 	for _, unit := range toRestart {
 		event := WatchdogEvent{Event: "runner-auto-restarted", Severity: "warning", Unit: unit, Reason: "broken-runner-sentinel", Executed: true}
 		if err := opts.RestartFn(ctx, unit); err != nil {
+			if errors.Is(err, errWatchdogRunnerBecameBusy) {
+				report.add(WatchdogEvent{
+					Event: "runner-auto-restart-skipped", Severity: "warning", Unit: unit,
+					Reason: "host-busy-after-freeze", Detail: err.Error(),
+				})
+				continue
+			}
 			event.Severity = "critical"
 			event.Detail = err.Error()
 			report.Exit = maxExit(report.Exit, 2)
@@ -1032,15 +1054,43 @@ func executeRestarts(ctx context.Context, opts WatchdogOptions, toRestart []stri
 	}
 }
 
-// defaultWatchdogRestart restarts a single runner unit directly (sudo systemctl
-// restart + is-active verify). Unlike runner.Restart it does NOT gate on host
-// idle — see WatchdogOptions.RestartFn.
-func defaultWatchdogRestart(ctx context.Context, opts WatchdogOptions, unit string) error {
+// defaultWatchdogRestart closes the last idle-check/restart TOCTOU window by
+// freezing an active unit before its final Worker probe. The listener cannot
+// accept a new job while frozen; every skip/error thaws it. Inactive/failed
+// units cannot accept work and may be restarted without a freeze.
+func defaultWatchdogRestart(ctx context.Context, opts WatchdogOptions, unit string) (retErr error) {
 	if err := civm.ValidateServiceUnit(unit); err != nil {
 		return err
 	}
+	frozen := false
+	if _, err := opts.RunFn(ctx, "sudo", "systemctl", "freeze", unit); err != nil {
+		out, _ := opts.RunFn(ctx, "systemctl", "is-active", unit)
+		state := strings.TrimSpace(string(out))
+		if state != "inactive" && state != "failed" {
+			return fmt.Errorf("systemctl freeze %s while state=%q: %w", unit, state, err)
+		}
+	} else {
+		frozen = true
+	}
+	defer func() {
+		if !frozen {
+			return
+		}
+		if _, err := opts.RunFn(ctx, "sudo", "systemctl", "thaw", unit); err != nil && retErr == nil {
+			retErr = fmt.Errorf("systemctl thaw %s: %w", unit, err)
+		}
+	}()
+	if frozen && hasLocalRunnerWorker(ctx, opts) {
+		return errWatchdogRunnerBecameBusy
+	}
 	if _, err := opts.RunFn(ctx, "sudo", "systemctl", "restart", unit); err != nil {
 		return fmt.Errorf("systemctl restart %s: %w", unit, err)
+	}
+	if frozen {
+		if _, err := opts.RunFn(ctx, "sudo", "systemctl", "thaw", unit); err != nil {
+			return fmt.Errorf("systemctl thaw %s after restart: %w", unit, err)
+		}
+		frozen = false
 	}
 	opts.SleepFn(opts.RestartDelay)
 	out, _ := opts.RunFn(ctx, "systemctl", "is-active", unit)
