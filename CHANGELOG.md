@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.13](https://github.com/advoq/civm/compare/v1.22.12...v1.22.13) (2026-08-02)
+
+
+### Bug Fixes
+
+* reuse configured GitHub CLI authentication ([#192](https://github.com/advoq/civm/issues/192)) ([19279fd](https://github.com/advoq/civm/commit/19279fd4aa30a97abc93a89c14adc8bce23f9051))
+
 ## [1.22.12](https://github.com/advoq/civm/compare/v1.22.11...v1.22.12) (2026-08-02)
 
 
