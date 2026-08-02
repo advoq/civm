@@ -450,7 +450,7 @@ func TestExitRestoreStartFailureIsWarning(t *testing.T) {
 func TestRemoveLabelInvalidRepo(t *testing.T) {
 	t.Parallel()
 	rec := newRecorder()
-	if err := removeLabel(context.Background(), rec.options("/tmp/x.json"), invalidRepo); err == nil {
+	if _, err := removeLabel(context.Background(), rec.options("/tmp/x.json"), invalidRepo, "runner-1"); err == nil {
 		t.Fatalf("removeLabel must reject an invalid repo")
 	}
 }
@@ -460,7 +460,7 @@ func TestRemoveLabelGHError(t *testing.T) {
 	t.Parallel()
 	rec := newRecorder()
 	rec.ghErrOn = func([]string) error { return errFake }
-	if err := removeLabel(context.Background(), rec.options("/tmp/x.json"), repoCivm); err == nil {
+	if _, err := removeLabel(context.Background(), rec.options("/tmp/x.json"), repoCivm, "runner-1"); err == nil {
 		t.Fatalf("removeLabel must surface gh error")
 	}
 }
@@ -469,7 +469,7 @@ func TestRemoveLabelGHError(t *testing.T) {
 func TestAddLabelInvalidRepo(t *testing.T) {
 	t.Parallel()
 	rec := newRecorder()
-	if err := addLabel(context.Background(), rec.options("/tmp/x.json"), invalidRepo); err == nil {
+	if err := addLabel(context.Background(), rec.options("/tmp/x.json"), invalidRepo, "runner-1", 11); err == nil {
 		t.Fatalf("addLabel must reject an invalid repo")
 	}
 }
@@ -479,8 +479,30 @@ func TestAddLabelGHError(t *testing.T) {
 	t.Parallel()
 	rec := newRecorder()
 	rec.ghErrOn = func([]string) error { return errFake }
-	if err := addLabel(context.Background(), rec.options("/tmp/x.json"), repoCivm); err == nil {
+	if err := addLabel(context.Background(), rec.options("/tmp/x.json"), repoCivm, "runner-1", 11); err == nil {
 		t.Fatalf("addLabel must surface gh error")
+	}
+}
+
+func TestGHEnvFromFileLoadsTokenWithoutExposingOtherValues(t *testing.T) {
+	t.Parallel()
+	env, err := ghEnvFromFile(func(string) ([]byte, error) {
+		return []byte("CIVM_REAPER_REPOS=advoq/advoq\nGH_TOKEN=secret-value\nIGNORED=value\n"), nil
+	})
+	if err != nil {
+		t.Fatalf("ghEnvFromFile err = %v", err)
+	}
+	if len(env) != 1 || env[0] != "GH_TOKEN=secret-value" {
+		t.Fatalf("ghEnvFromFile env = %v", env)
+	}
+}
+
+func TestGHEnvFromFileFailsClosedWithoutToken(t *testing.T) {
+	t.Parallel()
+	if _, err := ghEnvFromFile(func(string) ([]byte, error) {
+		return []byte("CIVM_REAPER_REPOS=advoq/advoq\n"), nil
+	}); err == nil {
+		t.Fatal("ghEnvFromFile must reject a credential file without GH_TOKEN")
 	}
 }
 

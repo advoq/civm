@@ -14,9 +14,11 @@ import (
 const (
 	repoCivm  = "acme/civm"
 	repoVitae = "other/peer"
+	orgAdvoq  = "advoq"
 
 	unitCivm  = "actions.runner.acme-civm.runner-1.service"
 	unitVitae = "actions.runner.other-peer.runner-2.service"
+	unitOrg   = "actions.runner.advoq.civm-advoq-org.service"
 
 	fixedTime = "2026-05-29T12:00:00Z"
 )
@@ -66,6 +68,9 @@ func (r *recorder) options(statePath string) Options {
 				if err := r.ghErrOn(args); err != nil {
 					return nil, err
 				}
+			}
+			if strings.Contains(strings.Join(args, " "), "actions/runners?per_page=100") {
+				return []byte(`[{"runners":[{"id":11,"name":"runner-1"},{"id":12,"name":"runner-2"},{"id":71,"name":"civm-advoq-org"}]}]`), nil
 			}
 			return nil, nil
 		},
@@ -160,6 +165,86 @@ func TestEnterWritesStateAndDrainsBothRunners(t *testing.T) {
 	if deletes != 2 {
 		t.Fatalf("gh DELETE label calls = %d, want 2 (calls=%v)", deletes, rec.ghCalls)
 	}
+	if !hasGHCall(rec.ghCalls, "api --method DELETE repos/acme/civm/actions/runners/11/labels/civm") {
+		t.Fatalf("missing repository runner label DELETE: %v", rec.ghCalls)
+	}
+}
+
+func TestEnterAndExitUseOrganizationRunnerLabelAPI(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	rec.listOutput = "  " + unitOrg + "  loaded active running GitHub Actions Runner\n"
+	statePath := filepath.Join(t.TempDir(), "maintenance.json")
+	opts := rec.options(statePath)
+	opts.GHFn = func(_ context.Context, args ...string) ([]byte, error) {
+		rec.ghCalls = append(rec.ghCalls, append([]string{"gh"}, args...))
+		if strings.Contains(strings.Join(args, " "), "orgs/advoq/actions/runners?per_page=100") {
+			return []byte(`[{"total_count":1,"runners":[{"id":71,"name":"civm-advoq-org"}]}]`), nil
+		}
+		return nil, nil
+	}
+
+	state, err := Enter(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Enter org runner err = %v", err)
+	}
+	rn, ok := runnerByName(state, "civm-advoq-org")
+	if !ok {
+		t.Fatal("missing organization runner in state")
+	}
+	if !rn.Stopped || !rn.LabelRemoved || rn.RunnerID != 71 || rn.Repo != orgAdvoq {
+		t.Fatalf("organization runner not fully drained: %+v", rn)
+	}
+	if !hasGHCall(rec.ghCalls, "api --method DELETE orgs/advoq/actions/runners/71/labels/civm") {
+		t.Fatalf("missing organization label DELETE: %v", rec.ghCalls)
+	}
+
+	rec.runCalls = nil
+	rec.ghCalls = nil
+	if _, err := Exit(context.Background(), opts); err != nil {
+		t.Fatalf("Exit org runner err = %v", err)
+	}
+	if !hasGHCall(rec.ghCalls, "api --method POST orgs/advoq/actions/runners/71/labels -f labels[]=civm") {
+		t.Fatalf("missing organization label POST: %v", rec.ghCalls)
+	}
+}
+
+func TestEnterReposFilterIncludesOrganizationRunnerForOwnedRepo(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	rec.listOutput = "  " + unitOrg + "  loaded active running GitHub Actions Runner\n"
+	statePath := filepath.Join(t.TempDir(), "maintenance.json")
+	opts := rec.options(statePath)
+	opts.Repos = []string{"advoq/advoq", "advoq/civm"}
+
+	state, err := Enter(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Enter filtered org runner err = %v", err)
+	}
+	if len(state.Runners) != 1 || state.Runners[0].Name != "civm-advoq-org" {
+		t.Fatalf("filtered organization runners = %+v", state.Runners)
+	}
+}
+
+func TestResolveRunnerIDRejectsDuplicateName(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	opts := rec.options(filepath.Join(t.TempDir(), "maintenance.json"))
+	opts.GHFn = func(context.Context, ...string) ([]byte, error) {
+		return []byte(`[{"runners":[{"id":70,"name":"civm-advoq-org"}]},{"runners":[{"id":71,"name":"civm-advoq-org"}]}]`), nil
+	}
+	if _, err := resolveRunnerID(context.Background(), opts, "orgs/advoq", "civm-advoq-org"); err == nil {
+		t.Fatal("resolveRunnerID must reject duplicate runner names")
+	}
+}
+
+func hasGHCall(calls [][]string, want string) bool {
+	for _, call := range calls {
+		if strings.Join(call[1:], " ") == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestExitRestoresRecordedStateAndDeletesIt(t *testing.T) {
@@ -199,6 +284,9 @@ func TestExitRestoresRecordedStateAndDeletesIt(t *testing.T) {
 	}
 	if posts != 2 {
 		t.Fatalf("gh POST label calls = %d, want 2 (calls=%v)", posts, rec.ghCalls)
+	}
+	if !hasGHCall(rec.ghCalls, "api --method POST repos/acme/civm/actions/runners/11/labels -f labels[]=civm") {
+		t.Fatalf("missing repository runner label POST: %v", rec.ghCalls)
 	}
 	if len(rec.removed) != 1 || rec.removed[0] != statePath {
 		t.Fatalf("removed = %v, want [%s]", rec.removed, statePath)

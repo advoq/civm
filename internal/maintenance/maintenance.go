@@ -2,9 +2,10 @@
 // so the Windows-side VHDX compaction task can shut the guest down safely.
 //
 // Enter stops the local actions.runner.* units and removes the "civm" label
-// from each runner's repo; Exit restores exactly what Enter recorded. State is
-// persisted as JSON in StatePath so Exit is deterministic and both operations
-// are no-ops when re-run. A flock on LockPath serializes concurrent callers.
+// from each runner registration (repository or organization); Exit restores
+// exactly what Enter recorded. State is persisted as JSON in StatePath so Exit
+// is deterministic and both operations are no-ops when re-run. A flock on
+// LockPath serializes concurrent callers.
 package maintenance
 
 import (
@@ -28,6 +29,10 @@ import (
 // civmLabel is the GitHub runner label toggled during drain/restore.
 const civmLabel = "civm"
 
+const orgRunnerNameSuffix = "-org"
+
+const runReaperEnvPath = "/etc/civm/run-reaper.env"
+
 // runnerUnitGlob matches the systemd units of every self-hosted runner.
 const runnerUnitGlob = "actions.runner.*"
 
@@ -38,7 +43,8 @@ const timeLayout = time.RFC3339
 // can restore exactly that and nothing more.
 type RunnerState struct {
 	Name         string `json:"name"`
-	Repo         string `json:"repo,omitempty"`
+	Repo         string `json:"repo,omitempty"` // owner/repo or bare org for org-level runners
+	RunnerID     int64  `json:"runner_id,omitempty"`
 	Stopped      bool   `json:"stopped"`
 	LabelRemoved bool   `json:"label_removed"`
 }
@@ -276,14 +282,15 @@ func discoverRunners(ctx context.Context, opts Options) []runnerRef {
 		if name == "" {
 			name = unit
 		}
-		if len(allow) > 0 && (repo == "" || !allow[repo]) {
+		candidate := runnerRef{Unit: unit, Name: name, Repo: repo}
+		if len(allow) > 0 && !runnerAllowed(candidate, allow) {
 			continue
 		}
 		if _, dup := seen[unit]; dup {
 			continue
 		}
 		seen[unit] = struct{}{}
-		refs = append(refs, runnerRef{Unit: unit, Name: name, Repo: repo})
+		refs = append(refs, candidate)
 	}
 	sort.SliceStable(refs, func(i, j int) bool { return refs[i].Unit < refs[j].Unit })
 	return refs
@@ -297,9 +304,11 @@ func drainRunner(ctx context.Context, opts Options, rn runnerRef) RunnerState {
 		applied.Stopped = true
 	}
 	if rn.Repo != "" {
-		if err := removeLabel(ctx, opts, rn.Repo); err != nil {
+		runnerID, err := removeLabel(ctx, opts, rn.Repo, rn.Name)
+		if err != nil {
 			warn("gh remove label %s on %s: %v", civmLabel, rn.Repo, err)
 		} else {
+			applied.RunnerID = runnerID
 			applied.LabelRemoved = true
 		}
 	}
@@ -314,32 +323,98 @@ func restoreRunner(ctx context.Context, opts Options, rn RunnerState) {
 		}
 	}
 	if rn.LabelRemoved && rn.Repo != "" {
-		if err := addLabel(ctx, opts, rn.Repo); err != nil {
+		if err := addLabel(ctx, opts, rn.Repo, rn.Name, rn.RunnerID); err != nil {
 			warn("gh add label %s on %s: %v", civmLabel, rn.Repo, err)
 		}
 	}
 }
 
-func removeLabel(ctx context.Context, opts Options, repo string) error {
-	if err := civm.ValidateRepo(repo); err != nil {
-		return err
+func removeLabel(ctx context.Context, opts Options, repo, runnerName string) (int64, error) {
+	base, err := runnerAPIBase(repo, runnerName)
+	if err != nil {
+		return 0, err
 	}
-	endpoint := fmt.Sprintf("repos/%s/labels/%s", repo, civmLabel)
+	runnerID, err := resolveRunnerID(ctx, opts, base, runnerName)
+	if err != nil {
+		return 0, err
+	}
+	endpoint := fmt.Sprintf("%s/actions/runners/%d/labels/%s", base, runnerID, civmLabel)
 	if _, err := opts.GHFn(ctx, "api", "--method", "DELETE", endpoint); err != nil {
-		return fmt.Errorf("gh api DELETE %s: %w", endpoint, err)
+		return 0, fmt.Errorf("gh api DELETE %s: %w", endpoint, err)
 	}
-	return nil
+	return runnerID, nil
 }
 
-func addLabel(ctx context.Context, opts Options, repo string) error {
-	if err := civm.ValidateRepo(repo); err != nil {
+func addLabel(ctx context.Context, opts Options, repo, runnerName string, runnerID int64) error {
+	base, err := runnerAPIBase(repo, runnerName)
+	if err != nil {
 		return err
 	}
-	endpoint := fmt.Sprintf("repos/%s/labels", repo)
+	if runnerID <= 0 {
+		runnerID, err = resolveRunnerID(ctx, opts, base, runnerName)
+		if err != nil {
+			return err
+		}
+	}
+	endpoint := fmt.Sprintf("%s/actions/runners/%d/labels", base, runnerID)
 	if _, err := opts.GHFn(ctx, "api", "--method", "POST", endpoint, "-f", "labels[]="+civmLabel); err != nil {
 		return fmt.Errorf("gh api POST %s: %w", endpoint, err)
 	}
 	return nil
+}
+
+type runnerAPIPage struct {
+	Runners []struct {
+		ID   int64  `json:"id"`
+		Name string `json:"name"`
+	} `json:"runners"`
+}
+
+func runnerAPIBase(repo, runnerName string) (string, error) {
+	if strings.Contains(repo, "/") {
+		if err := civm.ValidateRepo(repo); err != nil {
+			return "", err
+		}
+		return "repos/" + repo, nil
+	}
+	if repo == "" || !strings.HasSuffix(runnerName, orgRunnerNameSuffix) {
+		return "", fmt.Errorf("runner %q nao tem alvo GitHub seguro em %q", runnerName, repo)
+	}
+	if err := civm.ValidateRepo(repo + "/runner-id-probe"); err != nil {
+		return "", fmt.Errorf("org invalida %q: %w", repo, err)
+	}
+	return "orgs/" + repo, nil
+}
+
+func resolveRunnerID(ctx context.Context, opts Options, base, runnerName string) (int64, error) {
+	if strings.TrimSpace(runnerName) == "" {
+		return 0, errors.New("nome do runner vazio")
+	}
+	endpoint := base + "/actions/runners?per_page=100"
+	out, err := opts.GHFn(ctx, "api", "--paginate", "--slurp", endpoint)
+	if err != nil {
+		return 0, fmt.Errorf("gh api GET %s: %w", endpoint, err)
+	}
+	var pages []runnerAPIPage
+	if err := json.Unmarshal(out, &pages); err != nil {
+		return 0, fmt.Errorf("parse runners de %s: %w", base, err)
+	}
+	var found int64
+	for _, page := range pages {
+		for _, candidate := range page.Runners {
+			if candidate.Name != runnerName {
+				continue
+			}
+			if candidate.ID <= 0 || found != 0 {
+				return 0, fmt.Errorf("runner %q ambiguo ou com ID invalido em %s", runnerName, base)
+			}
+			found = candidate.ID
+		}
+	}
+	if found == 0 {
+		return 0, fmt.Errorf("runner %q nao encontrado em %s", runnerName, base)
+	}
+	return found, nil
 }
 
 func readState(opts Options) (State, bool, error) {
@@ -386,6 +461,21 @@ func repoAllowSet(repos []string) map[string]bool {
 		}
 	}
 	return set
+}
+
+func runnerAllowed(rn runnerRef, allow map[string]bool) bool {
+	if allow[rn.Repo] {
+		return true
+	}
+	if rn.Repo == "" || !strings.HasSuffix(rn.Name, orgRunnerNameSuffix) {
+		return false
+	}
+	for repo := range allow {
+		if strings.HasPrefix(repo, rn.Repo+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // firstUnitField returns the unit name from a `systemctl list-units` line,
@@ -473,7 +563,40 @@ func defaultRun(ctx context.Context, name string, args ...string) ([]byte, error
 }
 
 func defaultGH(ctx context.Context, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, "gh", args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	if os.Getenv("GH_TOKEN") == "" && os.Getenv("GITHUB_TOKEN") == "" {
+		extra, err := ghEnvFromFile(os.ReadFile)
+		if err != nil {
+			return nil, err
+		}
+		cmd.Env = append(os.Environ(), extra...)
+	}
+	return cmd.CombinedOutput()
+}
+
+func ghEnvFromFile(readFile func(string) ([]byte, error)) ([]string, error) {
+	data, err := readFile(runReaperEnvPath)
+	if err != nil {
+		return nil, fmt.Errorf("ler credencial GitHub de %s: %w", runReaperEnvPath, err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "GH_TOKEN=") {
+			continue
+		}
+		value := strings.TrimSpace(strings.TrimPrefix(line, "GH_TOKEN="))
+		if len(value) >= 2 {
+			if (value[0] == '\'' && value[len(value)-1] == '\'') ||
+				(value[0] == '"' && value[len(value)-1] == '"') {
+				value = value[1 : len(value)-1]
+			}
+		}
+		if value == "" || strings.ContainsAny(value, "\x00\r\n") {
+			return nil, errors.New("GH_TOKEN ausente ou invalido no arquivo de credencial")
+		}
+		return []string{"GH_TOKEN=" + value}, nil
+	}
+	return nil, errors.New("GH_TOKEN ausente no arquivo de credencial")
 }
 
 func defaultIdleCheck(ctx context.Context) bool {
