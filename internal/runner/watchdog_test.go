@@ -1136,6 +1136,60 @@ func TestWatchdogSkipsOrgBusyRestartWhenWorkerAppears(t *testing.T) {
 	}
 }
 
+func TestDefaultWatchdogRestartFreezesBeforeFinalWorkerProbe(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.RestartDelay = 0
+	frozen := false
+	restarts := 0
+	thaws := 0
+	activityCalls := 0
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		switch call {
+		case "sudo systemctl freeze actions.runner.advoq.civm-advoq-org.service":
+			frozen = true
+			return nil, nil
+		case "sudo systemctl thaw actions.runner.advoq.civm-advoq-org.service":
+			frozen = false
+			thaws++
+			return nil, nil
+		case "sudo systemctl restart actions.runner.advoq.civm-advoq-org.service":
+			restarts++
+			return nil, nil
+		case "systemctl is-active actions.runner.advoq.civm-advoq-org.service":
+			return []byte("active\n"), nil
+		default:
+			return nil, nil
+		}
+	}
+	opts.ActivityFn = func(context.Context) ([]idle.Activity, error) {
+		activityCalls++
+		if frozen {
+			return []idle.Activity{{PID: 99, Command: "Runner.Worker spawnclient"}}, nil
+		}
+		return nil, nil
+	}
+
+	err := defaultWatchdogRestart(
+		context.Background(),
+		opts,
+		"actions.runner.advoq.civm-advoq-org.service",
+	)
+	if err == nil {
+		t.Fatal("defaultWatchdogRestart error = nil, want busy deferral")
+	}
+	if restarts != 0 {
+		t.Fatalf("restarts = %d, want 0 after Worker appeared", restarts)
+	}
+	if activityCalls != 1 {
+		t.Fatalf("activity calls = %d, want 1 under freeze", activityCalls)
+	}
+	if thaws != 1 || frozen {
+		t.Fatalf("thaws = %d frozen = %t, want one thaw and unfrozen", thaws, frozen)
+	}
+}
+
 // TestWatchdogDoesNotResurrectRedundantRepoRunner prova a defesa de
 // serialização: um runner por-repo (civm-app) já parado (inactive/dead, o
 // estado pós-`systemctl disable`) NÃO pode ser reativado pelo watchdog enquanto
