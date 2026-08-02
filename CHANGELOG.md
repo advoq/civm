@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.22.20](https://github.com/advoq/civm/compare/v1.22.19...v1.22.20) (2026-08-02)
+
+
+### Bug Fixes
+
+* **runner:** purge orphan listeners before restart ([f646496](https://github.com/advoq/civm/commit/f6464967b5f21a984e506a134c7b368decef5ede))
+* **runner:** purge orphan listeners before restart ([3520859](https://github.com/advoq/civm/commit/35208594cd0d80ac3f3502121e79f04e7ad3fd9f)), closes [#213](https://github.com/advoq/civm/issues/213)
+
 ## [1.22.19](https://github.com/advoq/civm/compare/v1.22.18...v1.22.19) (2026-08-02)
 
 
