@@ -39,6 +39,7 @@ const timeLayout = time.RFC3339
 type RunnerState struct {
 	Name         string `json:"name"`
 	Repo         string `json:"repo,omitempty"`
+	RunnerID     int64  `json:"runner_id,omitempty"`
 	Stopped      bool   `json:"stopped"`
 	LabelRemoved bool   `json:"label_removed"`
 }
