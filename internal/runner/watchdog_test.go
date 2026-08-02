@@ -1092,9 +1092,12 @@ func TestDefaultWatchdogQueueReposValidatesAndDeduplicates(t *testing.T) {
 
 func TestWatchdogRestartsOrgRunnerBusyWithoutLocalWorker(t *testing.T) {
 	t.Parallel()
+	now := testWatchdogNow
 	opts := baseWatchdogOptions(t)
 	opts.RestartDelay = 0
 	opts.IdleProbeDelay = 0
+	opts.QueueStallDwell = 5 * time.Minute
+	opts.NowFn = func() time.Time { return now }
 	opts.Repos = nil
 	opts.InferRepos = true
 	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
@@ -1134,6 +1137,11 @@ func TestWatchdogRestartsOrgRunnerBusyWithoutLocalWorker(t *testing.T) {
 		return []byte(`{"gitHubUrl":"https://github.com/advoq"}`), nil
 	}
 
+	first := Watchdog(context.Background(), opts)
+	if !hasWatchdogEventWithReason(first, "runner-restart-skipped", "org-busy-dwell") {
+		t.Fatalf("first events = %+v, want dwell", first.Events)
+	}
+	now = now.Add(6 * time.Minute)
 	report := Watchdog(context.Background(), opts)
 	if report.Exit != 0 {
 		t.Fatalf("Exit = %d, want 0 events=%+v", report.Exit, report.Events)
@@ -1146,9 +1154,12 @@ func TestWatchdogRestartsOrgRunnerBusyWithoutLocalWorker(t *testing.T) {
 
 func TestWatchdogSkipsOrgBusyRestartWhenWorkerAppears(t *testing.T) {
 	t.Parallel()
+	now := testWatchdogNow
 	opts := baseWatchdogOptions(t)
 	opts.RestartDelay = 0
 	opts.IdleProbeDelay = 0
+	opts.QueueStallDwell = 5 * time.Minute
+	opts.NowFn = func() time.Time { return now }
 	opts.Repos = nil
 	opts.InferRepos = true
 	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
@@ -1191,6 +1202,12 @@ func TestWatchdogSkipsOrgBusyRestartWhenWorkerAppears(t *testing.T) {
 		return []byte(`{"gitHubUrl":"https://github.com/advoq"}`), nil
 	}
 
+	first := Watchdog(context.Background(), opts)
+	if !hasWatchdogEventWithReason(first, "runner-restart-skipped", "org-busy-dwell") {
+		t.Fatalf("first events = %+v, want dwell", first.Events)
+	}
+	activityCalls = 0
+	now = now.Add(6 * time.Minute)
 	report := Watchdog(context.Background(), opts)
 	if report.Exit != 0 {
 		t.Fatalf("Exit = %d, want 0 events=%+v", report.Exit, report.Events)
@@ -1259,11 +1276,12 @@ func TestDefaultWatchdogRestartFreezesBeforeFinalWorkerProbe(t *testing.T) {
 	}
 }
 
-func TestDefaultWatchdogRestartKeepsListenerFrozenUntilRestart(t *testing.T) {
+func TestDefaultWatchdogRestartFreezesProbeThenStopsGracefully(t *testing.T) {
 	t.Parallel()
 	opts := baseWatchdogOptions(t)
 	opts.RestartDelay = 0
 	frozen := false
+	gracefullyStopped := false
 	var calls []string
 	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		call := name + " " + strings.Join(args, " ")
@@ -1271,9 +1289,15 @@ func TestDefaultWatchdogRestartKeepsListenerFrozenUntilRestart(t *testing.T) {
 		switch call {
 		case "sudo systemctl freeze actions.runner.advoq.civm-advoq-org.service":
 			frozen = true
-		case "sudo systemctl restart actions.runner.advoq.civm-advoq-org.service":
+		case "sudo systemctl stop actions.runner.advoq.civm-advoq-org.service":
 			if !frozen {
-				t.Fatal("restart ran without the listener fence")
+				t.Fatal("graceful stop ran without the listener fence")
+			}
+			frozen = false
+			gracefullyStopped = true
+		case "sudo systemctl restart actions.runner.advoq.civm-advoq-org.service":
+			if !gracefullyStopped {
+				t.Fatal("restart ran before graceful stop")
 			}
 		case "sudo systemctl thaw actions.runner.advoq.civm-advoq-org.service":
 			frozen = false

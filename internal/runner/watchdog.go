@@ -415,10 +415,12 @@ func restartWatchdogRunners(ctx context.Context, opts WatchdogOptions, systemd [
 
 func recoverWatchdogOrgBusyWithoutWorker(ctx context.Context, opts WatchdogOptions, systemd []Status, report *WatchdogReport) {
 	if hasLocalRunnerWorker(ctx, opts) {
+		clearPendingWatchdogOrgBusyDwell(opts, systemd, report)
 		return
 	}
 	opts.SleepFn(opts.IdleProbeDelay)
 	if hasLocalRunnerWorker(ctx, opts) {
+		clearPendingWatchdogOrgBusyDwell(opts, systemd, report)
 		return
 	}
 	for _, local := range systemd {
@@ -433,17 +435,15 @@ func recoverWatchdogOrgBusyWithoutWorker(ctx context.Context, opts WatchdogOptio
 			})
 			continue
 		}
+		matchedBusy := false
 		for _, gh := range runners {
 			if gh.Name != local.Name || gh.Status != "online" || !gh.Busy {
 				continue
 			}
+			matchedBusy = true
 			event := WatchdogEvent{
 				Event: "runner-restarted", Severity: "info", Unit: local.UnitName,
 				Runner: gh.Name, Reason: "github-busy-without-local-worker", Executed: opts.Execute,
-			}
-			if !opts.Execute {
-				report.add(event)
-				return
 			}
 			state, err := loadRerunState(opts)
 			if err != nil {
@@ -457,8 +457,35 @@ func recoverWatchdogOrgBusyWithoutWorker(ctx context.Context, opts WatchdogOptio
 			now := opts.NowFn()
 			key := "org-busy:" + local.UnitName
 			window := state.AutoRestarts[key]
-			if window.WindowStart.IsZero() || now.Sub(window.WindowStart) >= time.Hour {
+			if window.WindowStart.IsZero() ||
+				(window.Count >= 1 && now.Sub(window.WindowStart) >= time.Hour) {
 				window = autoRestartWindow{WindowStart: now}
+			}
+			if window.Count == 0 && opts.QueueStallDwell > 0 {
+				age := now.Sub(window.WindowStart)
+				if age < 0 {
+					window.WindowStart = now
+					age = 0
+				}
+				state.AutoRestarts[key] = window
+				if opts.Execute {
+					if err := writeRerunState(opts, state); err != nil {
+						report.add(WatchdogEvent{
+							Event: "runner-restart-skipped", Severity: "critical", Unit: local.UnitName,
+							Runner: gh.Name, Reason: "marker-write-failed", Detail: err.Error(),
+						})
+						report.Exit = maxExit(report.Exit, 2)
+						return
+					}
+				}
+				if age < opts.QueueStallDwell {
+					report.add(WatchdogEvent{
+						Event: "runner-restart-skipped", Severity: "warning", Unit: local.UnitName,
+						Runner: gh.Name, Reason: "org-busy-dwell", Executed: opts.Execute,
+						AgeSeconds: int64(age.Seconds()),
+					})
+					return
+				}
 			}
 			if window.Count >= 1 {
 				report.add(WatchdogEvent{
@@ -466,6 +493,10 @@ func recoverWatchdogOrgBusyWithoutWorker(ctx context.Context, opts WatchdogOptio
 					Runner: gh.Name, Reason: "org-busy-cooldown",
 					Detail: "already restarted once in the rolling hour",
 				})
+				return
+			}
+			if !opts.Execute {
+				report.add(event)
 				return
 			}
 			if hasLocalRunnerWorker(ctx, opts) {
@@ -503,6 +534,45 @@ func recoverWatchdogOrgBusyWithoutWorker(ctx context.Context, opts WatchdogOptio
 			report.add(event)
 			return
 		}
+		if !matchedBusy {
+			clearPendingWatchdogOrgBusyDwell(opts, []Status{local}, report)
+		}
+	}
+}
+
+func clearPendingWatchdogOrgBusyDwell(opts WatchdogOptions, systemd []Status, report *WatchdogReport) {
+	if !opts.Execute {
+		return
+	}
+	state, err := loadRerunState(opts)
+	if err != nil {
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "critical",
+			Reason: "marker-read-failed", Detail: err.Error(),
+		})
+		report.Exit = maxExit(report.Exit, 2)
+		return
+	}
+	changed := false
+	for _, local := range systemd {
+		if local.UnitName == "" || local.Org == "" {
+			continue
+		}
+		key := "org-busy:" + local.UnitName
+		if window, ok := state.AutoRestarts[key]; ok && window.Count == 0 {
+			delete(state.AutoRestarts, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	if err := writeRerunState(opts, state); err != nil {
+		report.add(WatchdogEvent{
+			Event: "runner-restart-skipped", Severity: "critical",
+			Reason: "marker-write-failed", Detail: err.Error(),
+		})
+		report.Exit = maxExit(report.Exit, 2)
 	}
 }
 
@@ -1086,10 +1156,23 @@ func defaultWatchdogRestart(ctx context.Context, opts WatchdogOptions, unit stri
 	// Actions Runner units are generated with KillMode=process. After an OOM,
 	// runsvc.sh may be dead while RunnerService.js/Runner.Listener stay alive in
 	// the unit cgroup; a plain restart then creates a second listener that loops
-	// on broker session conflict. The final Worker probe above makes a full
-	// cgroup purge safe. Fail closed if systemd cannot prove that purge.
+	// on broker session conflict. Stop first so a healthy listener can close its
+	// broker session, then purge only residual cgroup processes. The final Worker
+	// probe above makes both mutations safe.
+	if _, err := opts.RunFn(ctx, "sudo", "systemctl", "stop", unit); err != nil {
+		return fmt.Errorf("systemctl stop %s: %w", unit, err)
+	}
+	// A successful stop necessarily releases the freeze. Avoid a thaw against an
+	// inactive unit in the deferred cleanup path.
+	frozen = false
 	if _, err := opts.RunFn(ctx, "sudo", "systemctl", "kill", "--kill-who=all", "--signal=SIGKILL", unit); err != nil {
-		return fmt.Errorf("systemctl kill %s cgroup: %w", unit, err)
+		empty, proofErr := watchdogUnitCgroupEmpty(ctx, opts, unit)
+		if proofErr != nil {
+			return fmt.Errorf("systemctl kill %s cgroup: %w (empty proof: %v)", unit, err, proofErr)
+		}
+		if !empty {
+			return fmt.Errorf("systemctl kill %s cgroup: %w (residual PIDs remain)", unit, err)
+		}
 	}
 	if _, err := opts.RunFn(ctx, "sudo", "systemctl", "restart", unit); err != nil {
 		return fmt.Errorf("systemctl restart %s: %w", unit, err)
@@ -1106,6 +1189,30 @@ func defaultWatchdogRestart(ctx context.Context, opts WatchdogOptions, unit stri
 		return fmt.Errorf("%s is-active=%q after restart", unit, active)
 	}
 	return nil
+}
+
+func watchdogUnitCgroupEmpty(ctx context.Context, opts WatchdogOptions, unit string) (bool, error) {
+	out, err := opts.RunFn(ctx, "systemctl", "show", unit, "--property=ControlGroup", "--value")
+	if err != nil {
+		return false, err
+	}
+	group := strings.TrimSpace(string(out))
+	if group == "" {
+		return true, nil
+	}
+	clean := filepath.Clean(group)
+	if !strings.HasPrefix(clean, "/system.slice/") {
+		return false, fmt.Errorf("unsafe control group %q", group)
+	}
+	procsPath := filepath.Join("/sys/fs/cgroup", strings.TrimPrefix(clean, "/"), "cgroup.procs")
+	data, err := opts.ReadFileFn(procsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return true, nil
+		}
+		return false, err
+	}
+	return strings.TrimSpace(string(data)) == "", nil
 }
 
 func rerunWatchdogNetworkFailures(ctx context.Context, opts WatchdogOptions, repos []string, repoOnline map[string]bool, report *WatchdogReport) error {

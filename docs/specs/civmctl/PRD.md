@@ -84,7 +84,10 @@ Alternativas consideradas e descartadas:
   hooks e reinicia runner offline/failed em VM idle. Rerun remoto é opt-in,
   considera só runs recentes de PR aberto e mantém guard anti-loop local por
   `run_id/head_sha`. `--repos=auto` usa `.runner` quando possível e fallback
-  pelo unit name quando não conseguir resolver o diretório real.
+  pelo unit name quando não conseguir resolver o diretório real. Divergência
+  `busy` remoto sem `Runner.Worker` exige dwell persistente de 5 minutos. O
+  restart para a unit graciosamente e só aceita falha do purge quando o cgroup
+  estiver comprovadamente sem PIDs.
 - **RF-10** Help auto-gerado para todos subcomandos (`civmctl --help`,
   `civmctl <sub> --help`).
 
