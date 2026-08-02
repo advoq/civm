@@ -28,6 +28,7 @@ func TestOwnerWatchdogTracksTheSingleActiveOwner(t *testing.T) {
 	for _, forbidden := range []string{
 		"Enable-ScheduledTask",
 		"Start-ScheduledTask",
+		"Disable-ScheduledTask",
 		"if ($orchState -ne 'Ready')",
 	} {
 		if strings.Contains(body, forbidden) {

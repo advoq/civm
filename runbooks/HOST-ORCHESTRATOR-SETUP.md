@@ -9,7 +9,7 @@
 | --- | --- |
 | Guest Linux (`civmctl`) | Runners, cleanup, reaper, doctor |
 | Host Windows (this runbook) | Scale-to-zero: start/stop VM, `Optimize-VHD`, GitHub queue poll |
-| Optional sibling **civm-host** | C# rewrite; production remains PowerShell until F4 cutover |
+| Sibling **civm-host** | Owner C# ativo após F4; PowerShell permanece somente como rollback |
 
 ## Preconditions
 
@@ -20,7 +20,13 @@
    `C:\ProgramData\civm\gh-token-<owner>.txt` (single line, no log echo).
 5. Guest user + IP/DNS reachable from SYSTEM SSH (prefer stable LAN IP if Tailscale DNS is stale).
 
-## Deploy scripts (atomic)
+## Owner ativo e rollback
+
+Produção usa `civm-host-orchestrator` em modo active. Os scripts PowerShell
+abaixo são o caminho de rollback e devem permanecer `Disabled` enquanto o C#
+estiver ativo. Nunca mantenha os dois owners em `Ready`/`Running`.
+
+## Deploy scripts PowerShell (rollback)
 
 From an elevated PowerShell, in the repo `deploy/windows` (or a staging copy):
 
@@ -57,8 +63,28 @@ if ($EnforceQueue) { $invoke['EnforceQueue'] = $true }
 ```
 
 Register the wrapper as the Scheduled Task action (SYSTEM, every ~2 min, boot trigger).
-Disable legacy `civm-vhdx-autoreclaim` / `civm-vhdx-optimize` / `*-watchdog` so **one owner**
-holds stop/compact (Kahneman #15).
+Disable legacy `civm-vhdx-autoreclaim`, `civm-vhdx-optimize` e
+`civm-vhdx-optimize-watchdog` para que **um owner** detenha stop/compact
+(Kahneman #15). `civm-watchdog` é somente detector e permanece ativo.
+
+## Owner-aware watchdog
+
+O watchdog de disponibilidade é separado do owner e nunca inicia, habilita ou
+troca o processo de orquestração. Ele aceita exatamente um owner ativo: C# em
+modo active ou PowerShell `-EnforceQueue` durante rollback.
+
+```powershell
+# Elevado: valida AST, copia para C:\civm-deploy e registra SYSTEM.
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File .\register-civm-watchdog.ps1
+
+Get-Content V:\civm-watchdog-status.txt
+Get-ScheduledTaskInfo civm-watchdog
+```
+
+Heartbeat C# maior que `45 min`, owner zero/dual, last result não zero ou
+`processBlockedReason` preenchido produzem DRIFT. A task roda a cada `20 min`,
+no startup, com `ExecutionTimeLimit=5 min`.
 
 The task contract is also part of availability: `AtStartup`, `StartWhenAvailable`,
 `DisallowStartIfOnBatteries=false` and `StopIfGoingOnBatteries=false`. Registration
@@ -79,18 +105,20 @@ the orchestrator treats missing/`<=0` guest free as **999 (unknown)** — does n
 
 | Check | Expect |
 | --- | --- |
-| Task `civm-vm-orchestrator` LastTaskResult | `0` |
-| Log `V:\civm-orchestrator.log` | `tick` JSON lines; no perpetual `token ausente` for configured owners |
+| Task `civm-host-orchestrator` | `Ready`/`Running`, modo active e `LastTaskResult=0` |
+| Task `civm-vm-orchestrator` | `Disabled`; somente rollback |
+| Log `V:\civm-host-shadow.jsonl` | heartbeat <45 min; ticks com geração e decisão |
 | Idle ≥ `IdleStopMinutes` (default 10) + empty queue | `reclaim_start` → VM Off; optional `reclaim_mount_retry` then `reclaim_done` |
 | Queue while Off | `vm_started` → guest runners online |
 | Lock | Only one of PS orch / civm-host **active** holds `V:\civm-reclaim.lock` |
 | Reboot/power policy | boot trigger present; start/stop-on-battery both `false`; `StartWhenAvailable=true` |
+| Task `civm-watchdog` | `LastTaskResult=0`; status `OK`; owner exatamente `1` |
 
 Inspect the effective definition from an elevated shell (a non-elevated query can
 hide SYSTEM tasks):
 
 ```powershell
-$t = Get-ScheduledTask -TaskName 'civm-vm-orchestrator'
+$t = Get-ScheduledTask -TaskName 'civm-host-orchestrator'
 $t | Select-Object State, Actions, Triggers, Settings
 ```
 

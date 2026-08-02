@@ -171,6 +171,10 @@ schtasks /query /tn civm-host-metrics /v /fo LIST
 > abaixo é preservada como histórico do mecanismo anterior — **não a
 > execute**.
 
+> **SUPERSEDED novamente em 2026-08-02:** o owner vivo agora é a task C#
+> `civm-host-orchestrator`; `civm-vm-orchestrator` permanece `Disabled` como
+> rollback. Esta seção preserva o corte histórico de 2026-06-17.
+
 Script de host registrado como task SYSTEM a cada **30 min**. Ele é o
 caminho preventivo para o caso recorrente: `V:` vai enchendo durante o
 dia, mas o guest ainda tem espaço livre. Diferente do
@@ -485,27 +489,32 @@ segredo fica no repo (SPECv2 DT-v2-6). Registradas por
 `deploy/windows/register-*.ps1` com `schtasks /create ... /ru SYSTEM
 /rl HIGHEST /f`. Reversível por `schtasks /delete`.
 
-**Estado esperado das tasks (2026-06-17):**
+**Estado esperado das tasks (2026-08-02, após cutover F4):**
 
 | Task | Estado esperado | Papel |
 | --- | --- | --- |
-| `civm-vm-orchestrator` | **Ready/Running** (~1 min) | **Dono ativo** do power-state: liga sob demanda + stop+compact ocioso/panic |
+| `civm-host-orchestrator` | **Ready/Running** (~2 min) | **Dono C# ativo** do power-state, fila e compactação |
+| `civm-vm-orchestrator` | **Disabled** | Owner PowerShell mantido somente para rollback |
 | `civm-host-metrics` | Ready (10 min) | Entrega de métricas do host (`V:` + `Get-VHD`) ao guest |
+| `civm-watchdog` | Ready (20 min + startup) | Detecta owner zero/dual, heartbeat C# stale e latch de processo |
 | `civm-vhdx-autoreclaim` | **Disabled** (superseded) | Reclaim antigo — subsumido pelo orchestrator |
 | `civm-vhdx-optimize` | **Disabled** (break-glass) | Compactação offline manual — só com o orchestrator pausado |
 | `civm-vhdx-optimize-watchdog` | **Disabled** (superseded) | Religaria a VM que o orchestrator mantém Off de propósito |
 
-A task ativa de reclaim é o `civm-vm-orchestrator` — `autoreclaim`,
+A task ativa de reclaim é o `civm-host-orchestrator` — o PowerShell,
+`autoreclaim`,
 `optimize` e `optimize-watchdog` estão **Disabled por design** (um dono
 só do stop/compact/power-state, fail-safe Kahneman #15). Uma auditoria
-saudável vê o orchestrator `Ready`/rodando e as três tasks antigas
-`Disabled`; ver `civm-host-metrics` `Ready` é esperado (ele alimenta o
-guard de headroom).
+saudável vê o owner C# `Ready`/rodando, as quatro tasks antigas `Disabled` e
+`civm-watchdog` em `OK`; ver `civm-host-metrics` `Ready` é esperado.
 
 ```powershell
 # Verificar registro/saúde das tasks
-schtasks /query /tn civm-vm-orchestrator         /v /fo LIST   # dono ativo
+schtasks /query /tn civm-host-orchestrator       /v /fo LIST   # dono ativo
+schtasks /query /tn civm-vm-orchestrator         /v /fo LIST   # esperado: Disabled
 schtasks /query /tn civm-host-metrics            /v /fo LIST
+schtasks /query /tn civm-watchdog                /v /fo LIST
+Get-Content V:\civm-watchdog-status.txt
 schtasks /query /tn civm-vhdx-autoreclaim        /v /fo LIST   # esperado: Disabled
 schtasks /query /tn civm-vhdx-optimize           /v /fo LIST   # esperado: Disabled
 schtasks /query /tn civm-vhdx-optimize-watchdog  /v /fo LIST   # esperado: Disabled
@@ -516,6 +525,10 @@ schtasks /delete /tn civm-vhdx-optimize /f
 
 ## Histórico
 
+- **2026-08-02** — `civm-host-orchestrator` vira o owner ativo. O watchdog
+  passa a validar owner único, heartbeat C# e latch de processo sem mutar tasks.
+  A admissão ocorre por geração `<contexto>@<head_sha>` após cleanup guest,
+  TRIM, compactação e broker-ready.
 - **2026-06-17** — Orchestrator scale-to-zero subsume o stop+compact.
   O `civm-vm-orchestrator.ps1` virou o **único dono** do
   power-state da VM (liga sob demanda na fila; full clean + Stop-VM +

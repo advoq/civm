@@ -75,6 +75,12 @@ journalctl -u civmctl-run-reaper.service -n 20 --no-pager
 
 `civmctl health` trata timer ou service do reaper ausente/falho como crítico.
 
+No host Windows, `civm-host-orchestrator` é o owner C# ativo. A task legada
+`civm-vm-orchestrator` fica `Disabled` e serve somente para rollback.
+`civm-watchdog` é detect-only: exige exatamente um owner, heartbeat C# com no
+máximo 45 min e `processBlockedReason` vazio; nunca inicia, habilita, desabilita
+ou troca tasks automaticamente.
+
 > Por quê: a box é **1 VM compartilhada por 8 runners** (não VM-por-job como o pago). A fidelidade vem de
 > **tratar cada job como efêmero** + **serializar + compactar**. Clonar repo na VM ou deixar estado quebra
 > essa simulação e enche o disco. Os 🧱 estruturais (daemon/disco/dwell compartilhados) estão documentados
