@@ -79,6 +79,11 @@ sudo chmod 0600 /etc/civm/runner-watchdog.env
 Se usar `GH_TOKEN` nesse arquivo em vez de `GH_CONFIG_DIR`, tratar como
 secret operacional: root-only, fora do repo e rotacionado após incidente.
 
+O service também lê `/etc/civm/run-reaper.env`. A variável
+`CIVM_REAPER_REPOS` define a fleet usada para comprovar jobs queued com labels
+`self-hosted,civm`. Sem essa fleet, a cura de sessão online/ociosa fica
+desabilitada; o watchdog não adivinha repos.
+
 O disk-watchdog checa disk %; se acima do threshold (default 60% via
 `civm.DefaultPreCleanupPct`), roda `civmctl disk-watchdog --execute`,
 que delega para `civmctl cleanup --execute` com thresholds agressivos

@@ -297,7 +297,8 @@ ssh gha-ubuntu-2404 'civmctl host-disk --json'
 > `Start-Transcript` e poll de `v_free` a cada 5 s, registrando o
 > **low-water mark** do scratch durante o `Optimize-VHD`. Em 2026-05-31,
 > o host Day-0 foi calibrado com `DefaultHostVolumeHeadroomGB=8`, porque
-> `V:` tem 119 GB, o VHDX max tem 110 GB e o volume não pode ser expandido
+> `V:` tem `119,24 GiB`; desde 30/07/2026, o VHDX max tem `40 GiB` e o
+> volume não pode ser expandido
 > (`Get-PartitionSupportedSize -DriveLetter V` mostrou `SizeMax` igual ao
 > tamanho atual). Rollback trigger: se o low-water real chegar a `<=8 GB`,
 > eleve a constante ou mova/expanda o volume antes de reabilitar a task

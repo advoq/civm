@@ -33,7 +33,12 @@ Antes de planejar, editar ou abrir PR:
 ## Visão geral da stack
 
 - **CLI**: Go 1.26 — `civmctl` (`github.com/advoq/civm`), provisiona e mantém a VM self-hosted (GitHub Actions runner, label `civm`).
-- **VM**: Ubuntu 24.04 LTS em paridade com `ubuntu-latest`, gerenciada via Hyper-V no host; **scale-to-zero** (liga sob demanda, gate de disco ~55GB — `AdmitFloorGB`; guest floor 40, clean-slate por job `MinFreeGB`=58).
+- **VM**: Ubuntu 24.04 LTS em paridade de efeito com `ubuntu-latest`,
+  gerenciada via Hyper-V no host; **scale-to-zero**. Geometria atual:
+  disco guest `40 GiB`, `/` útil `37,70 GiB`, `V:` host `119,24 GiB` e
+  baseline Off/compactado `80,50 GiB`. `GuestFloorGB=40` e
+  `MinFreeGB=58` são legados inalcançáveis sob correção coordenada
+  (`civm-host#18`, issues #181/#182).
 - **Operação privilegiada é esperada**: `sudo civmctl bootstrap`, `systemctl`, units systemd e timers fazem parte do fluxo normal — diferente de repos de aplicação, aqui `sudo` é legítimo.
 
 Consulte [`rules/*.md`](rules/) para as diretrizes profundas de cada tópico.

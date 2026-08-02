@@ -114,8 +114,8 @@ genérico sem lock).
 | --- | --- |
 | Modelo de execução | **1 VM Hyper-V permanente**; **8 runners systemd** long-lived, NÃO-efêmeros, reusados job a job (acme-org em piloto **ephemeral** — ver §4 #1/#8). |
 | CPU / RAM | **Host:** Ryzen 5 3600 (12 threads), **31.9 GB RAM**. **VM/guest:** **8 GB RAM** (= o VMRS de 8 GB no V:) / 12 vCPU compartilhadas. (O "7.8 GiB" de snapshots antigos era a RAM *disponível* do guest, não o total.) |
-| Disco | **Host V: = SSD dedicado de 119.2 GB** (128G nominal), só pra VM. **Guest `/` = 108 GB** (no VHDX dinâmico, ~38 usados pós-pente-fino). V: livre: **72 Off ↔ 54-64 Running** (o swing de 8 GB é o VMRS/RAM). Ver `docs/HARDWARE.md`. |
-| Docker daemon | **1 daemon único** `29.1.3` (overlayfs, containerd snapshotter, `/var/lib/docker`). Snapshot: 0 images / **106 volumes órfãos** (`acme-<runId>_*` de runs distintas) / build cache 589 MB. |
+| Disco | **Host V: = SSD dedicado de 119,24 GiB**. **Guest `/` = 37,70 GiB** no VHDX de máximo lógico `40 GiB`. Medido em 30/07/2026: `73,19 GiB` livres no V: com VM Running e `80,50 GiB` após Off/boundary. Ver `docs/HARDWARE.md`. |
+| Docker daemon | **1 daemon único** `29.1.3` (overlayfs, containerd snapshotter, `/var/lib/docker`). Snapshot de 30/07/2026: 0 imagens, 0 containers, 0 build cache e **174 volumes inativos / 10,44 GB recuperáveis**. |
 | `$HOME` / FS | **`/home/emdev` ÚNICO** compartilhado pelos 8 runners. |
 | Rede | `eth0 <LAN_IP>/24` (**LAN doméstica + NAT**) + `tailscale0 <TAILSCALE_IP>` + `docker0`; `iptables FORWARD policy DROP`. **Não** é egress datacenter. |
 | Secrets | Entregues ao runner **persistente** (mesmo protocolo do GitHub); `.env`/`.credentials` por runner em disco compartilhado. |
@@ -133,9 +133,9 @@ genérico sem lock).
 
 | # | Dimensão | O que o PAGO garante | Estado REAL do civm (evidência) | Paridade | Lacuna | Ação para fechar |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | **Efemeridade / clean-slate por job** | VM nova e destruída; zero estado herdado | Runner long-lived (`.runner` sem `ephemeral`); `job-completed` limpa só o `_work` próprio; **volumes/imagens de runs anteriores persistem** (106 volumes `acme-<runId>_*`). `hook.go:217-280` | ❌ | Daemon vê o acúmulo do job anterior; oposto do clean slate | `compose -p $COMPOSE_PROJECT_NAME down -v` por-run no peer + prune de volumes órfãos por-runId no boundary do hook. Clean-slate TOTAL = 🧱 (sem VM-por-job) |
+| 1 | **Efemeridade / clean-slate por job** | VM nova e destruída; zero estado herdado | Runner long-lived; em 30/07/2026 restaram `174` volumes (`171` Compose named) e `10,44 GB` recuperáveis apesar de `Compacted`. | ❌ | Daemon vê o acúmulo do job anterior; oposto do clean slate | `down -v` por-run + remoção scoped no boundary (`advoq/civm#181`). Clean-slate TOTAL = 🧱 sem VM-por-job |
 | 2 | **Isolamento de daemon Docker** | Daemon próprio e vazio por job | 1 daemon único `29.1.3`; corrida "No such image" do prune concorrente já corrigida (`7e9cc0d`); SPEC marca daemon-por-runner como **fora de escopo** | 🧱 | Content store / RAM / disco fisicamente compartilhados; daemon-por-runner = isolamento falso | N/A — 🧱 sem VM-por-job. Máximo viável = **serialização docker-heavy** (`civmctl lock`, #2 da §6) reduz a janela de corrida a ~zero |
-| 3 | **Isolamento de disco** | ~14 GB SSD próprio e fresco por job | 1 partição 108 GB; pressão de um job afeta todos; `disk-watchdog` + `HardFailPct` podem **rejeitar job (exit 75)** — algo que o pago nunca faz. `hook.go:242-245` | ❌ (frescor é 🧱) | Sem cotas por-runner (cgroup/FS quota não implementadas) | `down -v` por-run + lock-serialização (nunca 2 bring-ups somando disco) + expandir disco. Frescor real = 🧱 sem clean slate (#1) |
+| 3 | **Isolamento de disco** | ~14 GB SSD próprio e fresco por job | 1 filesystem compartilhado de `37,70 GiB`; pressão de um job afeta todos; `disk-watchdog` + `HardFailPct` podem rejeitar job (exit 75). | ❌ (frescor é 🧱) | Sem cotas por-runner; floors legados de `40/58 GB` excedem a capacidade atual | `down -v` + serialização + floors medidos (#181/#182). Frescor real = 🧱 sem clean slate (#1) |
 | 4 | **Isolamento de FS / `$HOME`** | `$HOME` fresco por job | `/home/emdev` ÚNICO p/ 8 runners; **cache slot por-runner** (`*-acme-$SLOT`) fecha só a pasta de cache, não o `$HOME` inteiro | 🟡 | `$HOME` per-runner (RF-1 forte) segue NO-GO (sem código, SPECv4) | Manter slot; auditar todo caminho que escreve fora do slot; scrub de `_work`/`/tmp` no boundary |
 | 5 | **Isolamento de rede / portas** | netns próprio da VM | netns único do host; colisão evitada por `CIVM_PORT_BASE` (bloco de 64, sticky em `port-blocks.json`); janela `[20000,32000)` **abaixo** do ephemeral do kernel (`32768`, confirmado) | 🟡 | Sem netns real, dois jobs ainda compartilham `localhost`; só funciona se o peer **adota** `${CIVM_PORT_BASE}` | `ci-guard` R1/R2/R3 lintam `container_name`/porta literal/`COMPOSE_PROJECT_NAME` ausente. Sem netns = 🧱 |
 | 6 | **Secrets** | Injetados por job; VM destruída remove rastro | Mesmo protocolo de runner do GitHub; MAS persistem em `$HOME`/`_work`/disco compartilhado **entre jobs** até cleanup; daemon e caches compartilhados ampliam a janela | 🟡 | Raio de exposição maior (persistência + vizinhos) que no pago | Scrub de `_work`/`/tmp` no `job-completed`; nunca compartilhar secret via env global; runner dedicado p/ workflow com secret sensível; não rodar peer não-confiável co-residente |
@@ -160,7 +160,7 @@ como divergências aceitas (não bugs ocultos) é o oposto do verde-mudo.
 | Dimensão | Por que é 🧱 (com o número real) |
 | --- | --- |
 | **Daemon Docker isolado (#2)** | 1 único `/var/lib/docker` para 8 runners. Daemon-por-runner (rootless dockerd / `DOCKER_HOST`) está **fora de escopo no SPEC** (`docs/specs/multi-project-isolation/SPEC.md`) porque o **content store do containerd, a RAM e o disco continuam fisicamente compartilhados** — seria isolamento de nome, não de recurso. Daria a ilusão de paridade sem o efeito. |
-| **Disco dedicado por job (#3)** | 1 partição `/dev/sda2 108G` total. O pago dá ~14 GB **frescos e dedicados** por job; a box dá `35G livre` (snapshot) **compartilhados** por 8 runners, e pode **rejeitar um job** (exit 75) sob pressão — o pago nunca rejeita por disco. Frescor exige clean-slate, que exige VM-por-job. |
+| **Disco dedicado por job (#3)** | 1 filesystem `/` de `37,70 GiB`. O pago dá ~14 GB **frescos e dedicados** por job; a box tinha `14,03 GiB` livres no snapshot, compartilhados, e pode rejeitar job (exit 75) sob pressão. Frescor exige clean-slate, que exige VM-por-job. |
 | **RAM / CPU dedicados (#5/#8)** | **7.8 GiB RAM totais** (snapshot; resize volátil 7.7↔9.9) para a box inteira < **16 GB POR JOB** do pago. Swap já em uso (559 MiB), load `4.83`. `MaxHeavy=2` mitiga, mas 2 heavy + 6 light disputam <8 GiB. Um job que precise de >5 GiB sozinho pode OOM onde o pago não OOMaria. Sem expansão de RAM, não há paridade. |
 | **Segurança cross-job sem dwell (#13)** | O pago incinera a VM ⇒ ataque de um job não persiste para o próximo. A box tem **co-residência real** de peers no mesmo kernel/daemon/`/home/emdev` (admitido no threat model do `SECURITY.md`). Sem VM-por-job, o dwell cross-job é inerente. Mitiga-se com label dedicado e não rodando peer não-confiável, nunca se elimina. |
 
@@ -195,7 +195,8 @@ item com o estado atual VERIFICADO.
 3. **`compose -p $COMPOSE_PROJECT_NAME down -v` por-run no peer** — *estado: não feito.*
    Único jeito de recuperar volumes/disco do run **na hora** (não no próximo tick
    de cleanup). Fecha #1 (clean-slate parcial), #3 (disco) e #10 (volumes nomeados
-   sobrevivem) de uma vez. Os 106 volumes órfãos medidos são a prova de que falta.
+   sobrevivem) de uma vez. Os `174` volumes inativos medidos em 30/07/2026 são
+   a prova de que falta.
 
 4. **Subir o registry-mirror `:5000`** — *estado: configurado, morto.*
    `/etc/docker/daemon.json` aponta `registry-mirrors: http://127.0.0.1:5000`, mas

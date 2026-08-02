@@ -51,6 +51,11 @@ go tool cover -func=/tmp/civm-coverage.out
 3. **Sem `t.Skip`** sem motivo documentado e issue rastreável.
 4. **Sem `Sleep`** para sincronizar — use channels/contextos/eventos.
 5. **Injeção hermética** (`RunFn`/`ReadFileFn`/`NowFn`) em vez de mock pesado — padrão dos packages `internal/**`; lint Go guarda a camada host (ex.: `internal/hostdisk`).
+6. **Cleanup/runner automático prova efeito.** Named volumes: allowlist,
+   rechecagem de idle, pós-condição e idempotência 2x. Queue stall: labels
+   elegíveis, dwell, Worker aparecendo antes da mutação, marker inválido,
+   exatamente 1 restart, estado `unresolved`, paginação e limpeza do incidente
+   quando API/Worker comprovam consumo.
 
 ## Don't
 

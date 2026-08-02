@@ -138,6 +138,20 @@ func TestRunRunnerWatchdogRejectsNonPositiveMaxRunAge(t *testing.T) {
 	}
 }
 
+func TestRunRunnerWatchdogRejectsNonPositiveQueueStallDwell(t *testing.T) {
+	t.Parallel()
+	if code := runRunnerWatchdog([]string{"--queue-stall-dwell=0s"}); code != exitUsage {
+		t.Fatalf("code = %d, want %d", code, exitUsage)
+	}
+}
+
+func TestRunCleanupRejectsManagedVolumesWithoutDocker(t *testing.T) {
+	t.Parallel()
+	if code := runCleanup([]string{"--managed-volumes", "--no-docker"}); code != exitUsage {
+		t.Fatalf("code = %d, want %d", code, exitUsage)
+	}
+}
+
 func TestRunDiskAuditRejectsInvalidBounds(t *testing.T) {
 	t.Parallel()
 	for _, args := range [][]string{

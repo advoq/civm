@@ -21,6 +21,11 @@ func runCleanup(args []string) int {
 	tmpDir := fs.String("tmp-dir", civm.DefaultTmpDir, "diretorio /tmp")
 	codespaceDir := fs.String("codespace-dir", civm.DefaultCodespaceDir, "diretorio de clones manuais (sentinel: glob /home/*/codespace)")
 	noDocker := fs.Bool("no-docker", false, "nao rodar docker prune")
+	managedVolumes := fs.Bool(
+		"managed-volumes",
+		false,
+		"boundary: remover volumes Compose gerenciados (exige admissao fechada)",
+	)
 	noApt := fs.Bool("no-apt", false, "nao rodar apt clean")
 	timeoutMin := fs.Int("timeout", civm.DefaultCleanupTimeoutMinutes, "timeout em minutos")
 	if err := fs.Parse(args); err != nil {
@@ -29,6 +34,10 @@ func runCleanup(args []string) int {
 	}
 	if *execute && *dryRun {
 		fmt.Fprintln(os.Stderr, "erro: --execute e --dry-run sao mutuamente exclusivos")
+		return exitUsage
+	}
+	if *managedVolumes && *noDocker {
+		fmt.Fprintln(os.Stderr, "erro: --managed-volumes e --no-docker sao mutuamente exclusivos")
 		return exitUsage
 	}
 	if *execute {
@@ -43,6 +52,7 @@ func runCleanup(args []string) int {
 	opts.TmpDir = *tmpDir
 	opts.CodespaceDir = *codespaceDir
 	opts.DockerPrune = !*noDocker
+	opts.ManagedVolumePrune = *managedVolumes
 	opts.AptClean = !*noApt
 	actions := cleanup.Run(ctx, opts)
 	cleanup.RenderTable(actions, opts, os.Stdout)

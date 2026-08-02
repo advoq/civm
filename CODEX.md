@@ -59,6 +59,11 @@ O cleanup de `_work` preserva caches de runner em `_work/_tool` e
 actions; só devem ser removidos manualmente depois de medir pressão real de
 disco e confirmar host ocioso.
 
+Volumes Compose named só entram com `cleanup --managed-volumes`, opt-in do
+boundary cuja admissão está fechada. A remoção usa inventário, labels
+gerenciadas e nomes explícitos; timers/hooks rotineiros não habilitam a flag e
+`docker volume prune -af` global é proibido.
+
 `civmctl runner restart/remove/upgrade/watchdog --execute` usa a mesma
 checagem compartilhada (`civmctl idle-check`). Mutação de runner deve abortar
 antes de `systemctl restart/stop`, `config.sh remove`, `rm -rf`, upgrade de
@@ -69,6 +74,10 @@ diretório.
 
 `civmctl-runner-watchdog.timer` roda sem `--rerun-network-failures` por
 padrão; ele repara hooks e runner offline/failed, mas não reroda CI remoto.
+Para runner org `online,busy=false` com fila `self-hosted,civm`, lê a fleet de
+`CIVM_REAPER_REPOS`, exige a mesma assinatura por `5 min` e idle-check completo,
+persiste antes de agir e permite exatamente 1 restart por incidente. Sem
+recuperação, marca `unresolved`; nunca reabre o budget após 1 hora.
 `civmctl-metrics.timer` roda read-only e grava apenas o textfile Prometheus
 em `/var/lib/node_exporter/textfile_collector/civm.prom`.
 

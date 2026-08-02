@@ -7,6 +7,10 @@ issues: []
 
 # PRD — Confiabilidade do runner civm: equivalente gratuito e auto-curável do GitHub Actions para todos os repos
 
+> Extensão de 30/07/2026: o estado `active/running + online,busy=false` com
+> fila elegível não era coberto pelo RF-6. O contrato complementar está em
+> `../stalled-runner-recovery/{PRD,SPEC,IMPL}.md` (issue #180).
+
 > Tipo: capacidade de plataforma do runner (`civmctl` guest + componente Windows host + sudoers/tmpfiles deploy + runbook). Sem schema de banco, endpoint de produto ou evento de domínio.
 > Política Day-0: o civm não tem produção viva com dados legados obrigatórios; backfill = N/A. Solução primária única, sem dual-path "disciplina-OU-primitivo".
 > Origem: o box civm (host Windows Hyper-V `EMEDEV` + guest `gha-ubuntu-2404`) é o **único** runner self-hosted gratuito que substitui os GitHub-hosted runners para **todos** os repos do usuário (`acme/app`, `acme/civm`, `other/{peer,service-b,service-c,service-d,service-a}` — 8 serviços: `civm-app`, `civm-acme-org`, `civm-service-a`, `civm-service-b`, `civm-self`, `civm-service-c`, `civm-service-d`, `civm-peer`). Ele **precisa** se comportar como "GitHub-hosted Actions" porque o usuário não pode pagar runners hospedados. O diagnóstico de 2026-05-29 (verificado contra código-fonte E box vivo) encontrou modos de falha que tiram runners do ar em silêncio e os deixam quebrados para **todos** os jobs subsequentes. Este PRD os substitui por primitivos civm corretos, seguros e auto-curáveis.

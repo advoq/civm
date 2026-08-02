@@ -76,6 +76,12 @@ com `WorkRoot`, disco, cleanup aplicado).
 scrape local. `host-metrics.json` (no host, `V:\`) carrega `v_free_gb` e o gap do
 VHDX, consumido pelo guard de headroom do reclaim.
 
+O runner-watchdog expõe `queue-stall-armed`, `runner-restarted`,
+`queue-stall-recovered` e `queue-stall-unresolved`, com unit, contagem e idade,
+sem IDs como labels. `capacity` lê o marker semântico: qualquer stall ativo ou
+marker inválido torna `accepting_jobs=false`. Prometheus expõe
+`civm_runner_queue_stalled`; `health` verifica timer e resultado do service.
+
 ## Log de validação empírica (`validation.md`)
 
 `validation.md` na raiz é o log append-only de **toda validação empírica de

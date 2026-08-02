@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -26,6 +27,8 @@ type Report struct {
 	RunnerWorkers  int    `json:"runner_workers"`
 	AcceptingJobs  bool   `json:"accepting_jobs"`
 	Reason         string `json:"reason,omitempty"`
+	QueueStalled   bool   `json:"queue_stalled"`
+	QueueStallUnit string `json:"queue_stall_unit,omitempty"`
 	// DockerHeavyLockActive mirrors dockerlock.IsActive: a docker-heavy job is
 	// holding the box-wide serialization lock right now (ITEM-7 / DT-v2-13).
 	DockerHeavyLockActive bool `json:"docker_heavy_lock_active"`
@@ -65,6 +68,10 @@ type Options struct {
 	// probes the flock slots non-destructively. Injected so tests never touch
 	// /run/civm.
 	AdmitStatusFn func() AdmitStatus
+	// QueueStallFn reads the runner watchdog's semantic marker. Parse errors
+	// fail closed because advertising capacity while a session is stuck leaves
+	// the eligible queue idle despite healthy disk.
+	QueueStallFn func() (stalled bool, unit string, err error)
 }
 
 func DefaultOptions() Options {
@@ -76,7 +83,44 @@ func DefaultOptions() Options {
 		LockActiveFn:  defaultLockActive,
 		PortBlocksFn:  defaultPortBlocks,
 		AdmitStatusFn: defaultAdmitStatus,
+		QueueStallFn:  defaultQueueStall,
 	}
+}
+
+func defaultQueueStall() (bool, string, error) {
+	return queueStallFromFile(civm.DefaultRunnerWatchdogMarkerPath)
+}
+
+func queueStallFromFile(path string) (bool, string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, "", nil
+		}
+		return false, "", err
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return false, "", nil
+	}
+	var state struct {
+		QueueStalls map[string]struct {
+			Signature string `json:"signature"`
+		} `json:"queue_stalls"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return false, "", fmt.Errorf("parse runner watchdog marker: %w", err)
+	}
+	var units []string
+	for unit, incident := range state.QueueStalls {
+		if strings.TrimSpace(incident.Signature) != "" {
+			units = append(units, unit)
+		}
+	}
+	if len(units) == 0 {
+		return false, "", nil
+	}
+	sort.Strings(units)
+	return true, units[0], nil
 }
 
 // defaultLockActive wraps dockerlock so capacity does not duplicate the
@@ -190,6 +234,9 @@ func Check(ctx context.Context, opts Options) Report {
 	if opts.AdmitStatusFn == nil {
 		opts.AdmitStatusFn = defaultAdmitStatus
 	}
+	if opts.QueueStallFn == nil {
+		opts.QueueStallFn = defaultQueueStall
+	}
 	r := Report{DiskPath: opts.Path, AcceptingJobs: true}
 	// Lock/port/admit telemetry is best-effort and never blocks job acceptance: a
 	// read error leaves DockerHeavyLockActive=false (DT-v2-13).
@@ -211,6 +258,16 @@ func Check(ctx context.Context, opts Options) Report {
 	r.DiskTotalGB = int64(total / (1 << 30))
 	r.RunnerServices = countRunnerServices(ctx, opts.RunFn)
 	r.RunnerWorkers = countRunnerWorkers(ctx, opts.RunFn)
+	stalled, unit, queueErr := opts.QueueStallFn()
+	if queueErr != nil {
+		r.AcceptingJobs = false
+		r.Reason = "runner queue state unavailable: " + queueErr.Error()
+	} else if stalled {
+		r.QueueStalled = true
+		r.QueueStallUnit = unit
+		r.AcceptingJobs = false
+		r.Reason = "runner queue stall: " + unit
+	}
 	if r.DiskUsedPct >= opts.MaxDiskPct {
 		r.AcceptingJobs = false
 		r.Reason = fmt.Sprintf("disk usage %d%% >= %d%%", r.DiskUsedPct, opts.MaxDiskPct)

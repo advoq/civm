@@ -130,6 +130,15 @@ func (c *Collector) Collect(ctx context.Context) Report {
 	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_REVERSE", "civmctl-reverse-watchdog.timer", StatusWarn))
 	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_METRICS", "civmctl-metrics.timer", StatusWarn))
 	r.Checks = append(r.Checks, c.checkTimer(ctx, "TIMER_REAPER", "civmctl-run-reaper.timer", StatusCritical))
+	r.Checks = append(
+		r.Checks,
+		c.checkServiceResult(
+			ctx,
+			"SERVICE_RUNNER_WATCHDOG",
+			"civmctl-runner-watchdog.service",
+			StatusCritical,
+		),
+	)
 	r.Checks = append(r.Checks, c.checkServiceResult(ctx, "SERVICE_REAPER", "civmctl-run-reaper.service", StatusCritical))
 	r.Checks = append(r.Checks, c.checkLastCleanup(ctx))
 	return r
