@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1232,6 +1233,7 @@ func TestDefaultWatchdogRestartKeepsListenerFrozenUntilRestart(t *testing.T) {
 	}
 	want := []string{
 		"sudo systemctl freeze actions.runner.advoq.civm-advoq-org.service",
+		"sudo systemctl kill --kill-who=all --signal=SIGKILL actions.runner.advoq.civm-advoq-org.service",
 		"sudo systemctl restart actions.runner.advoq.civm-advoq-org.service",
 		"sudo systemctl thaw actions.runner.advoq.civm-advoq-org.service",
 		"systemctl is-active actions.runner.advoq.civm-advoq-org.service",
@@ -1276,6 +1278,73 @@ func TestDefaultWatchdogRestartAllowsInactiveUnitWithoutFreeze(t *testing.T) {
 	}
 	if restarts != 1 || activityCalls != 0 {
 		t.Fatalf("restarts=%d activityCalls=%d, want 1/0", restarts, activityCalls)
+	}
+}
+
+func TestDefaultWatchdogRestartPurgesFailedUnitCgroupBeforeRestart(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.RestartDelay = 0
+	var calls []string
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		calls = append(calls, call)
+		switch call {
+		case "sudo systemctl freeze actions.runner.advoq.civm-advoq-org.service":
+			return nil, errors.New("unit is failed")
+		case "systemctl is-active actions.runner.advoq.civm-advoq-org.service":
+			if slices.Contains(calls, "sudo systemctl restart actions.runner.advoq.civm-advoq-org.service") {
+				return []byte("active\n"), nil
+			}
+			return []byte("failed\n"), errors.New("exit status 3")
+		}
+		return nil, nil
+	}
+
+	if err := defaultWatchdogRestart(
+		context.Background(),
+		opts,
+		"actions.runner.advoq.civm-advoq-org.service",
+	); err != nil {
+		t.Fatalf("defaultWatchdogRestart: %v", err)
+	}
+	kill := slices.Index(calls, "sudo systemctl kill --kill-who=all --signal=SIGKILL actions.runner.advoq.civm-advoq-org.service")
+	restart := slices.Index(calls, "sudo systemctl restart actions.runner.advoq.civm-advoq-org.service")
+	if kill < 0 || restart < 0 || kill > restart {
+		t.Fatalf("calls = %v, want cgroup kill before restart", calls)
+	}
+}
+
+func TestDefaultWatchdogRestartFailsClosedWhenCgroupPurgeFails(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.RestartDelay = 0
+	restarts := 0
+	opts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		switch call {
+		case "sudo systemctl freeze actions.runner.advoq.civm-advoq-org.service":
+			return nil, errors.New("unit is failed")
+		case "systemctl is-active actions.runner.advoq.civm-advoq-org.service":
+			return []byte("failed\n"), errors.New("exit status 3")
+		case "sudo systemctl kill --kill-who=all --signal=SIGKILL actions.runner.advoq.civm-advoq-org.service":
+			return nil, errors.New("access denied")
+		case "sudo systemctl restart actions.runner.advoq.civm-advoq-org.service":
+			restarts++
+		}
+		return nil, nil
+	}
+
+	err := defaultWatchdogRestart(
+		context.Background(),
+		opts,
+		"actions.runner.advoq.civm-advoq-org.service",
+	)
+	if err == nil || !strings.Contains(err.Error(), "systemctl kill") {
+		t.Fatalf("error = %v, want cgroup purge failure", err)
+	}
+	if restarts != 0 {
+		t.Fatalf("restarts = %d, want 0 after purge failure", restarts)
 	}
 }
 
