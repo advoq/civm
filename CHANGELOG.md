@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.22.18](https://github.com/advoq/civm/compare/v1.22.17...v1.22.18) (2026-08-02)
+
+
+### Bug Fixes
+
+* purge Playwright cache at idle boundaries ([a6bfb15](https://github.com/advoq/civm/commit/a6bfb1538cc95f38cc1bd2460dc895334f703bed))
+* purge Playwright cache at idle boundaries ([11699f3](https://github.com/advoq/civm/commit/11699f328ddd5f344afb74e7e36719543ac81f40)), closes [#207](https://github.com/advoq/civm/issues/207)
+
 ## [1.22.17](https://github.com/advoq/civm/compare/v1.22.16...v1.22.17) (2026-08-02)
 
 
