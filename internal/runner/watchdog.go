@@ -235,17 +235,41 @@ func Watchdog(ctx context.Context, opts WatchdogOptions) WatchdogReport {
 	if opts.InferRepos && len(repos) == 0 {
 		repos = inferWatchdogRepos(systemd)
 	}
+	usedOrgFleetFallback := false
+	if opts.InferRepos && len(repos) == 0 && hasWatchdogOrgRunner(systemd) {
+		configuredRepos, configErr := opts.QueueReposFn()
+		if configErr != nil {
+			report.add(WatchdogEvent{
+				Event: "runner-restart-skipped", Severity: "critical",
+				Reason: "queue-repos-failed", Detail: configErr.Error(),
+			})
+			report.Exit = 2
+			return report
+		}
+		repos, err = normalizeWatchdogRepos(configuredRepos)
+		if err != nil {
+			report.add(WatchdogEvent{
+				Event: "runner-restart-skipped", Severity: "critical",
+				Reason: "queue-repos-failed", Detail: err.Error(),
+			})
+			report.Exit = 2
+			return report
+		}
+		usedOrgFleetFallback = len(repos) > 0
+	}
 	report.Repos = repos
-	if len(repos) == 0 {
+	if len(repos) == 0 || usedOrgFleetFallback {
 		localOnlineBeforeRepair := anyLocalRunnerOnline(systemd)
 		recoverWatchdogOrgBusyWithoutWorker(ctx, opts, systemd, &report)
-		recoverWatchdogOrgIdleWithQueue(ctx, opts, systemd, &report)
+		recoverWatchdogOrgIdleWithQueue(ctx, opts, systemd, repos, &report)
 		if err := restartWatchdogRunners(ctx, opts, systemd, nil, &report); err != nil {
 			report.Exit = 2
 			return report
 		}
 		report.RunnerOnline = localOnlineBeforeRepair || watchdogReportHasEvent(report, "runner-restarted")
-		report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "warning", Reason: "no-repos"})
+		if len(repos) == 0 {
+			report.add(WatchdogEvent{Event: "rerun-skipped", Severity: "warning", Reason: "no-repos"})
+		}
 		if len(systemd) == 0 {
 			report.Exit = maxExit(report.Exit, 1)
 		}
@@ -576,6 +600,7 @@ func recoverWatchdogOrgIdleWithQueue(
 	ctx context.Context,
 	opts WatchdogOptions,
 	systemd []Status,
+	repos []string,
 	report *WatchdogReport,
 ) {
 	var local *Status
@@ -599,20 +624,9 @@ func recoverWatchdogOrgIdleWithQueue(
 		return
 	}
 
-	repos, err := opts.QueueReposFn()
-	if err != nil {
-		report.add(WatchdogEvent{
-			Event: "runner-restart-skipped", Severity: "critical", Unit: local.UnitName,
-			Reason: "queue-repos-failed", Detail: err.Error(),
-		})
-		report.Exit = maxExit(report.Exit, 2)
-		return
-	}
 	if len(repos) == 0 {
 		return
 	}
-	report.Repos = append([]string(nil), repos...)
-	sort.Strings(report.Repos)
 
 	ghRunner, found, err := watchdogOrgRunner(ctx, opts, *local)
 	if err != nil {
@@ -821,6 +835,36 @@ func recoverWatchdogOrgIdleWithQueue(
 	}
 	report.Metrics.RunnerRestarts++
 	report.add(event)
+}
+
+func hasWatchdogOrgRunner(systemd []Status) bool {
+	for _, status := range systemd {
+		if status.Org != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeWatchdogRepos(repos []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(repos))
+	normalized := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		repo = strings.TrimSpace(repo)
+		if repo == "" {
+			continue
+		}
+		if err := civm.ValidateRepo(repo); err != nil {
+			return nil, fmt.Errorf("fleet do watchdog: %w", err)
+		}
+		if _, duplicate := seen[repo]; duplicate {
+			continue
+		}
+		seen[repo] = struct{}{}
+		normalized = append(normalized, repo)
+	}
+	sort.Strings(normalized)
+	return normalized, nil
 }
 
 func clearQueueStallIncident(

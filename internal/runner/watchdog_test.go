@@ -1093,6 +1093,50 @@ func TestDefaultWatchdogQueueReposValidatesAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestWatchdogOrgFleetResolutionFailsClosed(t *testing.T) {
+	t.Parallel()
+	opts := baseWatchdogOptions(t)
+	opts.Repos = nil
+	opts.InferRepos = true
+	opts.SystemRunnersFn = func(context.Context) ([]Status, error) {
+		return []Status{{
+			UnitName: "actions.runner.advoq.civm-advoq-org.service",
+			Org:      "advoq",
+			Name:     "civm-advoq-org",
+		}}, nil
+	}
+	opts.QueueReposFn = func() ([]string, error) {
+		return nil, errors.New("fleet unreadable")
+	}
+	restarts := 0
+	opts.RestartFn = func(context.Context, string) error {
+		restarts++
+		return nil
+	}
+
+	report := Watchdog(context.Background(), opts)
+	if report.Exit != 2 || restarts != 0 {
+		t.Fatalf("report=%+v restarts=%d, want exit 2 without mutation", report, restarts)
+	}
+	if !hasWatchdogEventWithReason(report, "runner-restart-skipped", "queue-repos-failed") {
+		t.Fatalf("events=%+v, want queue-repos-failed", report.Events)
+	}
+}
+
+func TestNormalizeWatchdogRepos(t *testing.T) {
+	t.Parallel()
+	got, err := normalizeWatchdogRepos([]string{" advoq/civm ", "advoq/advoq", "advoq/civm", ""})
+	if err != nil {
+		t.Fatalf("normalizeWatchdogRepos: %v", err)
+	}
+	if strings.Join(got, ",") != "advoq/advoq,advoq/civm" {
+		t.Fatalf("repos=%v, want sorted unique fleet", got)
+	}
+	if _, err := normalizeWatchdogRepos([]string{"advoq"}); err == nil {
+		t.Fatal("normalizeWatchdogRepos accepted repo without owner/name")
+	}
+}
+
 func TestWatchdogRestartsOrgRunnerBusyWithoutLocalWorker(t *testing.T) {
 	t.Parallel()
 	now := testWatchdogNow
