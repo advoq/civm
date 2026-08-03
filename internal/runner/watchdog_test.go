@@ -877,6 +877,9 @@ func TestWatchdogRestartsOnlineIdleOrgRunnerWithPersistentCivmQueueOnce(t *testi
 	if strings.Join(first.Repos, ",") != "advoq/advoq" {
 		t.Fatalf("queue fleet missing from report: %+v", first.Repos)
 	}
+	if hasWatchdogEventWithReason(first, "rerun-skipped", "no-repos") {
+		t.Fatalf("configured org fleet contradicted by no-repos: %+v", first.Events)
+	}
 
 	now = now.Add(6 * time.Minute)
 	second := Watchdog(context.Background(), opts)
