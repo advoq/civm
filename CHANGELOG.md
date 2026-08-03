@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.22.22](https://github.com/advoq/civm/compare/v1.22.21...v1.22.22) (2026-08-03)
+
+
+### Bug Fixes
+
+* **runner:** resolve org fleet before no-repos ([592cfec](https://github.com/advoq/civm/commit/592cfecdce88c7f71bca3630d3d213242eb8290a))
+* **runner:** resolve org fleet before no-repos ([50f3fde](https://github.com/advoq/civm/commit/50f3fde85f284ebb5b31f35ce3487d20cce47974)), closes [#221](https://github.com/advoq/civm/issues/221)
+
 ## [1.22.21](https://github.com/advoq/civm/compare/v1.22.20...v1.22.21) (2026-08-02)
 
 
