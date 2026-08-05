@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.34](https://github.com/advoq/civm/compare/v1.22.33...v1.22.34) (2026-08-05)
+
+
+### Bug Fixes
+
+* **runner:** preserve process arrays ([7024aef](https://github.com/advoq/civm/commit/7024aef4a43b2bd6acab9c33268b2013c24f5fb5))
+
 ## [1.22.33](https://github.com/advoq/civm/compare/v1.22.32...v1.22.33) (2026-08-05)
 
 
