@@ -744,7 +744,21 @@ function Assert-SafeOfficialRunnerJunction {
             $runnerRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "junction oficial fora da raiz top-level do runner: $fullName"
     }
-    $expected = [System.IO.Path]::GetFullPath((Join-Path $runnerRoot `
+    $logicalRoot = $runnerRoot
+    if ($runnerRoot.EndsWith(
+            '.rollback', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $rollbackBase = $runnerRoot.Substring(
+            0, $runnerRoot.Length - '.rollback'.Length)
+        $matchingBases = @($AllowedRunnerRoots | Where-Object {
+            [System.IO.Path]::GetFullPath($_).Equals(
+                $rollbackBase, [System.StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($matchingBases.Count -ne 1) {
+            throw "rollback sem raiz logica autorizada: $runnerRoot"
+        }
+        $logicalRoot = $rollbackBase
+    }
+    $expected = [System.IO.Path]::GetFullPath((Join-Path $logicalRoot `
         "$($Item.Name).$ExpectedRunnerVersion"))
     $actual = [System.IO.Path]::GetFullPath([string]$targets[0])
     if (-not $actual.Equals($expected, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -754,7 +768,7 @@ function Assert-SafeOfficialRunnerJunction {
     if (-not $targetItem.PSIsContainer -or
         ($targetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
         -not $targetItem.Parent.FullName.Equals(
-            $runnerRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $logicalRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "alvo da junction oficial nao e diretorio sibling real: $expected"
     }
 }

@@ -58,6 +58,9 @@ foreach ($source in $sources) {
     $external = Join-Path ([System.IO.Path]::GetTempPath()) `
         ('civm-junction-external-' + [guid]::NewGuid().ToString('N'))
     $link = Join-Path $fixture 'bin'
+    $rollbackFixture = "$fixture.rollback"
+    $rollbackLink = Join-Path $rollbackFixture 'externals'
+    $rollbackTarget = Join-Path $fixture "externals.$expectedVersion"
     try {
         New-Item -ItemType Directory -Path $fixture, $external | Out-Null
 
@@ -73,6 +76,25 @@ foreach ($source in $sources) {
         }
         Remove-Junction -Path $link
         Remove-Item -LiteralPath $target -Recurse -Force
+
+        New-Item -ItemType Directory -Path $rollbackFixture | Out-Null
+        New-Item -ItemType Directory -Path $rollbackTarget | Out-Null
+        New-Item -ItemType Junction -Path $rollbackLink `
+            -Target $rollbackTarget | Out-Null
+        $rollbackItems = @(Get-SafeTreeItems -Path $rollbackFixture `
+            -AllowedRunnerRoots @($fixture, $rollbackFixture))
+        if ($rollbackItems.Count -ne 2) {
+            throw "relocated rollback junction item mismatch: $($rollbackItems.Count)"
+        }
+        Remove-Junction -Path $rollbackLink
+        New-Item -ItemType Junction -Path $rollbackLink -Target $external | Out-Null
+        Assert-Rejected {
+            [void](Get-SafeTreeItems -Path $rollbackFixture `
+                -AllowedRunnerRoots @($fixture, $rollbackFixture))
+        } '*fora do alvo pinado*'
+        Remove-Junction -Path $rollbackLink
+        Remove-Item -LiteralPath $rollbackFixture -Recurse -Force
+        Remove-Item -LiteralPath $rollbackTarget -Recurse -Force
 
         New-Item -ItemType Junction -Path $link -Target $external | Out-Null
         Assert-Rejected {
@@ -143,6 +165,7 @@ foreach ($source in $sources) {
                 $link,
                 (Join-Path $fixture 'outside-hardlink.txt'),
                 (Join-Path $fixture 'cleanup-contract\external'),
+                $rollbackLink,
                 (Join-Path $fixture 'tools'),
                 (Join-Path $fixture 'nested\bin'),
                 (Join-Path $fixture "bin.$expectedVersion"))) {
@@ -155,6 +178,9 @@ foreach ($source in $sources) {
         }
         if (Test-Path -LiteralPath $fixture) {
             Remove-Item -LiteralPath $fixture -Recurse -Force
+        }
+        if (Test-Path -LiteralPath $rollbackFixture) {
+            Remove-Item -LiteralPath $rollbackFixture -Recurse -Force
         }
         if (Test-Path -LiteralPath $external) {
             Remove-Item -LiteralPath $external -Recurse -Force
