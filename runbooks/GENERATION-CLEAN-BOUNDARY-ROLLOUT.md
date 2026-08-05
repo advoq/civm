@@ -12,8 +12,9 @@ Implantar o contrato que impede uma geração nova de CI de começar antes de:
 6. comprovar `V:` com pelo menos **80 GiB livres**;
 7. restaurar os listeners e provar o broker antes da publicação.
 
-O rollout é obrigatoriamente **guest primeiro, host depois**. O marcador
-compatível é `civm-generation-boundary/v1`.
+O rollout de artefatos é **guest primeiro, host depois**, mas a admissão só é
+aberta no fim do cutover coordenado entre `civm`, `civm-host` e o peer. O
+marcador compatível é `civm-generation-boundary/v1`.
 
 ## O que este runbook não autoriza
 
@@ -21,7 +22,8 @@ compatível é `civm-generation-boundary/v1`.
 - Não rodar `prepare` como teste: esse verbo limpa estado e desliga a VM.
 - Não ativar dois owners de power-state/compactação.
 - Não mudar a RAM dinâmica de 7–12 GiB.
-- Não habilitar labels dinâmicos de geração durante este rollout.
+- Não restaurar labels customizadas dos gates antes de o peer exigir a label
+  dinâmica de geração.
 - Não fazer cutover, rollback ou Tier III sem janela supervisionada.
 
 ## Pré-condições
@@ -62,34 +64,53 @@ Condições obrigatórias antes de seguir:
 
 Se qualquer item falhar, parar aqui. Não deployar o controlador novo.
 
-## Fase B — controlador do host
+## Fase B — gates e controlador do host
 
 Somente em PowerShell elevado e com janela supervisionada:
 
-1. confirmar `Runner.Worker=0`, lock de reclaim livre e fila sem geração em
-   transição;
-2. validar build/test do `civm-host` que usa os comandos fixos `--check`,
+1. esperar toda run atual ficar terminal; confirmar `Runner.Worker=0`, gates
+   `busy=false`, lock de reclaim livre e fila sem geração em transição;
+2. desabilitar o publisher/owner antigo e provar que seu processo terminou;
+3. validar build/test do `civm-host` que usa os comandos fixos `--check`,
    `prepare` e `resume`;
-3. desabilitar/aguardar o owner antigo sem apagar a última definição válida;
-4. deployar o owner C# e confirmar exatamente um owner ativo;
-5. manter `CIVM_GENERATION_GATE_LABELS=false` e os gates estáticos
-   `[self-hosted,civm-gate]`;
-6. confirmar heartbeat, `LastTaskResult=0` e gate ainda vazio antes do canário.
+4. provisionar e configurar os quatro gates, um por vez. Cada gate deve
+   terminar online, sob `NETWORK SERVICE`, com **zero labels customizadas** e
+   zero Worker; o publisher continua desabilitado;
+5. auditar globalmente que todos e somente os nomes da allowlist existem, são
+   Windows, têm IDs únicos e estão online/idle, sem labels residuais;
+6. deployar o owner C# ainda `Disabled`, configurado com
+   `CIVM_GENERATION_GATE_RUNNERS` exato e
+   `C:\ProgramData\civm\gate\current-context`;
+7. atualizar o peer para exigir `civm-gate` **e** a label dinâmica da geração.
+   Os jobs permanecem inelegíveis, com `runner_id=0`, porque os gates ainda têm
+   zero labels customizadas;
+8. habilitar somente o owner C#. Ele descobre o cohort pelos nomes da allowlist,
+   mesmo sem labels customizadas, e restaura atomicamente a label-base e a label
+   dinâmica exata;
+9. confirmar owner único, heartbeat, `LastTaskResult=0` e contexto ainda vazio
+   antes do canário.
 
-O PowerShell deste repositório permanece `Disabled` como rollback. Ele usa o
-mesmo wrapper, o mesmo piso de 80 GiB e nunca chama `Stop-VM -Force`.
+O PowerShell deste repositório permanece `Disabled` como rollback legado. Ele
+usa o mesmo wrapper, o mesmo piso de 80 GiB e nunca chama `Stop-VM -Force`, mas
+não publica labels dinâmicas. Só pode ser ativado depois de desabilitar o owner
+C#, remover todas as labels customizadas dos gates e reverter o peer, de forma
+coordenada, para o contrato estático anterior.
 
 ## Canário e Tier III
 
 O canário é um PR real, pois é assim que o CI pago e a box fazem checkout:
 
 1. geração A executa todos os checks;
-2. geração B fica no gate estático;
-3. logs mostram `prepare` → VM `Off` → compactação → `V: >=80` → boot →
+2. geração B fica inelegível até o publisher atribuir ao cohort a label
+   dinâmica exata de B;
+3. o job gate de B inicia, mas espera o contexto ainda vazio;
+4. logs mostram `prepare` → VM `Off` → compactação → `V: >=80` → boot →
    `resume` → broker-ready;
-4. somente então o contexto exato de B é publicado;
-5. após B, repetir com novo push no mesmo PR para provar isolamento por SHA;
-6. executar black-box, múltiplos seeds e carga no PR consumidor.
+5. somente então o contexto exato de B é publicado;
+6. após B, repetir com novo push no mesmo PR para provar isolamento por SHA;
+7. executar black-box, múltiplos seeds e carga no PR consumidor;
+8. observar duas gerações por pelo menos 15 minutos, sem rerun manual, e provar
+   zero listener SYSTEM, zero label residual e zero run/registro órfão.
 
 Registrar em `validation.md` somente os valores medidos. Teste local não é
 evidência de Tier III.
@@ -116,6 +137,8 @@ Fazer rollback supervisionado se ocorrer qualquer um destes sinais:
 - owner zero/dual ou `processBlockedReason` preenchido;
 - 3 fronteiras ociosas consecutivas falharem sem causa classificável.
 
-O rollback restaura o artefato anterior e mantém a admissão fechada até
-reprovar idle, reaper e owner único. Nunca restaura desligamento forçado.
-
+O rollback primeiro desabilita o publisher e remove todas as labels
+customizadas do cohort. Ele restaura o artefato anterior e mantém a admissão
+fechada até reprovar idle, reaper e owner único. O peer só volta ao contrato
+estático na mesma janela que ativa o rollback legado. Nunca restaura
+desligamento forçado.

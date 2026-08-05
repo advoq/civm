@@ -967,7 +967,7 @@ Só avance se:
 | Agendamento (guest)     | systemd timers/units (`deploy/systemd/`)              | —                    |
 | Agendamento (host)      | `schtasks` Scheduled Tasks (SYSTEM, `/RL HIGHEST`)    | —                    |
 | Discard / reclaim       | `fstrim` / `discard`, `lsblk -D`, controlador SCSI vs IDE | —                |
-| Runner                  | GitHub Actions self-hosted runner (`actions.runner.*`, `gh api`) | 2.334.0   |
+| Runner                  | GitHub Actions self-hosted runner (`actions.runner.*`, `gh api`) | 2.336.0   |
 | Lint / segurança        | `golangci-lint` (`.golangci.yml`), `gosec`, `govulncheck`, `go vet` | —      |
 | Testes                  | `testing` stdlib + `go test -race`; lint host `internal/hostdisk/ps1_safety_test.go` | — |
 | CI                      | `.github/workflows/ci.yml` (`validate-templates`, `build-civmctl`, `self-hosted-smoke`) | — |

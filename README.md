@@ -26,7 +26,9 @@ health/doctor, and copy-paste workflow templates.
 
 ## Windows Hyper-V host (optional scale-to-zero)
 
-Production host brain today: PowerShell under `deploy/windows/` (Scheduled Task as **SYSTEM**).
+Production host brain today: PowerShell under `deploy/windows/`; control-plane
+tasks run as **SYSTEM**, while `civm-gate` runners use
+`NETWORK SERVICE/ServiceAccount/Limited` with protected least-privilege ACLs.
 Configure **`Repos`** and **`TokenPaths`** on the host (empty in-repo defaults by design).
 Prefer a **host-local lab wrapper** so org/repo fleets never land in git.
 

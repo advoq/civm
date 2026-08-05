@@ -18,7 +18,12 @@ Status: versão executável após Passo 2.5
 | RT-2 | `maintenance.Enter` retorna sucesso se ao menos um runner drenou | listener de outro runner pode continuar aceitando job entre idle e shutdown | adicionar `--strict`, que só retorna 0 quando todos os runners elegíveis estão parados |
 | RT-3 | `maintenance` usa timeout padrão de 30 s | timeout pode deixar drain parcial e erro pouco acionável | fronteira chama enter/exit com `--timeout=120`; failure preserva state e faz defer |
 | RT-4 | `Get-OrchestratorDecision` ainda pode admitir fora da fila | `-EnforceQueue` poderia ser contornado por branch genérico | em enforce, só `Invoke-PrGenerationQueue` pode preparar/publicar/admitir geração |
-| RT-5 | labels SHA não existem nos quatro gate runners reais | job fica inelegível e parece “espera” | contrato consumidor usa apenas `self-hosted,civm-gate` estático |
+| RT-5 | labels SHA não existem nos quatro gate runners reais antes da publicação | job fica inelegível e parece “espera” | publisher seleciona o cohort pela allowlist de nomes e atribui `civm-gate` + label SHA exata; ausência mantém fail-closed |
+
+RT-5 substitui explicitamente a decisão estática anterior. O setup deixa cada
+gate online com zero labels customizadas; o publisher não depende da label-base
+para descobrir o cohort, publica a label dinâmica exata e o peer nunca faz
+fallback ao vencer timeout.
 
 Evidência RT-2: `internal/maintenance/maintenance.go:Enter` tolera falha de
 stop/label por runner e só falha quando ambos falham em **todos**. Isso é correto

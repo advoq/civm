@@ -34,7 +34,7 @@ operação de disco em cada workflow consumidor.
 
 - **Confirmado no codebase:** `deploy/windows/civm-pr-queue.ps1` mantém FIFO e
   `Resolve-PrSlot`; `deploy/windows/civm-vm-orchestrator.ps1` consulta a API,
-  publica `V:\civm-current-context` e executa a manutenção Hyper-V.
+  publica `C:\ProgramData\civm\gate\current-context` e executa a manutenção Hyper-V.
 - **Confirmado no codebase:** `Get-PrActivity` agrupa hoje por `pr-N`/`branch-N`,
   descarta erro de token/API com `continue`, e busca no máximo uma página de
   cada status. Isso não prova que a ausência observada significa término.
@@ -158,8 +158,10 @@ check em andamento.
 - **RNF-1 — segurança operacional (Confirmado por decisão do operador):** zero
   interrupções intencionais de check; nenhum caminho automático chama
   `Stop-VM -Force` para reclamar espaço.
-- **RNF-2 — privilégio (Confirmado no codebase):** a Scheduled Task continua
-  SYSTEM para Hyper-V; código vindo de PR nunca é executado no host.
+- **RNF-2 — privilégio (Confirmado no codebase):** a Scheduled Task do control
+  plane continua SYSTEM para Hyper-V. O polling de PR confiável roda no host em
+  runner dedicado `NETWORK SERVICE/Limited`, sem checkout ou secrets fornecidos
+  pelo workflow, com binários read-only e contexto somente leitura.
 - **RNF-3 — disponibilidade (Inferência / proposta):** a espera é ilimitada
   no control plane, com logs por tick; o timeout do job-gate do consumidor será
   ampliado ao máximo suportado pelo GitHub, mas falhará fechado e visivelmente.
@@ -228,7 +230,7 @@ check em andamento.
 
 - **Inferência / proposta:** `lastCompactHeadSha` e `lastCompactContext` deixam
   de participar da decisão; nenhum dual-write é criado.
-- **Inferência / proposta:** `V:\civm-current-context` contém uma única
+- **Inferência / proposta:** `C:\ProgramData\civm\gate\current-context` contém uma única
   geração exata ou fica vazio. O valor anterior é mantido até o êxito total da
   fronteira, para que um leitor nunca receba concessão antecipada.
 - **Confirmado no codebase:** locks existentes permanecem o mecanismo de

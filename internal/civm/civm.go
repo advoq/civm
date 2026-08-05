@@ -25,10 +25,10 @@ const (
 	DefaultSystemdDir     = "/etc/systemd/system"
 	DefaultUnitsSourceDir = "/opt/civm/deploy/systemd"
 	DefaultCivmctlPath    = "/usr/local/bin/civmctl"
-	DefaultRunnerVersion  = "2.334.0"
+	DefaultRunnerVersion  = "2.336.0"
 
 	DefaultGoLinuxAMD64SHA256      = "2b2cfc7148493da5e73981bffbf3353af381d5f93e789c82c79aff64962eb556"
-	DefaultRunnerLinuxX64SHA256    = "048024cd2c848eb6f14d5646d56c13a4def2ae7ee3ad12122bee960c56f3d271"
+	DefaultRunnerLinuxX64SHA256    = "04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d"
 	DefaultNodeSourceSetup24SHA256 = "6e3d580f5bd7ccf2aa1e8df8d35c60d78e873c3ff8beb282c9bebd914904ad72"
 	DefaultYQLinuxAMD64SHA256      = "75d893a0d5940d1019cb7cdc60001d9e876623852c31cfc6267047bc31149fa9"
 	DefaultDockerGPGFingerprint    = "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"

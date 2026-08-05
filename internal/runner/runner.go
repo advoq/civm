@@ -22,7 +22,7 @@ type AddOptions struct {
 	Token         string // registration token (efêmero ~1h)
 	Short         string // suffix do diretorio: ~/actions-runner-<short>
 	Label         string // CSV de labels (default: "civm")
-	RunnerVersion string // ex: "2.334.0"
+	RunnerVersion string // ex: "2.336.0"
 	RunnerSHA256  string // sha256 do actions-runner-linux-x64 tarball
 	BaseDir       string // ex: "/home/emdev"
 	RunAsUser     string // ex: "emdev" (passa para svc.sh install)

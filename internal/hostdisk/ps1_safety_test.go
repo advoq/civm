@@ -20,6 +20,7 @@ import (
 // Max(long, long) overload is selected. This guard keeps the Int32 form from
 // ever returning to any deploy/windows script.
 var dangerousMaxMin = regexp.MustCompile(`\[math\]::(Max|Min)\(\s*0\s*,`)
+var powerShellScopedVariable = regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*):`)
 
 func TestWindowsScriptsHaveNoInt32MaxMinLiteral(t *testing.T) {
 	dir := filepath.Join("..", "..", "deploy", "windows")
@@ -48,5 +49,205 @@ func TestWindowsScriptsHaveNoInt32MaxMinLiteral(t *testing.T) {
 	}
 	if scanned == 0 {
 		t.Fatal("no .ps1 files scanned under deploy/windows")
+	}
+}
+
+func TestWindowsScriptsHaveNoAmbiguousInterpolatedVariableColon(t *testing.T) {
+	allowedScopes := map[string]bool{
+		"alias": true, "env": true, "function": true, "global": true,
+		"local": true, "private": true, "script": true, "using": true,
+		"variable": true,
+	}
+	dir := filepath.Join("..", "..", "deploy", "windows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read deploy/windows: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".ps1") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			for _, match := range powerShellScopedVariable.FindAllStringSubmatch(line, -1) {
+				if !allowedScopes[strings.ToLower(match[1])] {
+					t.Errorf("%s:%d has ambiguous $%s: interpolation; use ${%s}: instead",
+						entry.Name(), i+1, match[1], match[1])
+				}
+			}
+		}
+	}
+}
+
+func TestActiveGenerationRolloutUsesDynamicGateLabels(t *testing.T) {
+	paths := []string{
+		filepath.Join("..", "..", "runbooks", "GENERATION-CLEAN-BOUNDARY-ROLLOUT.md"),
+		filepath.Join("..", "..", "docs", "specs", "generation-clean-boundary", "SPECv2.md"),
+	}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		source := string(data)
+		for _, forbidden := range []string{
+			"CIVM_GENERATION_GATE_LABELS=false",
+			"must use only the static labels",
+			"usa apenas `self-hosted,civm-gate` estático",
+		} {
+			if strings.Contains(source, forbidden) {
+				t.Errorf("%s revives superseded static gate contract %q", path, forbidden)
+			}
+		}
+		if !strings.Contains(source, "label dinâmica") {
+			t.Errorf("%s does not document dynamic generation admission", path)
+		}
+	}
+}
+
+func TestGateRunnerTaskUsesLeastPrivilegeAndReadOnlyContext(t *testing.T) {
+	path := filepath.Join("..", "..", "deploy", "windows", "civm-gate-task-setup.ps1")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	source := string(data)
+	for _, required := range []string{
+		"S-1-5-20",
+		"-RunLevel Limited",
+		"SetAccessRuleProtection($true, $false)",
+		"FileSystemRights]::Modify",
+		"FileSystemRights]::ReadAndExecute",
+		"Join-Path $dir '_work'",
+		"Join-Path $dir '_diag'",
+		"DisableUpdate",
+		"normalizedNetwork",
+		"InheritanceFlags -ne $expectedInheritance",
+		"PropagationFlags -ne",
+		"Resolve-AccountSid",
+		"FileSystemRights]::Read",
+		"C:\\ProgramData\\civm\\gate\\current-context",
+		"Root ou ContextPath fora do escopo canônico",
+		"Assert-NotReparsePoint",
+		"Stop-ScheduledTask",
+		"-MethodName GetOwner",
+		"$allRunnerItems",
+		"create_denied",
+		"delete_denied",
+		"move_denied",
+		"acl_denied",
+		"runner_write_denied",
+		"[string]::IsNullOrWhiteSpace($result)",
+		"catch [System.UnauthorizedAccessException]",
+		"catch [System.Security.SecurityException]",
+		"task permaneceu registrada",
+		"processo preservado",
+		"Quarantine-RemoteRunner",
+		"Wait-RemoteRunnerOnline",
+		"Where-Object { $_.type -eq 'custom' }",
+		"/labels\" | Out-Null",
+		"publisher precisa estar Disabled",
+		"$listenerPath -Argument 'run'",
+		"Get-SafeTreeItems -Path $dir",
+		"System.Security.SecureString]$GitHubToken",
+	} {
+		if !strings.Contains(source, required) {
+			t.Errorf("gate task is missing least-privilege contract %q", required)
+		}
+	}
+	if !strings.Contains(source, "Disable-And-UnregisterTask") ||
+		!strings.Contains(source, "Stop-RunnerProcesses") ||
+		!strings.Contains(source, "listener nao confirmou NETWORK SERVICE") {
+		t.Error("gate task migration must fail closed on stale task or wrong process owner")
+	}
+	if strings.Contains(source, "-UserId 'SYSTEM'") ||
+		strings.Contains(source, "-RunLevel Highest") {
+		t.Error("gate task must not run as SYSTEM/Highest")
+	}
+	if strings.Contains(source, "foreach ($processName in @('Runner.Worker.exe'") {
+		t.Error("gate task must never include Runner.Worker in a stop loop")
+	}
+	if strings.Contains(source, "-Execute $runCmdPath") {
+		t.Error("read-only gate task must not execute run.cmd because it copies run-helper.cmd")
+	}
+	if strings.Contains(source, "gh.exe") {
+		t.Error("gate setup must use the in-memory token directly, not ambient gh auth")
+	}
+	quarantine := strings.Index(source, "\nQuarantine-RemoteRunner -Owner")
+	removeContext := strings.Index(source, "\n    Remove-Item -LiteralPath $ContextPath -Force")
+	disableTask := strings.Index(source, "\ntry { Disable-And-UnregisterTask }")
+	stopProcesses := strings.Index(source, "\nStop-RunnerProcesses\n")
+	startTask := strings.Index(source, "\n    Start-ScheduledTask -TaskName $task")
+	waitOnline := strings.Index(source, "\n    Wait-RemoteRunnerOnline -Owner")
+	compensation := strings.LastIndex(source, "\n        Quarantine-RemoteRunner -Owner")
+	compensationCleanup := strings.LastIndex(source, "\n    try { Disable-And-UnregisterTask }")
+	if quarantine < 0 || removeContext < 0 || disableTask < 0 || stopProcesses < 0 ||
+		quarantine > removeContext || quarantine > disableTask || quarantine > stopProcesses {
+		t.Error("gate setup must quarantine remote admission before context or local lifecycle mutation")
+	}
+	if startTask < 0 || waitOnline < 0 || startTask > waitOnline {
+		t.Error("gate setup must start the listener before proving remote online state")
+	}
+	if compensation < 0 || compensationCleanup < 0 || compensation > compensationCleanup {
+		t.Error("gate setup catch must re-quarantine before local compensation cleanup")
+	}
+}
+
+func TestGateRunnerProvisionDisablesAutoUpdate(t *testing.T) {
+	path := filepath.Join("..", "..", "deploy", "windows", "civm-gate-runner-provision.ps1")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	source := string(data)
+	if !strings.Contains(source, "--disableupdate") {
+		t.Error("gate runner must disable self-update before executable ACL becomes read-only")
+	}
+	if strings.Contains(source, "--runasservice") {
+		t.Error("gate runner provisioning must not install the known-broken Windows service")
+	}
+	for _, required := range []string{
+		"2.336.0",
+		"d59123a43003e357b0805b5d0f611d0bd2f65ab67d51bd070dd4e7a0f685c162",
+		"Get-FileHash",
+		"$LASTEXITCODE",
+		".rollback",
+		"Disable-ScheduledTask",
+		"Runner.Worker.exe",
+		"$uri.Port -ne 443",
+		"task permaneceu registrada",
+		"durante quiescencia",
+		"Root precisa ser exatamente C:\\civm-gate",
+		"reparse point proibido no escopo do runner",
+		"Set-ProtectedAcl -Path $stage",
+		"Protect-AdminTree -Path $stage",
+		"Quarantine-RemoteRunner",
+		"publisher precisa estar Disabled",
+		"ImagePath invalido",
+		"pos-condicao remota divergente",
+		"System.Security.SecureString]$GitHubToken",
+		"Invoke-GitHubApi -Method DELETE",
+		"registration-token",
+	} {
+		if !strings.Contains(source, required) {
+			t.Errorf("gate runner clean reprovision is missing %q", required)
+		}
+	}
+	protect := strings.Index(source, "Set-ProtectedAcl -Path $stage")
+	download := strings.Index(source, "Invoke-WebRequest")
+	quarantine := strings.Index(source, "Quarantine-RemoteRunner\n")
+	disable := strings.Index(source, "Disable-ScheduledTask -TaskName $task")
+	if protect < 0 || download < 0 || protect > download {
+		t.Error("gate staging DACL must be protected before download")
+	}
+	if quarantine < 0 || disable < 0 || quarantine > disable {
+		t.Error("remote gate admission must be quarantined before local lifecycle mutation")
+	}
+	if strings.Contains(source, "gh.exe") {
+		t.Error("gate provisioning must use the in-memory token directly, not ambient gh auth")
 	}
 }

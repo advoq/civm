@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     The host polls non-terminal GitHub workflow runs and serializes immutable
-    generation IDs (`pr-N@SHA`). A generation is published to the static host
+    generation IDs (`pr-N@SHA`). A generation context is published to the host
     gate only after a full guest cleanup, graceful shutdown, offline VHDX
     compaction, a measured V: floor of at least 80 GiB, reboot and runner
     restore. Jobs never trigger a timeout-based or forced VM shutdown.
@@ -17,8 +17,11 @@
 .NOTES
     Requires one actions:read token per GitHub owner in
     C:\ProgramData\civm\gh-token-<owner>.txt and must run as SYSTEM so it can
-    read the guest SSH key. Activation requires -EnforceQueue; the consumer gate
-    must use only the static labels [self-hosted, civm-gate].
+    read the guest SSH key. This is a disabled legacy rollback owner and does
+    not publish dynamic generation labels. Never activate it for a dynamic-label
+    peer. A supervised rollback must first disable the C# owner, quarantine all
+    gate custom labels and coordinate the peer's return to the prior static
+    [self-hosted, civm-gate] contract.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
@@ -48,7 +51,7 @@ param(
     # civm-gate) le isto e segura os jobs reais Linux ate ser a vez do PR. Fica no HOST
     # de proposito: sobrevive ao Stop-VM do guest no compact de boundary (um gate dentro
     # do guest seria cancelado pelo compact). So e escrito com -EnforceQueue.
-    [string]$CurrentContextPath = 'V:\civm-current-context',
+    [string]$CurrentContextPath = 'C:\ProgramData\civm\gate\current-context',
     # Liga o ENFORCE da fila por-PR: publica o currentPr no host + limpa+compacta no
     # boundary do contexto. Default OFF (so observe). Ligar SO depois do canario provar
     # o gate (gate-no-host) num PR throwaway — nunca direto nos 7 workflows.
@@ -108,10 +111,10 @@ function Get-PrActivity {
                 $uri = "https://api.github.com/repos/$repo/actions/runs?status=$status&per_page=100&page=$page"
                 try { $response = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 20 }
                 catch {
-                    return [pscustomobject]@{ verified = $false; counts = $counts; firstSeen = $firstSeen; queued = $queued; running = $running; errors = @("$repo $status page $page: $($_.Exception.Message)") }
+                    return [pscustomobject]@{ verified = $false; counts = $counts; firstSeen = $firstSeen; queued = $queued; running = $running; errors = @("${repo} ${status} page ${page}: $($_.Exception.Message)") }
                 }
                 if ($null -eq $response -or -not ($response.PSObject.Properties.Name -contains 'workflow_runs')) {
-                    return [pscustomobject]@{ verified = $false; counts = $counts; firstSeen = $firstSeen; queued = $queued; running = $running; errors = @("$repo $status page $page: workflow_runs missing") }
+                    return [pscustomobject]@{ verified = $false; counts = $counts; firstSeen = $firstSeen; queued = $queued; running = $running; errors = @("${repo} ${status} page ${page}: workflow_runs missing") }
                 }
                 $runs = @($response.workflow_runs)
                 foreach ($run in $runs) {
@@ -121,11 +124,11 @@ function Get-PrActivity {
                     if ("$($run.status)" -ne $status) { continue }
                     $context = Get-RunGenerationContext -Run $run
                     if ([string]::IsNullOrWhiteSpace($context)) {
-                        return [pscustomobject]@{ verified = $false; counts = $counts; firstSeen = $firstSeen; queued = $queued; running = $running; errors = @("$repo $status page $page: generation identity missing") }
+                        return [pscustomobject]@{ verified = $false; counts = $counts; firstSeen = $firstSeen; queued = $queued; running = $running; errors = @("${repo} ${status} page ${page}: generation identity missing") }
                     }
                     try { $created = [datetime]::Parse([string]$run.created_at).ToUniversalTime() }
                     catch {
-                        return [pscustomobject]@{ verified = $false; counts = $counts; firstSeen = $firstSeen; queued = $queued; running = $running; errors = @("$repo $status page $page: created_at invalid") }
+                        return [pscustomobject]@{ verified = $false; counts = $counts; firstSeen = $firstSeen; queued = $queued; running = $running; errors = @("${repo} ${status} page ${page}: created_at invalid") }
                     }
                     if (-not $counts.ContainsKey($context)) {
                         $counts[$context] = 0
@@ -694,7 +697,7 @@ function Invoke-PrGenerationQueue {
         $summaryItems = @()
         foreach ($entry in $ordered) {
             $id = "$($entry.id)"
-            $summaryItems += "$id:$([int]$activity.counts[$id])"
+            $summaryItems += "${id}:$([int]$activity.counts[$id])"
         }
         $contextSummary = $summaryItems -join ' '
         Write-OrcLog "generation_queue_$($slot.action)" @{ current = "$($queue.currentPr)"; target = "$($slot.currentPr)"; contexts = $contextSummary; reason = "$($slot.reason)" }
