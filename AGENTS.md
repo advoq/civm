@@ -81,6 +81,11 @@ No host Windows, `civm-host-orchestrator` é o owner C# ativo. A task legada
 máximo 45 min e `processBlockedReason` vazio; nunca inicia, habilita, desabilita
 ou troca tasks automaticamente.
 
+Os runners Windows `civm-gate` são exceção explícita às tasks SYSTEM: executam
+como `NETWORK SERVICE/ServiceAccount/Limited`, sem fork, checkout ou secrets
+fornecidos pelo workflow; raiz do runner e contexto são read-only, com
+`Modify` só em `_work`/`_diag`.
+
 > Por quê: a box é **1 VM compartilhada por 8 runners** (não VM-por-job como o pago). A fidelidade vem de
 > **tratar cada job como efêmero** + **serializar + compactar**. Clonar repo na VM ou deixar estado quebra
 > essa simulação e enche o disco. Os 🧱 estruturais (daemon/disco/dwell compartilhados) estão documentados

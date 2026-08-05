@@ -98,6 +98,11 @@ qualquer extração, instalação ou execução de script. Se o upstream publica
 nova versão sem checksum pinado, o comando deve falhar pedindo atualização do
 pin, não prosseguir por confiança em HTTPS.
 
+No host Windows, nunca ampliar o principal de `civm-gate` para SYSTEM. O gate
+usa `NETWORK SERVICE/ServiceAccount/Limited`, DACL sem herança, binários
+read-only, `Modify` apenas em `_work`/`_diag` e contexto somente leitura. O
+rollout precisa provar o owner do processo e acesso negado à escrita.
+
 ## Peer observability
 
 `civmctl runner watchdog --repos=auto` infere repos pelos diretórios reais dos

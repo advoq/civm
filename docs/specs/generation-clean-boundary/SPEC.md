@@ -44,7 +44,7 @@ Passos críticos seguem
 | `cmd/civmctl/capability.go` | marcador compatível `civm-generation-boundary/v1` | RF-4 |
 | `internal/hook`, `internal/doctor` | instala/prova wrapper e expõe falha crítica | RF-4, RF-10 |
 | `internal/hostdisk/generation_boundary_test.go` | regressões estáticas executáveis em Go | RF-4–RF-9 |
-| `runbooks/PR-QUEUE-ENABLE.md` | gate estático, contexto SHA, 80 GiB, defer | RF-1, RF-6, RF-8 |
+| `runbooks/PR-QUEUE-ENABLE.md` | gate dinâmico, contexto SHA, 80 GiB, defer | RF-1, RF-6, RF-8 |
 | `PAID-CI-PARITY.md`, `CI-PARITY-CHECKLIST.md`, `runbooks/MULTI-PROJECT-RUNNER.md` | contrato de fronteira limpa | RF-5, RF-6, RF-10 |
 | `validation.md` | somente resultado empírico posterior ao deploy | RF-10 |
 
@@ -268,27 +268,32 @@ trabalho ativo. Não há caso que aceite abaixo de 80.
 
 ## 7. Contrato do gate consumidor
 
-No Advoq (PR separado, dependente deste), cada `wait-for-slot` deve usar:
+No Advoq (PR separado, dependente deste), cada `wait-for-slot` deve usar o
+runner Windows, a label-base e uma label de geração pré-publicada:
 
 ```yaml
-runs-on: ${{ ... || fromJSON('["self-hosted","civm-gate"]') }}
-timeout-minutes: 360
+runs-on:
+  - self-hosted
+  - Windows
+  - civm-gate
+  - civm-generation-${{ github.repository }}#pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+timeout-minutes: 720
 ```
 
 e formar:
 
 ```powershell
 $ctx = if ('${{ github.event.pull_request.number }}'.Trim()) {
-  'pr-${{ github.event.pull_request.number }}@${{ github.event.pull_request.head.sha }}'
+  '${{ github.repository }}#pr-${{ github.event.pull_request.number }}@${{ github.event.pull_request.head.sha }}'
 } else {
-  'branch-${{ github.ref_name }}@${{ github.sha }}'
+  '${{ github.repository }}#branch@${{ github.sha }}'
 }
-$deadline = (Get-Date).AddMinutes(350)
+$deadline = (Get-Date).AddMinutes(710)
 ```
 
-Labels SHA dinâmicos são proibidos enquanto não houver provisionamento e prova de
-runners com cada label. Os labels são cumulativos, por isso esse requisito não é
-uma otimização segura.
+O publisher adiciona a label exata somente ao cohort allowlisted e remove labels
+de geração anteriores antes do job. O workflow nunca faz fallback para uma
+label estática ao vencer timeout; ausência da label mantém a admissão fechada.
 
 ## 8. Testes de implementação
 
@@ -324,7 +329,7 @@ E deve exigir os tokens de segurança:
    `hook install --no-restart` em janela ociosa e provar capability/doctor.
 2. Só depois deployar o host e confirmar owner único, sem checkout manual na
    guest.
-3. Abrir/atualizar o único PR Advoq; observar gates estáticos e contexto exato.
+3. Abrir/atualizar o único PR Advoq; observar label dinâmica e contexto exato.
 4. Verificar log com `generation_boundary_*`, `V:>=80` e nenhuma ocorrência
    `Stop-VM -Force`/cancelamento iniciado pelo host.
 5. Rodar a matriz black-box limpa e com carga/seeds no próprio PR. Registrar
@@ -344,8 +349,9 @@ Antes do código, confrontar esta SPEC com estes contraexemplos:
 5. Optimize termina com 79 GiB — pode liberar? Não; manter bloqueado.
 6. SHA novo chega enquanto SHA anterior ainda roda — pode compactar? Não; é
    contexto separado e espera término/reaper canônico.
-7. Gate pede label que nenhum runner tem — pode iniciar? Não; o consumidor usa
-   somente `civm-gate` estático validado no inventário.
+7. Gate pede label que nenhum runner tem — pode iniciar? Não; o publisher
+   seleciona o cohort pela allowlist de nomes e só então atribui, em conjunto,
+   `civm-gate` e a label dinâmica exata da geração.
 
 Qualquer resposta diferente exige `SPECv2.md` antes da implementação.
 
@@ -355,10 +361,14 @@ Qualquer resposta diferente exige `SPECv2.md` antes da implementação.
 2. Fazer merge/release somente com checks verdes.
 3. Guest primeiro: civmctl compatível, assets root-owned, sudoers validado,
    capability v1, reaper timer e doctor verdes.
-4. Host depois: deploy do controlador, owner único e gate ainda fechado.
-5. Confirmar os runners gate e o log do host antes de atualizar o Advoq.
-6. Atualizar o PR único do Advoq com gate estático e carga Docker centralizada.
-7. Só mergear Advoq após o black-box exato do head verde.
+4. Host depois: gates online com zero labels customizadas e owner ainda
+   desabilitado; validar o cohort completo pela allowlist exata.
+5. Deployar o owner desabilitado e atualizar o PR único do Advoq para exigir a
+   label dinâmica, mantendo os jobs inelegíveis.
+6. Habilitar o owner único; ele restaura a label-base e a label dinâmica da
+   geração somente no cohort allowlisted.
+7. Só mergear Advoq após o black-box exato do head verde, duas fronteiras e a
+   auditoria de zero registro, label ou run órfão.
 
 Rollback é obrigatório se ocorrer um dos sinais:
 

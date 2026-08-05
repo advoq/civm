@@ -25,7 +25,7 @@ foreach ($f in $toCopy) {
     if (-not (Test-Path -LiteralPath $src)) { throw "missing source: $src" }
     $perr = $null
     [System.Management.Automation.Language.Parser]::ParseFile($src, [ref]$null, [ref]$perr) | Out-Null
-    if ($perr) { throw "parse error no source $f: $($perr -join '; ')" }
+    if ($perr) { throw "parse error no source ${f}: $($perr -join '; ')" }
 }
 # Desabilite todos os owners anteriores antes de publicar a task nova. Se um
 # deles ainda estiver Running, nao ha prova de quiescencia para um cutover.
@@ -56,7 +56,7 @@ foreach ($f in $toCopy) {
 foreach ($f in $toCopy) {
     $perr = $null
     [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $dst $f), [ref]$null, [ref]$perr) | Out-Null
-    if ($perr) { throw "parse error no artefato deployado $f: $($perr -join '; ')" }
+    if ($perr) { throw "parse error no artefato deployado ${f}: $($perr -join '; ')" }
 }
 . (Join-Path $dst 'civm-orchestrator-decision.ps1')
 . (Join-Path $dst 'civm-reclaim-gate.ps1')

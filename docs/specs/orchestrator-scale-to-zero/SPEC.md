@@ -486,7 +486,7 @@ Auxiliares (WARN, best-effort, não bloqueiam): `guest_full_clean[_warn]`,
 - **Liveness da task (RF-11).** `AtStartup` + `StartWhenAvailable` recuperam o
   loop depois de reboot ou tick perdido. `AllowStartIfOnBatteries` e
   `DontStopIfGoingOnBatteries` impedem que uma troca de alimentação silencie o
-  único publicador de `V:\civm-current-context`. O registro usa `-Force` sobre a
+  único publicador de `C:\ProgramData\civm\gate\current-context`. O registro usa `-Force` sobre a
   definição existente; falha de cópia/parse não remove a última task válida.
 - **Modo `-Observe`** (`orchestrator.ps1:66-69`): loga `would_*` em vez de agir —
   valida a lógica contra a box real sem mexer na VM. Preferido a `-WhatIf` (que

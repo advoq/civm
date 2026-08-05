@@ -29,7 +29,7 @@ func TestValidateShortLabelsAndVersions(t *testing.T) {
 	if err := ValidateLabels("civm,linux_x64"); err != nil {
 		t.Fatalf("ValidateLabels err = %v", err)
 	}
-	if err := ValidateSemver("2.334.0", "--runner-version"); err != nil {
+	if err := ValidateSemver("2.336.0", "--runner-version"); err != nil {
 		t.Fatalf("ValidateSemver err = %v", err)
 	}
 	for _, value := range []string{"../x", "x/y", "x y", ""} {

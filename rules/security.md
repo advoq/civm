@@ -40,9 +40,15 @@ runner self-hosted** — não há web/HTTP/tenant/DB. Detalhe em `SECURITY.md` e
 
 ## Privilégio mínimo (host)
 
-- As tasks `deploy/windows/*.ps1` rodam como **SYSTEM** com o direito Hyper-V
-  (Optimize-VHD/Start-VM/Get-VM), acesso a `V:` e SSH ao guest — sem segredo de
-  repo embutido. Reversíveis por `schtasks /delete`.
+- Tasks do control plane de Hyper-V rodam como **SYSTEM** com
+  Optimize-VHD/Start-VM/Get-VM, acesso a `V:` e SSH ao guest — sem segredo de
+  repo embutido. Já os runners `civm-gate` rodam como
+  `NETWORK SERVICE/ServiceAccount/Limited`: binários read-only, `Modify` só em
+  `_work`/`_diag` e apenas `Read` no arquivo de admissão, sempre sem herança.
+- Gate Windows aceita somente workflow same-repo confiável, sem fork, checkout
+  ou secrets fornecidos pelo workflow. As credenciais internas do próprio
+  runner continuam legíveis pelo listener; alteração de workflow por autor
+  não-confiável fica fora do threat model de qualquer runner self-hosted.
 - No guest, o único wrapper NOPASSWD com caminho validado é
   `civm-safedelete` (`deploy/sudoers.d/civm-cleanup`) — preferido a `NOPASSWD`
   em `rm`/`chown` crus.
