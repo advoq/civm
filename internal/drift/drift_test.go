@@ -441,8 +441,10 @@ func TestDetect_FetcherTimeout(t *testing.T) {
 
 // TestHTTPFetch_5xx valida que respostas não-200 são tratadas como erro
 // explícito (não silenciosamente confundidas com body vazio).
+// Estes testes de transporte ficam seriais: httptest.Server.Close chama
+// CloseIdleConnections no http.DefaultTransport usado por httpFetch e pode
+// interromper uma requisição paralela de outro servidor.
 func TestHTTPFetch_5xx(t *testing.T) {
-	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -458,7 +460,6 @@ func TestHTTPFetch_5xx(t *testing.T) {
 
 // TestHTTPFetch_RateLimit429 valida tratamento de rate-limit do GitHub raw.
 func TestHTTPFetch_RateLimit429(t *testing.T) {
-	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
@@ -475,7 +476,6 @@ func TestHTTPFetch_RateLimit429(t *testing.T) {
 // TestHTTPFetch_ContextCancelled valida que cancelamento de context aborta
 // uma request em andamento (corner case operacional: SIGTERM / Ctrl+C).
 func TestHTTPFetch_ContextCancelled(t *testing.T) {
-	t.Parallel()
 	done := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		<-done // bloqueia até teste finalizar
@@ -495,7 +495,6 @@ func TestHTTPFetch_ContextCancelled(t *testing.T) {
 
 // TestHTTPFetch_OK valida o caminho feliz com cabeçalhos esperados.
 func TestHTTPFetch_OK(t *testing.T) {
-	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.Header.Get("User-Agent"), "civmctl-drift") {
 			t.Errorf("missing User-Agent: %q", r.Header.Get("User-Agent"))

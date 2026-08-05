@@ -155,6 +155,7 @@ func TestGateRunnerTaskUsesLeastPrivilegeAndReadOnlyContext(t *testing.T) {
 		"$listenerPath -Argument 'run'",
 		"Get-SafeTreeItems -Path $dir",
 		"System.Security.SecureString]$GitHubToken",
+		"Assert-ExactProtectedAcl -Path $Root",
 	} {
 		if !strings.Contains(source, required) {
 			t.Errorf("gate task is missing least-privilege contract %q", required)
@@ -177,6 +178,9 @@ func TestGateRunnerTaskUsesLeastPrivilegeAndReadOnlyContext(t *testing.T) {
 	}
 	if strings.Contains(source, "gh.exe") {
 		t.Error("gate setup must use the in-memory token directly, not ambient gh auth")
+	}
+	if strings.Contains(source, "Set-ExactProtectedAcl -Path $Root") {
+		t.Error("gate setup must validate, not mutate, the shared fleet root")
 	}
 	quarantine := strings.Index(source, "\nQuarantine-RemoteRunner -Owner")
 	removeContext := strings.Index(source, "\n    Remove-Item -LiteralPath $ContextPath -Force")
@@ -241,11 +245,34 @@ func TestGateRunnerProvisionDisablesAutoUpdate(t *testing.T) {
 		"Protect-AdminTree -Path $stage",
 		"Quarantine-RemoteRunner",
 		"publisher precisa estar Disabled",
-		"ImagePath invalido",
+		"mais de um service aponta para o gate",
 		"pos-condicao remota divergente",
 		"System.Security.SecureString]$GitHubToken",
 		"Invoke-GitHubApi -Method DELETE",
 		"registration-token",
+		"[switch]$ResumeStaged",
+		"runners/$($remote.id)/labels\"",
+		"ResumeStaged exige staging existente",
+		"-EnsureAdminTraversal",
+		"RawSecurityDescriptor",
+		"DiscretionaryAcl.InsertAce",
+		"SetFileSecurityW",
+		"Set-DaclWithoutPropagation",
+		"StringComparer]::Ordinal",
+		"expectedRuleCounts",
+		"ACE administrativa existente e insuficiente",
+		"reparo alterou conjunto de ACEs",
+		"Get-RunnerPathTasks",
+		"task orfa aponta para dir/staging do gate",
+		"processo ativo no staging durante resume",
+		"service inesperado aponta para staging",
+		"staging sem arquivo obrigatorio",
+		"$newConfig.agentId -ne $remote.id",
+		"$remote.os -ne 'Windows'",
+		"Where-Object { $_.type -eq 'custom' }",
+		"falha restaurando rollback",
+		"Ensure-ProtectedSharedRoot",
+		"Assert-ProtectedAcl -Path $Root",
 	} {
 		if !strings.Contains(source, required) {
 			t.Errorf("gate runner clean reprovision is missing %q", required)
@@ -253,13 +280,40 @@ func TestGateRunnerProvisionDisablesAutoUpdate(t *testing.T) {
 	}
 	protect := strings.Index(source, "Set-ProtectedAcl -Path $stage")
 	download := strings.Index(source, "Invoke-WebRequest")
+	rootPreflight := strings.Index(source, "foreach ($existingPath in @($Root, $dir, $stage, $rollback))")
+	rootACLPreflight := strings.Index(source, "if (Test-Path -LiteralPath $Root) {\n    Assert-ProtectedAcl -Path $Root")
 	quarantine := strings.Index(source, "Quarantine-RemoteRunner\n")
 	disable := strings.Index(source, "Disable-ScheduledTask -TaskName $task")
+	lastListenerStop := strings.LastIndex(source, "\nStop-IdleListener\n")
+	adminHandoff := strings.Index(source, "-AllowedRunnerRoots $allowedRunnerRoots -EnsureAdminTraversal")
+	mainSwap := strings.LastIndex(source, "\nMove-StagedRunner\n")
+	moveFunction := strings.Index(source, "function Move-StagedRunner")
+	oldTreeRevalidation := -1
+	oldTreeMove := -1
+	if moveFunction >= 0 {
+		oldTreeRevalidation = strings.Index(source[moveFunction:], "Protect-AdminTree -Path $dir")
+		oldTreeMove = strings.Index(source[moveFunction:], "Move-Item -LiteralPath $dir -Destination $rollback")
+	}
 	if protect < 0 || download < 0 || protect > download {
 		t.Error("gate staging DACL must be protected before download")
 	}
 	if quarantine < 0 || disable < 0 || quarantine > disable {
 		t.Error("remote gate admission must be quarantined before local lifecycle mutation")
+	}
+	if rootPreflight < 0 || rootACLPreflight < 0 || adminHandoff < 0 || mainSwap < 0 ||
+		moveFunction < 0 || oldTreeRevalidation < 0 || oldTreeMove < 0 ||
+		lastListenerStop < 0 ||
+		rootPreflight > rootACLPreflight || rootACLPreflight > quarantine ||
+		quarantine > adminHandoff ||
+		lastListenerStop > adminHandoff || adminHandoff > mainSwap ||
+		oldTreeRevalidation > oldTreeMove {
+		t.Error("old tree must regain safe admin traversal after drain and before revalidation")
+	}
+	if strings.Contains(source, "Get-Content -LiteralPath $servicePath") {
+		t.Error("legacy service discovery must not read an inaccessible runner tree")
+	}
+	if strings.Contains(source, "labels/$") {
+		t.Error("custom labels must use the bulk endpoint without path data")
 	}
 	if strings.Contains(source, "gh.exe") {
 		t.Error("gate provisioning must use the in-memory token directly, not ambient gh auth")
@@ -291,10 +345,48 @@ func TestGateRunnerScriptsAllowOnlyPinnedOfficialJunctions(t *testing.T) {
 			"junction oficial fora do alvo pinado",
 			"alvo da junction oficial nao e diretorio sibling real",
 			"$items.Add($item)\n            continue",
+			"Get-FileLinkCount",
+			"GetFileInformationByHandle",
+			"NumberOfLinks",
+			"SeBackupPrivilege",
+			"RestoreTokenPrivileges",
+			"MetadataOnly = 0",
 		} {
 			if !strings.Contains(source, required) {
 				t.Errorf("%s is missing pinned junction guard %q", name, required)
 			}
+		}
+		linkCount := strings.Index(source, "Get-FileLinkCount -Path $item.FullName")
+		itemAdd := strings.LastIndex(source, "$items.Add($item)")
+		if linkCount < 0 || itemAdd < 0 || linkCount > itemAdd {
+			t.Errorf("%s must prove native link count before accepting a file", name)
+		}
+	}
+}
+
+func TestGateRunnerScriptsShareNativeLinkInspector(t *testing.T) {
+	block := regexp.MustCompile(`(?s)Add-Type -TypeDefinition @'\n(.*?)\n'@`)
+	var expected string
+	for _, name := range []string{
+		"civm-gate-runner-provision.ps1",
+		"civm-gate-task-setup.ps1",
+	} {
+		path := filepath.Join("..", "..", "deploy", "windows", name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		matches := block.FindAllStringSubmatch(string(data), -1)
+		if len(matches) != 1 || len(matches[0]) != 2 {
+			t.Fatalf("%s does not contain exactly one native helper block", name)
+		}
+		match := matches[0]
+		if expected == "" {
+			expected = match[1]
+			continue
+		}
+		if match[1] != expected {
+			t.Errorf("%s native hardlink helper drifted from provision", name)
 		}
 	}
 }

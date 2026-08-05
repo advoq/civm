@@ -9,7 +9,8 @@ param(
     [string]$Url = 'https://github.com/advoq',
     [string]$RunnerVersion = '2.336.0',
     [string]$RunnerSHA256 = 'd59123a43003e357b0805b5d0f611d0bd2f65ab67d51bd070dd4e7a0f685c162',
-    [string]$Root = 'C:\civm-gate'
+    [string]$Root = 'C:\civm-gate',
+    [switch]$ResumeStaged
 )
 $ErrorActionPreference = 'Stop'
 if ($Index -lt 1 -or $Index -gt 99) { throw 'Index fora de 1..99' }
@@ -41,6 +42,7 @@ $allowedRunnerRoots = @(foreach ($runnerIndex in 1..99) {
     "$runnerRoot.new"
     "$runnerRoot.rollback"
 })
+$activeRunnerRoots = @($dir, $stage)
 $systemSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-18'
 $administratorsSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-32-544'
 $networkServiceSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-20'
@@ -67,6 +69,198 @@ function Resolve-AccountSid {
     } catch {
         return (([System.Security.Principal.NTAccount]$Account).Translate(
             [System.Security.Principal.SecurityIdentifier])).Value
+    }
+}
+
+function Initialize-CivmGateNative {
+    if ($null -eq ('CivmGateNative.LinkInspector' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+namespace CivmGateNative {
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Luid { public uint LowPart; public int HighPart; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct TokenPrivileges {
+        public uint PrivilegeCount;
+        public Luid Luid;
+        public uint Attributes;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ByHandleFileInformation {
+        public uint FileAttributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+        public uint VolumeSerialNumber;
+        public uint FileSizeHigh;
+        public uint FileSizeLow;
+        public uint NumberOfLinks;
+        public uint FileIndexHigh;
+        public uint FileIndexLow;
+    }
+
+    public static class LinkInspector {
+        const uint TokenAdjustPrivileges = 0x20;
+        const uint TokenQuery = 0x8;
+        const uint PrivilegeEnabled = 0x2;
+        const uint MetadataOnly = 0;
+        const uint ShareAll = 0x7;
+        const uint OpenExisting = 3;
+        const uint OpenReparsePoint = 0x00200000;
+        const uint BackupSemantics = 0x02000000;
+        const int AccessDenied = 5;
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool OpenProcessToken(IntPtr process, uint access,
+            out SafeFileHandle token);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool LookupPrivilegeValue(string system, string name,
+            out Luid luid);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool AdjustTokenPrivileges(SafeFileHandle token,
+            bool disableAll, ref TokenPrivileges desired, uint bufferLength,
+            out TokenPrivileges previous, out uint returnedLength);
+
+        [DllImport("advapi32.dll", EntryPoint = "AdjustTokenPrivileges",
+            SetLastError = true)]
+        static extern bool RestoreTokenPrivileges(SafeFileHandle token,
+            bool disableAll, ref TokenPrivileges desired, uint bufferLength,
+            IntPtr previous, IntPtr returnedLength);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern SafeFileHandle CreateFile(string name, uint access,
+            uint share, IntPtr security, uint creation, uint flags,
+            IntPtr template);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool GetFileInformationByHandle(SafeFileHandle handle,
+            out ByHandleFileInformation information);
+
+        static SafeFileHandle Open(string path) {
+            return CreateFile(path, MetadataOnly, ShareAll, IntPtr.Zero,
+                OpenExisting, OpenReparsePoint | BackupSemantics, IntPtr.Zero);
+        }
+
+        public static uint GetLinkCount(string path) {
+            SafeFileHandle handle = Open(path);
+            SafeFileHandle token = null;
+            TokenPrivileges previous = new TokenPrivileges();
+            bool restorePrivilege = false;
+            try {
+                if (handle.IsInvalid) {
+                    int openError = Marshal.GetLastWin32Error();
+                    handle.Dispose();
+                    if (openError != AccessDenied) {
+                        throw new Win32Exception(openError);
+                    }
+                    if (!OpenProcessToken(Process.GetCurrentProcess().Handle,
+                            TokenAdjustPrivileges | TokenQuery, out token)) {
+                        throw new Win32Exception(Marshal.GetLastWin32Error());
+                    }
+                    Luid luid;
+                    if (!LookupPrivilegeValue(null, "SeBackupPrivilege", out luid)) {
+                        throw new Win32Exception(Marshal.GetLastWin32Error());
+                    }
+                    TokenPrivileges desired = new TokenPrivileges {
+                        PrivilegeCount = 1, Luid = luid,
+                        Attributes = PrivilegeEnabled
+                    };
+                    uint returnedLength;
+                    if (!AdjustTokenPrivileges(token, false, ref desired,
+                            (uint)Marshal.SizeOf(typeof(TokenPrivileges)),
+                            out previous, out returnedLength)) {
+                        throw new Win32Exception(Marshal.GetLastWin32Error());
+                    }
+                    restorePrivilege = true;
+                    int privilegeError = Marshal.GetLastWin32Error();
+                    if (privilegeError != 0) {
+                        throw new Win32Exception(privilegeError);
+                    }
+                    handle = Open(path);
+                    if (handle.IsInvalid) {
+                        throw new Win32Exception(Marshal.GetLastWin32Error());
+                    }
+                }
+                ByHandleFileInformation information;
+                if (!GetFileInformationByHandle(handle, out information)) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                return information.NumberOfLinks;
+            } finally {
+                if (handle != null) { handle.Dispose(); }
+                int restoreError = 0;
+                if (restorePrivilege && token != null && !token.IsInvalid) {
+                    if (!RestoreTokenPrivileges(token, false, ref previous, 0,
+                            IntPtr.Zero, IntPtr.Zero)) {
+                        restoreError = Marshal.GetLastWin32Error();
+                    }
+                }
+                if (token != null) { token.Dispose(); }
+                if (restoreError != 0) { throw new Win32Exception(restoreError); }
+            }
+        }
+    }
+
+    public static class SecurityDescriptorWriter {
+        const uint DaclSecurityInformation = 0x00000004;
+
+        [DllImport("advapi32.dll", EntryPoint = "SetFileSecurityW",
+            CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool SetFileSecurity(string path,
+            uint securityInformation, IntPtr securityDescriptor);
+
+        public static void SetDacl(string path, byte[] securityDescriptor) {
+            if (securityDescriptor == null || securityDescriptor.Length == 0) {
+                throw new ArgumentException("security descriptor is empty");
+            }
+            GCHandle pinned = GCHandle.Alloc(
+                securityDescriptor, GCHandleType.Pinned);
+            try {
+                if (!SetFileSecurity(path, DaclSecurityInformation,
+                        pinned.AddrOfPinnedObject())) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+            } finally {
+                pinned.Free();
+            }
+        }
+    }
+}
+'@
+    }
+}
+
+function Get-FileLinkCount {
+    param([Parameter(Mandatory)][string]$Path)
+    Initialize-CivmGateNative
+    try {
+        return [CivmGateNative.LinkInspector]::GetLinkCount($Path)
+    } catch {
+        throw "falha validando hardlinks em ${Path}: $($_.Exception.GetBaseException().Message)"
+    }
+}
+
+function Set-DaclWithoutPropagation {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][byte[]]$SecurityDescriptor
+    )
+    Initialize-CivmGateNative
+    try {
+        [CivmGateNative.SecurityDescriptorWriter]::SetDacl(
+            $Path, $SecurityDescriptor)
+    } catch {
+        throw "falha gravando DACL sem propagacao em ${Path}: " +
+            $_.Exception.GetBaseException().Message
     }
 }
 
@@ -98,6 +292,20 @@ function Set-ProtectedAcl {
     }
     Set-Acl -LiteralPath $Path -AclObject $acl
 
+    Assert-ProtectedAcl -Path $Path -Directory $Directory `
+        -NetworkRead $NetworkRead -InheritToChildren $InheritToChildren
+}
+
+function Assert-ProtectedAcl {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][bool]$Directory,
+        [Parameter(Mandatory)][bool]$NetworkRead,
+        [Parameter(Mandatory)][bool]$InheritToChildren
+    )
+    $inheritance = if ($Directory -and $InheritToChildren) {
+        [System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
+    } else { [System.Security.AccessControl.InheritanceFlags]::None }
     $actual = Get-Acl -LiteralPath $Path
     $rules = @($actual.GetAccessRules(
         $true, $true, [System.Security.Principal.SecurityIdentifier]))
@@ -132,10 +340,152 @@ function Set-ProtectedAcl {
     }
 }
 
+function Grant-AdminTraversal {
+    param([Parameter(Mandatory)][string]$Path)
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if (-not $item.PSIsContainer -or
+        ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        -not [string]::IsNullOrEmpty([string]$item.LinkType)) {
+        throw "diretorio inseguro para travessia administrativa: $Path"
+    }
+    $acl = Get-Acl -LiteralPath $Path
+    $wasProtected = $acl.AreAccessRulesProtected
+    $wasOwnerSid = Resolve-AccountSid -Account $acl.Owner
+    $binary = $acl.GetSecurityDescriptorBinaryForm()
+    $raw = [System.Security.AccessControl.RawSecurityDescriptor]::new($binary, 0)
+    if ($null -eq $raw.DiscretionaryAcl) {
+        throw "diretorio sem DACL para travessia administrativa: $Path"
+    }
+    $expectedRuleCounts = [System.Collections.Hashtable]::new(
+        [System.StringComparer]::Ordinal)
+    for ($aceIndex = 0; $aceIndex -lt $raw.DiscretionaryAcl.Count; $aceIndex++) {
+        $existingAce = $raw.DiscretionaryAcl[$aceIndex]
+        $aceBinary = [byte[]]::new($existingAce.BinaryLength)
+        $existingAce.GetBinaryForm($aceBinary, 0)
+        $key = [Convert]::ToBase64String($aceBinary)
+        $expectedRuleCounts[$key] = 1 + [int]$expectedRuleCounts[$key]
+    }
+    $insertIndex = 0
+    while ($insertIndex -lt $raw.DiscretionaryAcl.Count -and
+        ([int]$raw.DiscretionaryAcl[$insertIndex].AceFlags -band
+            [int][System.Security.AccessControl.AceFlags]::Inherited) -eq 0) {
+        $insertIndex++
+    }
+    $sidsToAdd = [System.Collections.Generic.List[object]]::new()
+    foreach ($sid in @($systemSid, $administratorsSid)) {
+        $matchingAllowFound = $false
+        $sufficientAllowFound = $false
+        for ($aceIndex = 0; $aceIndex -lt $raw.DiscretionaryAcl.Count; $aceIndex++) {
+            $candidate = $raw.DiscretionaryAcl[$aceIndex]
+            if ($candidate -is [System.Security.AccessControl.QualifiedAce] -and
+                $candidate.AceQualifier -eq `
+                    [System.Security.AccessControl.AceQualifier]::AccessAllowed -and
+                $candidate.SecurityIdentifier.Value -eq $sid.Value) {
+                $matchingAllowFound = $true
+            }
+            if ($candidate -is [System.Security.AccessControl.CommonAce] -and
+                $candidate.AceQualifier -eq `
+                    [System.Security.AccessControl.AceQualifier]::AccessAllowed -and
+                $candidate.SecurityIdentifier.Value -eq $sid.Value -and
+                ([int]$candidate.AceFlags -band
+                    [int][System.Security.AccessControl.AceFlags]::InheritOnly) -eq 0 -and
+                ($candidate.AccessMask -band `
+                    [int][System.Security.AccessControl.FileSystemRights]::FullControl) -eq `
+                    [int][System.Security.AccessControl.FileSystemRights]::FullControl) {
+                $sufficientAllowFound = $true
+                break
+            }
+        }
+        if ($sufficientAllowFound) { continue }
+        if ($matchingAllowFound) {
+            throw "ACE administrativa existente e insuficiente: $Path; " +
+                "principal=$($sid.Value)"
+        }
+        $sidsToAdd.Add($sid)
+    }
+    foreach ($sid in $sidsToAdd) {
+        $ace = [System.Security.AccessControl.CommonAce]::new(
+            [System.Security.AccessControl.AceFlags]::None,
+            [System.Security.AccessControl.AceQualifier]::AccessAllowed,
+            [int][System.Security.AccessControl.FileSystemRights]::FullControl,
+            $sid, $false, $null)
+        $raw.DiscretionaryAcl.InsertAce($insertIndex, $ace)
+        $insertIndex++
+        $aceBinary = [byte[]]::new($ace.BinaryLength)
+        $ace.GetBinaryForm($aceBinary, 0)
+        $ruleKey = [Convert]::ToBase64String($aceBinary)
+        $expectedRuleCounts[$ruleKey] = 1 + [int]$expectedRuleCounts[$ruleKey]
+    }
+    if ($sidsToAdd.Count -ne 0) {
+        $updatedBinary = [byte[]]::new($raw.BinaryLength)
+        $raw.GetBinaryForm($updatedBinary, 0)
+        Set-DaclWithoutPropagation -Path $Path `
+            -SecurityDescriptor $updatedBinary
+    }
+    $actual = Get-Acl -LiteralPath $Path
+    if ($actual.AreAccessRulesProtected -ne $wasProtected -or
+        (Resolve-AccountSid -Account $actual.Owner) -ne $wasOwnerSid) {
+        throw "reparo alterou owner ou protecao da DACL: $Path"
+    }
+    $actualBinary = $actual.GetSecurityDescriptorBinaryForm()
+    $actualRaw = [System.Security.AccessControl.RawSecurityDescriptor]::new(
+        $actualBinary, 0)
+    $actualRuleCounts = [System.Collections.Hashtable]::new(
+        [System.StringComparer]::Ordinal)
+    for ($aceIndex = 0; $aceIndex -lt $actualRaw.DiscretionaryAcl.Count; $aceIndex++) {
+        $actualAce = $actualRaw.DiscretionaryAcl[$aceIndex]
+        $aceBinary = [byte[]]::new($actualAce.BinaryLength)
+        $actualAce.GetBinaryForm($aceBinary, 0)
+        $key = [Convert]::ToBase64String($aceBinary)
+        $actualRuleCounts[$key] = 1 + [int]$actualRuleCounts[$key]
+    }
+    $allRuleKeys = @($expectedRuleCounts.Keys) + @($actualRuleCounts.Keys) |
+        Sort-Object -Unique
+    foreach ($key in $allRuleKeys) {
+        if ([int]$expectedRuleCounts[$key] -ne [int]$actualRuleCounts[$key]) {
+            throw "reparo alterou conjunto de ACEs: $Path; regra=$key; " +
+                "esperado=$([int]$expectedRuleCounts[$key]); " +
+                "atual=$([int]$actualRuleCounts[$key])"
+        }
+    }
+    $rules = @($actual.GetAccessRules(
+        $true, $true, [System.Security.Principal.SecurityIdentifier]))
+    foreach ($sid in @($systemSid, $administratorsSid)) {
+        $sufficientAceFound = $false
+        for ($aceIndex = 0;
+            $aceIndex -lt $actualRaw.DiscretionaryAcl.Count;
+            $aceIndex++) {
+            $candidate = $actualRaw.DiscretionaryAcl[$aceIndex]
+            if ($candidate -is [System.Security.AccessControl.CommonAce] -and
+                $candidate.AceQualifier -eq `
+                    [System.Security.AccessControl.AceQualifier]::AccessAllowed -and
+                $candidate.SecurityIdentifier.Value -eq $sid.Value -and
+                ([int]$candidate.AceFlags -band
+                    [int][System.Security.AccessControl.AceFlags]::InheritOnly) -eq 0 -and
+                ($candidate.AccessMask -band `
+                    [int][System.Security.AccessControl.FileSystemRights]::FullControl) -eq `
+                    [int][System.Security.AccessControl.FileSystemRights]::FullControl) {
+                $sufficientAceFound = $true
+                break
+            }
+        }
+        if (-not $sufficientAceFound) {
+            $actualSummary = @($rules | ForEach-Object {
+                "$($_.IdentityReference.Value):$($_.AccessControlType):" +
+                "$($_.FileSystemRights):$($_.InheritanceFlags):" +
+                "$($_.PropagationFlags):inherited=$($_.IsInherited)"
+            }) -join '; '
+            throw "reparo nao concedeu travessia administrativa: $Path; " +
+                "esperado=$($sid.Value); atual=$actualSummary"
+        }
+    }
+}
+
 function Get-SafeTreeItems {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string[]]$AllowedRunnerRoots
+        [Parameter(Mandatory)][string[]]$AllowedRunnerRoots,
+        [switch]$EnsureAdminTraversal
     )
     $pending = [System.Collections.Stack]::new()
     $pending.Push((Get-Item -LiteralPath $Path -Force))
@@ -152,14 +502,47 @@ function Get-SafeTreeItems {
         if (-not [string]::IsNullOrEmpty([string]$item.LinkType)) {
             throw "link de filesystem proibido no escopo do runner: $($item.FullName)"
         }
+        if (-not $item.PSIsContainer -and
+            (Get-FileLinkCount -Path $item.FullName) -ne 1) {
+            throw "link de filesystem proibido no escopo do runner: $($item.FullName)"
+        }
         $items.Add($item)
         if ($item.PSIsContainer) {
+            if ($EnsureAdminTraversal) {
+                Grant-AdminTraversal -Path $item.FullName
+            }
             foreach ($child in (Get-ChildItem -LiteralPath $item.FullName -Force)) {
                 $pending.Push($child)
             }
         }
     }
     return $items.ToArray()
+}
+
+function Assert-SafeTreeRoot {
+    param([Parameter(Mandatory)][string]$Path)
+    try {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    } catch [System.Management.Automation.ItemNotFoundException] {
+        return
+    }
+    if (-not $item.PSIsContainer -or
+        ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        -not [string]::IsNullOrEmpty([string]$item.LinkType)) {
+        throw "raiz de arvore insegura no escopo do runner: $Path"
+    }
+}
+
+function Ensure-ProtectedSharedRoot {
+    if (Test-Path -LiteralPath $Root) {
+        Assert-SafeTreeRoot -Path $Root
+        Assert-ProtectedAcl -Path $Root -Directory $true -NetworkRead $true `
+            -InheritToChildren $false
+        return
+    }
+    New-Item -ItemType Directory -Path $Root | Out-Null
+    Set-ProtectedAcl -Path $Root -Directory $true -NetworkRead $true `
+        -InheritToChildren $false
 }
 
 function Assert-SafeOfficialRunnerJunction {
@@ -217,13 +600,73 @@ function Protect-AdminTree {
     }
 }
 
+function Move-StagedRunner {
+    $oldMoved = $false
+    try {
+        if (Test-Path -LiteralPath $dir) {
+            Protect-AdminTree -Path $dir -AllowedRunnerRoots $allowedRunnerRoots
+            Move-Item -LiteralPath $dir -Destination $rollback
+            $oldMoved = $true
+        }
+        Move-Item -LiteralPath $stage -Destination $dir
+    } catch {
+        $swapFailure = $_
+        if ($oldMoved -and -not (Test-Path -LiteralPath $dir) -and
+            (Test-Path -LiteralPath $rollback)) {
+            try {
+                Move-Item -LiteralPath $rollback -Destination $dir
+            } catch {
+                throw "$($swapFailure.Exception.Message); falha restaurando rollback: $($_.Exception.Message)"
+            }
+        }
+        throw $swapFailure
+    }
+}
+
 function Get-RunnerProcesses {
-    param([Parameter(Mandatory)][string]$ProcessName)
+    param(
+        [Parameter(Mandatory)][string]$ProcessName,
+        [string[]]$Roots = $activeRunnerRoots
+    )
     return @(Get-CimInstance Win32_Process -Filter "Name = '$ProcessName'" |
         Where-Object {
-            $_.ExecutablePath -and $_.ExecutablePath.StartsWith(
-                $dir + '\', [System.StringComparison]::OrdinalIgnoreCase)
+            $process = $_
+            $process.ExecutablePath -and @($Roots | Where-Object {
+                $process.ExecutablePath.StartsWith(
+                    $_ + '\',
+                    [System.StringComparison]::OrdinalIgnoreCase)
+            }).Count -ne 0
         })
+}
+
+function Get-RunnerPathTasks {
+    $matches = [System.Collections.Generic.List[object]]::new()
+    foreach ($candidate in @(Get-ScheduledTask -ErrorAction Stop)) {
+        $pointsToRunner = $false
+        foreach ($action in @($candidate.Actions)) {
+            $actionFields = @(
+                [string]$action.Execute,
+                [string]$action.Arguments,
+                [string]$action.WorkingDirectory)
+            if (@($activeRunnerRoots | Where-Object {
+                    $runnerRoot = $_
+                    @($actionFields | Where-Object {
+                        $field = $_
+                        $field.Trim('"').Equals(
+                            $runnerRoot,
+                            [System.StringComparison]::OrdinalIgnoreCase) -or
+                        $field.IndexOf(
+                            $runnerRoot + '\',
+                            [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+                    }).Count -ne 0
+                }).Count -ne 0) {
+                $pointsToRunner = $true
+                break
+            }
+        }
+        if ($pointsToRunner) { $matches.Add($candidate) }
+    }
+    return $matches.ToArray()
 }
 
 function Invoke-GitHubApi {
@@ -286,9 +729,9 @@ function Get-RemoteRunner {
 function Quarantine-RemoteRunner {
     $remote = Get-RemoteRunner
     if ($null -eq $remote) { return }
-    if (@($remote.labels | Where-Object { $_.name -eq 'civm-gate' }).Count -ne 0) {
+    if (@($remote.labels | Where-Object { $_.type -eq 'custom' }).Count -ne 0) {
         Invoke-GitHubApi -Method DELETE `
-            -Path "orgs/$owner/actions/runners/$($remote.id)/labels/civm-gate" |
+            -Path "orgs/$owner/actions/runners/$($remote.id)/labels" |
             Out-Null
     }
     $stable = 0
@@ -299,44 +742,67 @@ function Quarantine-RemoteRunner {
         $locallyIdle = (Get-RunnerProcesses -ProcessName 'Runner.Worker.exe').Count -eq 0
         $quarantined = $null -eq $remote -or (
             -not $remote.busy -and
-            @($remote.labels | Where-Object { $_.name -eq 'civm-gate' }).Count -eq 0)
+            @($remote.labels | Where-Object { $_.type -eq 'custom' }).Count -eq 0)
         if ($locallyIdle -and $quarantined) { $stable++ } else { $stable = 0 }
     } while ($stable -lt 6 -and (Get-Date) -lt $deadline)
     if ($stable -lt 6) { throw "runner nao drenou apos quarentena: $name" }
 }
 
-function Get-LegacyService {
-    $servicePath = Join-Path $dir '.service'
-    if (-not (Test-Path -LiteralPath $servicePath -PathType Leaf)) { return $null }
-    $serviceName = (Get-Content -LiteralPath $servicePath -Raw).Trim()
-    if ($serviceName -notmatch '^actions\.runner\.[A-Za-z0-9_.-]+$') {
-        throw "nome de service inseguro em $servicePath"
-    }
-    $cim = Get-CimInstance Win32_Service -Filter "Name = '$serviceName'" `
-        -ErrorAction SilentlyContinue
-    if ($null -eq $cim) { return $null }
-    $match = [regex]::Match($cim.PathName, '^(?:"([^"]+)"|(\S+))')
-    if (-not $match.Success) { throw "ImagePath invalido para service $serviceName" }
+function Get-ServiceExecutablePath {
+    param([Parameter(Mandatory)]$Service)
+    if ([string]::IsNullOrWhiteSpace($Service.PathName)) { return $null }
+    $match = [regex]::Match($Service.PathName, '^(?:"([^"]+)"|(\S+))')
+    if (-not $match.Success) { return $null }
     $imagePath = if ($match.Groups[1].Success) {
         $match.Groups[1].Value
     } else { $match.Groups[2].Value }
-    $expected = Join-Path $dir 'bin\RunnerService.exe'
-    if (-not [System.IO.Path]::GetFullPath($imagePath).Equals(
-            $expected, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "service fora do diretório do gate: $serviceName"
+    try { return [System.IO.Path]::GetFullPath($imagePath) } catch { return $null }
+}
+
+function Get-LegacyService {
+    $expected = [System.IO.Path]::GetFullPath((Join-Path $dir `
+        'bin\RunnerService.exe'))
+    $expectedTarget = [System.IO.Path]::GetFullPath((Join-Path $dir `
+        "bin.$RunnerVersion\RunnerService.exe"))
+    $services = @(Get-CimInstance Win32_Service -ErrorAction Stop)
+    $stageMatches = @($services | Where-Object {
+        $imagePath = Get-ServiceExecutablePath -Service $_
+        $null -ne $imagePath -and $imagePath.StartsWith(
+            $stage + '\', [System.StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($stageMatches.Count -ne 0) {
+        throw "service inesperado aponta para staging: $stage"
     }
-    return Get-Service -Name $serviceName -ErrorAction Stop
+    $matches = @($services | Where-Object {
+        $imagePath = Get-ServiceExecutablePath -Service $_
+        $null -ne $imagePath -and $imagePath.StartsWith(
+            $dir + '\', [System.StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($matches.Count -gt 1) {
+        throw "mais de um service aponta para o gate: $dir"
+    }
+    if ($matches.Count -eq 0) { return $null }
+    $imagePath = Get-ServiceExecutablePath -Service $matches[0]
+    if (-not $imagePath.Equals(
+            $expected, [System.StringComparison]::OrdinalIgnoreCase) -and
+        -not $imagePath.Equals(
+            $expectedTarget, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "service inesperado dentro do gate: $imagePath"
+    }
+    return Get-Service -Name $matches[0].Name -ErrorAction Stop
 }
 
 foreach ($existingPath in @($Root, $dir, $stage, $rollback)) {
-    $existingItem = Get-Item -LiteralPath $existingPath -Force `
-        -ErrorAction SilentlyContinue
-    if ($null -ne $existingItem) {
-        [void](Get-SafeTreeItems -Path $existingPath `
-            -AllowedRunnerRoots $allowedRunnerRoots)
-    }
+    Assert-SafeTreeRoot -Path $existingPath
 }
-if (Test-Path -LiteralPath $stage) {
+if (Test-Path -LiteralPath $Root) {
+    Assert-ProtectedAcl -Path $Root -Directory $true -NetworkRead $true `
+        -InheritToChildren $false
+}
+if ($ResumeStaged -and -not (Test-Path -LiteralPath $stage -PathType Container)) {
+    throw "ResumeStaged exige staging existente: $stage"
+}
+if (-not $ResumeStaged -and (Test-Path -LiteralPath $stage)) {
     throw "staging anterior exige revisao manual: $stage"
 }
 if (Test-Path -LiteralPath $rollback) {
@@ -346,12 +812,25 @@ $publisher = Get-ScheduledTask -TaskName $publisherTask -ErrorAction SilentlyCon
 if ($null -ne $publisher -and $publisher.State.ToString() -ne 'Disabled') {
     throw "publisher precisa estar Disabled antes do rollout: $publisherTask"
 }
+$runnerPathTasks = @(Get-RunnerPathTasks)
+$unexpectedTasks = @($runnerPathTasks | Where-Object { $_.TaskName -ne $task })
+if ($unexpectedTasks.Count -ne 0 -or $runnerPathTasks.Count -gt 1) {
+    throw "task orfa aponta para dir/staging do gate"
+}
+if ($ResumeStaged) {
+    foreach ($processName in @(
+            'Runner.Listener.exe', 'Runner.Worker.exe', 'RunnerService.exe')) {
+        if ((Get-RunnerProcesses -ProcessName $processName -Roots @($stage)).Count -ne 0) {
+            throw "processo ativo no staging durante resume: $processName"
+        }
+    }
+}
+$service = Get-LegacyService
 
 # Removing the base label closes remote admission before any local stop. The
 # disabled publisher cannot restore a generation label during the dwell.
 Quarantine-RemoteRunner
 $oldTask = Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
-$service = Get-LegacyService
 $lifecycleErrors = [System.Collections.Generic.List[string]]::new()
 if ($null -ne $oldTask) {
     try {
@@ -385,74 +864,93 @@ if ($null -ne $oldTask) {
     } catch { $lifecycleErrors.Add($_.Exception.Message) }
 }
 Stop-IdleListener
+if ((Get-RunnerPathTasks).Count -ne 0) {
+    $lifecycleErrors.Add('task permaneceu apontando para dir/staging do gate')
+}
 if ($lifecycleErrors.Count -ne 0) {
     throw "cleanup local incompleto apos quarentena: $($lifecycleErrors -join '; ')"
 }
 
-New-Item -ItemType Directory -Path $Root -Force | Out-Null
-Set-ProtectedAcl -Path $Root -Directory $true -NetworkRead $true `
-    -InheritToChildren $false
-if (Test-Path -LiteralPath $stage) {
-    throw "staging apareceu durante a quarentena: $stage"
+if (Test-Path -LiteralPath $dir) {
+    [void](Get-SafeTreeItems -Path $dir `
+        -AllowedRunnerRoots $allowedRunnerRoots -EnsureAdminTraversal)
 }
-New-Item -ItemType Directory -Path $stage | Out-Null
-Set-ProtectedAcl -Path $stage -Directory $true -NetworkRead $false `
-    -InheritToChildren $true
-$zip = Join-Path $stage 'runner.zip'
-$src = "https://github.com/actions/runner/releases/download/v$RunnerVersion/actions-runner-win-x64-$RunnerVersion.zip"
-Write-Host "baixando actions/runner v$RunnerVersion ..."
-Invoke-WebRequest -Uri $src -OutFile $zip
-$actualSHA256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actualSHA256 -ne $RunnerSHA256.ToLowerInvariant()) {
-    throw "SHA256 invalido para actions/runner v$RunnerVersion"
-}
-Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
-Remove-Item -LiteralPath $zip -Force
-foreach ($item in (Get-SafeTreeItems -Path $stage `
-        -AllowedRunnerRoots $allowedRunnerRoots)) {
-    if (-not $item.PSIsContainer) { Unblock-File -LiteralPath $item.FullName }
-}
-Protect-AdminTree -Path $stage -AllowedRunnerRoots $allowedRunnerRoots
 
-Push-Location $stage
-try {
-    $registration = Invoke-GitHubApi -Method POST `
-        -Path "orgs/$owner/actions/runners/registration-token"
-    $RegToken = $registration.token
-    if ([string]::IsNullOrWhiteSpace($RegToken)) {
-        throw 'API nao retornou registration token'
+Ensure-ProtectedSharedRoot
+if (-not $ResumeStaged) {
+    if (Test-Path -LiteralPath $stage) {
+        throw "staging apareceu durante a quarentena: $stage"
     }
-    & .\config.cmd --unattended --url $Url --token $RegToken `
-        --labels 'civm-gate' --name $name --work '_work' `
-        --disableupdate --replace
-    if ($LASTEXITCODE -ne 0) {
-        throw "config.cmd falhou com exit $LASTEXITCODE"
+    New-Item -ItemType Directory -Path $stage | Out-Null
+    Set-ProtectedAcl -Path $stage -Directory $true -NetworkRead $false `
+        -InheritToChildren $true
+    $zip = Join-Path $stage 'runner.zip'
+    $src = "https://github.com/actions/runner/releases/download/v$RunnerVersion/actions-runner-win-x64-$RunnerVersion.zip"
+    Write-Host "baixando actions/runner v$RunnerVersion ..."
+    Invoke-WebRequest -Uri $src -OutFile $zip
+    $actualSHA256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualSHA256 -ne $RunnerSHA256.ToLowerInvariant()) {
+        throw "SHA256 invalido para actions/runner v$RunnerVersion"
     }
-} finally {
-    $RegToken = $null
-    Pop-Location
+    Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
+    Remove-Item -LiteralPath $zip -Force
+    foreach ($item in (Get-SafeTreeItems -Path $stage `
+            -AllowedRunnerRoots $allowedRunnerRoots)) {
+        if (-not $item.PSIsContainer) { Unblock-File -LiteralPath $item.FullName }
+    }
+    Protect-AdminTree -Path $stage -AllowedRunnerRoots $allowedRunnerRoots
+
+    Push-Location $stage
+    try {
+        $registration = Invoke-GitHubApi -Method POST `
+            -Path "orgs/$owner/actions/runners/registration-token"
+        $RegToken = $registration.token
+        if ([string]::IsNullOrWhiteSpace($RegToken)) {
+            throw 'API nao retornou registration token'
+        }
+        & .\config.cmd --unattended --url $Url --token $RegToken `
+            --labels 'civm-gate' --name $name --work '_work' `
+            --disableupdate --replace
+        if ($LASTEXITCODE -ne 0) {
+            throw "config.cmd falhou com exit $LASTEXITCODE"
+        }
+    } finally {
+        $RegToken = $null
+        Pop-Location
+    }
+    Quarantine-RemoteRunner
 }
 Protect-AdminTree -Path $stage -AllowedRunnerRoots $allowedRunnerRoots
 
 $newConfigPath = Join-Path $stage '.runner'
-if (-not (Test-Path -LiteralPath $newConfigPath -PathType Leaf)) {
-    throw 'config.cmd nao criou .runner'
+$listenerPath = Join-Path $stage 'bin\Runner.Listener.exe'
+foreach ($requiredFile in @(
+        $newConfigPath,
+        (Join-Path $stage '.credentials'),
+        (Join-Path $stage '.credentials_rsaparams'),
+        (Join-Path $stage 'run.cmd'),
+        $listenerPath)) {
+    if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf) -or
+        (Get-Item -LiteralPath $requiredFile -Force).Length -eq 0) {
+        throw "staging sem arquivo obrigatorio: $requiredFile"
+    }
 }
 $newConfig = Get-Content -LiteralPath $newConfigPath -Raw |
     ConvertFrom-Json -ErrorAction Stop
-if ($newConfig.agentName -ne $name -or $newConfig.DisableUpdate -ne $true) {
+$listenerVersion = (Get-Item -LiteralPath $listenerPath -Force).VersionInfo.FileVersion
+if ($newConfig.agentName -ne $name -or $newConfig.DisableUpdate -ne $true -or
+    $newConfig.gitHubUrl.TrimEnd('/') -ne $Url.TrimEnd('/') -or
+    $newConfig.workFolder -ne '_work' -or
+    $listenerVersion -ne "$RunnerVersion.0") {
     throw 'pos-condicao .runner divergente'
 }
 $remote = Get-RemoteRunner
-if ($null -eq $remote -or $remote.busy -or
-    @($remote.labels | Where-Object { $_.name -eq 'civm-gate' }).Count -ne 1 -or
-    @($remote.labels | Where-Object { $_.name -like 'civm-generation-*' }).Count -ne 0) {
+if ($null -eq $remote -or $remote.busy -or $remote.os -ne 'Windows' -or
+    $remote.status -ne 'offline' -or $newConfig.agentId -ne $remote.id -or
+    @($remote.labels | Where-Object { $_.type -eq 'custom' }).Count -ne 0) {
     throw "pos-condicao remota divergente para $name"
 }
 
-if (Test-Path -LiteralPath $dir) {
-    Protect-AdminTree -Path $dir -AllowedRunnerRoots $allowedRunnerRoots
-    Move-Item -LiteralPath $dir -Destination $rollback
-}
-Move-Item -LiteralPath $stage -Destination $dir
-Write-Host "OK: '$name' provisionado limpo; execute civm-gate-task-setup.ps1 -Index $Index."
+Move-StagedRunner
+$mode = if ($ResumeStaged) { 'staging validado e retomado' } else { 'provisionado limpo' }
+Write-Host "OK: '$name' $mode; execute civm-gate-task-setup.ps1 -Index $Index."

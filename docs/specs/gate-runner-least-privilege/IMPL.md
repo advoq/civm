@@ -4,7 +4,13 @@
 
 - `deploy/windows/civm-gate-runner-provision.ps1`: pausa publisher, remove a
   elegibilidade remota, drena e instala 2.336.0 com SHA-256 em staging
-  SYSTEM/Administrators-only, sem service e com `--disableupdate`.
+  SYSTEM/Administrators-only, sem service e com `--disableupdate`; após o
+  drain, o walker restaura acesso somente em diretórios reais, audita aliases
+  e permite retomar staging validado sem novo replace. A raiz compartilhada é
+  criada uma vez ou somente validada; um gate não normaliza ACL da fleet. A
+  contagem nativa de hardlinks precede toda reescrita de ACL em arquivos; o
+  reparo de diretórios preserva o inventário raw de ACEs e usa escrita de DACL
+  sem propagação aos filhos, com chaves Base64 comparadas ordinalmente.
 - `deploy/windows/civm-gate-task-setup.ps1`: preflight, migração de task,
   DACLs protegidas, listener direto, probe efetivo e owner real do processo.
 - `internal/hostdisk/ps1_safety_test.go`: contrato estrutural dos dois scripts.
@@ -19,6 +25,7 @@
 1. desabilitar o publisher; o provisionador remove `civm-gate`, confirma zero
    job remoto/local por 3 segundos e rejeita labels de geração residuais;
 2. reprovisionar um gate com versão e SHA-256 pinadas e `--disableupdate`;
+   staging parcial só pode usar `-ResumeStaged` após revisão do estado;
 3. executar o setup elevado; ele remove todas as labels customizadas e o probe
    precisa negar write/create/delete/rename, DACL e escrita nos binários;
 4. confirmar listener NETWORK SERVICE e runner online, ainda sem custom labels;

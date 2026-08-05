@@ -52,10 +52,32 @@
 - O provisionamento sempre usa diretório novo, runner 2.336.0, SHA-256 pinado,
   checagem do exit nativo e DACL SYSTEM/Administrators antes do download. Um
   único `.rollback`, também protegido, é removido após o setup verde.
+- Raízes são validadas sem travessia antes da quarentena. Depois do drain e do
+  stop, o walker recupera acesso administrativo somente em diretórios reais,
+  sem herança, e rejeita links antes de tocá-los. Só após a auditoria completa
+  o handoff reescreve DACLs e executa o swap.
+- A recuperação preserva o inventário binário de ACEs. Uma regra administrativa
+  FullControl já aplicável é reutilizada; regra Allow existente mas insuficiente
+  falha fechada; na ausência dela, uma ACE raw não herdável é inserida com
+  `SetFileSecurityW`, sem propagação aos filhos, sem ampliar nem remover ACE
+  herdável. O multiset binário usa comparação ordinal case-sensitive.
+- A raiz compartilhada da fleet nunca é reescrita por uma operação de gate
+  individual. Quando existente, sua DACL protegida e sem herança deve estar
+  canônica no preflight anterior à quarentena; drift falha sem derrubar o gate
+  e sem propagar ACL para hardlinks de outro gate.
+- `-ResumeStaged` retoma apenas staging existente e exige publisher desligado,
+  zero processo, `.rollback` ausente, versão/config/agent ID pinados, runner
+  remoto offline/idle e zero labels customizadas. Falha no segundo move restaura
+  o diretório antigo; o staging nunca é removido automaticamente.
 - Rejeitar todo reparse point também rejeita o layout oficial do runner. A
   exceção é estreita por nome, versão, cardinalidade, parent e tipo de alvo;
   junction externa, symlink ou cadeia de reparse continua falhando antes da
   quarentena.
+- Para todo arquivo não-reparse, os dois walkers exigem exatamente um hardlink
+  via metadata nativa do handle. Em `AccessDenied`, habilitam
+  `SeBackupPrivilege` só durante a consulta e restauram o estado anterior;
+  erro nativo ou contagem diferente de um falha antes de `Set-Acl` no arquivo
+  ou em seu alvo externo.
 - Falha após o start desabilita/desregistra a task e encerra somente o listener
   do diretório, após remover novamente as labels customizadas. `Runner.Worker`
   nunca é morto pelo rollout; se surgir, a compensação falha visivelmente e
@@ -75,6 +97,14 @@
 - fixture NTFS local e no CI Windows pago aceita as junctions oficiais e
   rejeita alvo externo, hard link, nível aninhado, nome/versão divergentes e
   cadeia;
+- fixture elevada parte de uma ACL legada não enumerável e prova recuperação
+  diretório a diretório sem resíduo; execução não elevada falha antes de criar
+  a fixture;
+- fixture elevada restringe a DACL de um hardlink, comprova contagem nativa 2,
+  rejeição nos dois walkers e SDDL externo idêntico;
+- fixture elevada combina uma ACE administrativa herdável, uma ACE ausente e
+  hardlink externo com DACL divergente não protegida; prova inserção raw,
+  rejeição e SDDL externo idêntico;
 - as quatro árvores live são enumeradas sem atravessar as oito junctions;
 - probe real de deploy valida leitura aceita e escrita negada sob SID S-1-5-20;
 - suíte Go com race detector permanece verde.
