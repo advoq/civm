@@ -744,7 +744,7 @@ $aclDenied = Denied {
         [System.Security.AccessControl.FileSystemRights]::Read,
         [System.Security.AccessControl.AccessControlType]::Allow)
     $a.AddAccessRule($aclMutationRule) | Out-Null
-    Set-Acl -LiteralPath $DeleteProbe -AclObject $a
+    Set-Acl -LiteralPath $DeleteProbe -AclObject $a -ErrorAction Stop
 }
 $runnerWriteDenied = $true
 foreach ($path in $RunnerPaths.Split('|')) {
