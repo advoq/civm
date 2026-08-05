@@ -1,6 +1,6 @@
 # SPEC — gate runner Windows com menor privilégio
 
-> Issue: `advoq/civm#231`. SSDV3 passos 2 e 2.5.
+> Issues: `advoq/civm#231`, `advoq/civm#234`. SSDV3 passos 2 e 2.5.
 
 ## Invariantes
 
@@ -13,6 +13,10 @@
   arquivo; SYSTEM e Administrators preservam `FullControl`.
 - O runner precisa ter `disableUpdate=true`; executáveis nunca ficam graváveis
   pelo job. Upgrade exige reprovisionamento com versão pinada.
+- A enumeração não atravessa reparse points. As únicas exceções são as
+  junctions oficiais `bin` e `externals`, cada uma com alvo único no diretório
+  sibling `<nome>.2.336.0`, que precisa existir como diretório real e não pode
+  ser outro reparse point. Hard links são sempre rejeitados.
 - O publisher precisa estar `Disabled`; o provisionador remove `civm-gate`,
   prova 3 segundos estáveis sem `busy`/Worker e só então desabilita as fontes
   locais. O setup remove todas as labels customizadas, repete o dwell e deixa o
@@ -48,12 +52,19 @@
 - O provisionamento sempre usa diretório novo, runner 2.336.0, SHA-256 pinado,
   checagem do exit nativo e DACL SYSTEM/Administrators antes do download. Um
   único `.rollback`, também protegido, é removido após o setup verde.
+- Rejeitar todo reparse point também rejeita o layout oficial do runner. A
+  exceção é estreita por nome, versão, cardinalidade, parent e tipo de alvo;
+  junction externa, symlink ou cadeia de reparse continua falhando antes da
+  quarentena.
 - Falha após o start desabilita/desregistra a task e encerra somente o listener
   do diretório, após remover novamente as labels customizadas. `Runner.Worker`
   nunca é morto pelo rollout; se surgir, a compensação falha visivelmente e
   preserva o job.
 - Falha intermediária prefere gate offline a restaurar automaticamente uma
   task SYSTEM. Rollback privilegiado continua decisão humana.
+- O host e seus administradores são confiáveis. Árvores maliciosas deixadas por
+  jobs são rejeitadas depois de provar zero Worker e parar o listener; mutação
+  concorrente por administrador local está fora do modelo de ameaça.
 
 ## Testes
 
@@ -61,6 +72,10 @@
   graváveis, quarantine-before-stop, owner real, listener direto e runner com
   auto-update desativado;
 - parser PowerShell valida os dois scripts;
+- fixture NTFS local e no CI Windows pago aceita as junctions oficiais e
+  rejeita alvo externo, hard link, nível aninhado, nome/versão divergentes e
+  cadeia;
+- as quatro árvores live são enumeradas sem atravessar as oito junctions;
 - probe real de deploy valida leitura aceita e escrita negada sob SID S-1-5-20;
 - suíte Go com race detector permanece verde.
 

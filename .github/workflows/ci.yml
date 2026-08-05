@@ -204,6 +204,18 @@ jobs:
           # cleanup --dry-run em path vazio nao deve mutar nada
           /tmp/civmctl cleanup --dry-run --no-docker --no-apt --tmp-dir=/tmp --work-dir=/tmp > /dev/null
 
+  windows-gate-safety:
+    name: Windows gate junction safety
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Exercise official and adversarial junctions
+        shell: powershell
+        run: .\scripts\tests\gate-runner-junction-safety.test.ps1
+
   self-hosted-smoke:
     name: Self-hosted runner smoke (civm)
     needs: changes
