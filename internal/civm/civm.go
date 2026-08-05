@@ -252,6 +252,11 @@ const (
 	// são chamados de dentro dele (já root). Caminho absoluto e único elimina a
 	// ambiguidade /usr/bin vs /bin do secure_path do sudo.
 	DefaultSafeDeleteWrapperPath = "/usr/local/bin/civm-safedelete"
+	// Root-owned fixed-command wrapper used by the Windows host to create a
+	// generation clean boundary. It is deliberately separate from safedelete:
+	// the only NOPASSWD operation for this protocol is an argumentless fixed
+	// prepare/resume/check verb, never generic civmctl or systemctl.
+	DefaultGenerationBoundaryWrapperPath = "/usr/local/bin/civm-generation-boundary"
 
 	// Raiz de onde installScopedSudoers lê os artefatos versionados em deploy/
 	// (espelha DefaultUnitsSourceDir). Single source of truth: o conteúdo do
@@ -259,12 +264,19 @@ const (
 	// (//go:embed é impossível através do boundary do pacote — SPECv2 DT-v2-5).
 	DefaultDeploySourceDir = "/opt/civm/deploy"
 	// Relativo a DefaultDeploySourceDir: o wrapper root validado (deploy/bin).
-	DefaultSafeDeleteWrapperSource = "bin/civm-safedelete"
+	DefaultSafeDeleteWrapperSource         = "bin/civm-safedelete"
+	DefaultGenerationBoundaryWrapperSource = "bin/civm-generation-boundary"
 	// Relativo a DefaultDeploySourceDir: o drop-in sudoers escopado (deploy/sudoers.d).
 	DefaultScopedSudoersSource = "sudoers.d/civm-cleanup"
 	// Destino do drop-in sudoers ativo; 0440 root:root, validado por visudo -c
 	// antes de ativar (SPECv2 §"Instalação do sudoers", DT-v2-1/3/5).
 	DefaultScopedSudoersDropIn = "/etc/sudoers.d/civm-cleanup"
+
+	// GenerationCleanBoundaryCapability is a stable host↔guest compatibility
+	// marker. The root wrapper checks it before every privileged operation, and
+	// civm-host rejects any marker other than GenerationCleanBoundaryMarker.
+	GenerationCleanBoundaryCapability = "generation-clean-boundary"
+	GenerationCleanBoundaryMarker     = "civm-generation-boundary/v1"
 )
 
 var (

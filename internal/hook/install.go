@@ -136,7 +136,7 @@ func Install(ctx context.Context, opts InstallOptions) InstallResult {
 				return installError(res, err)
 			}
 		}
-		// Install the privileged safedelete wrapper and the scoped sudoers drop-in
+		// Install the privileged fixed-command wrappers and scoped sudoers drop-in
 		// (docs/specs/civm-runner-reliability, DT-v2-1/3/5/7/8). Idempotent and
 		// fail-closed: the sudoers is only activated after visudo accepts it. The
 		// periodic watchdog opts out (SkipScopedSudoers) — provisioning owns it.
@@ -148,6 +148,9 @@ func Install(ctx context.Context, opts InstallOptions) InstallResult {
 			// visudo check above only validates SYNTAX. Prove the escalation will
 			// actually work as root before declaring install successful.
 			if err := verifySafeDeleteCapability(ctx, opts); err != nil {
+				return installError(res, err)
+			}
+			if err := verifyGenerationBoundaryCapability(ctx, opts); err != nil {
 				return installError(res, err)
 			}
 		}
@@ -201,6 +204,25 @@ func verifySafeDeleteCapability(ctx context.Context, opts InstallOptions) error 
 			"safedelete capability probe failed (sudo -n %s --check): %w; the NOPASSWD "+
 				"rule does not match or the wrapper is not invokable as root",
 			civm.DefaultSafeDeleteWrapperPath, err)
+	}
+	return nil
+}
+
+// verifyGenerationBoundaryCapability proves that the host-side protocol has
+// exactly the version the C# controller accepts. It is a no-op wrapper probe;
+// prepare/resume remain unavailable unless both sudoers and civmctl match.
+func verifyGenerationBoundaryCapability(ctx context.Context, opts InstallOptions) error {
+	out, err := opts.RunFn(ctx, "sudo", "-n", civm.DefaultGenerationBoundaryWrapperPath, "--check")
+	if err != nil {
+		return fmt.Errorf(
+			"generation-boundary capability probe failed (sudo -n %s --check): %w; the NOPASSWD "+
+				"rule does not match, the wrapper is not invokable, or civmctl is incompatible",
+			civm.DefaultGenerationBoundaryWrapperPath, err)
+	}
+	if strings.TrimSpace(string(out)) != civm.GenerationCleanBoundaryMarker {
+		return fmt.Errorf(
+			"generation-boundary capability probe returned incompatible marker %q (want %q)",
+			strings.TrimSpace(string(out)), civm.GenerationCleanBoundaryMarker)
 	}
 	return nil
 }

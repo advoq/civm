@@ -45,6 +45,8 @@ func main() {
 	cmd := os.Args[1]
 	args := os.Args[2:]
 	switch cmd {
+	case "capability":
+		os.Exit(runCapability(args))
 	case "version-pins":
 		os.Exit(runVersionPins(args))
 	case "parity":
@@ -126,6 +128,7 @@ USO
 
 COMANDOS
   version-pins    Imprime as versoes alvo (paridade com ubuntu-latest)
+	  capability     Prova uma capacidade versionada do civmctl
   parity          Valida ferramentas instaladas vs pins ubuntu-latest
   bootstrap       Provisiona Ubuntu 24.04 com tools alvo (idempotente)
   cleanup         Limpa Docker, /tmp, _work, apt cache (cron diario)

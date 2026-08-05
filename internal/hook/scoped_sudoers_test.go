@@ -36,7 +36,7 @@ type sudoersHarness struct {
 
 const (
 	testWrapperBody = "#!/bin/sh\nexit 0\n"
-	testSudoersBody = "emdev ALL=(root) NOPASSWD: /usr/local/bin/civm-safedelete\n"
+	testSudoersBody = "emdev ALL=(root) NOPASSWD: /usr/local/bin/civm-safedelete, /usr/local/bin/civm-generation-boundary\n"
 )
 
 // newSudoersOpts builds InstallOptions whose deploy sources serve the wrapper +
@@ -44,12 +44,15 @@ const (
 func newSudoersOpts(h *sudoersHarness) InstallOptions {
 	h.writes = map[string]recordedWrite{}
 	wrapperSrc := filepath.Join(civm.DefaultDeploySourceDir, civm.DefaultSafeDeleteWrapperSource)
+	boundarySrc := filepath.Join(civm.DefaultDeploySourceDir, civm.DefaultGenerationBoundaryWrapperSource)
 	sudoersSrc := filepath.Join(civm.DefaultDeploySourceDir, civm.DefaultScopedSudoersSource)
 	return InstallOptions{
 		DeploySourceDir: civm.DefaultDeploySourceDir,
 		ReadFileFn: func(path string) ([]byte, error) {
 			switch path {
 			case wrapperSrc:
+				return []byte(testWrapperBody), nil
+			case boundarySrc:
 				return []byte(testWrapperBody), nil
 			case sudoersSrc:
 				return []byte(testSudoersBody), nil
@@ -98,6 +101,14 @@ func TestInstallScopedSudoersWritesBothArtifacts(t *testing.T) {
 	if string(wrapper.data) != testWrapperBody {
 		t.Fatalf("wrapper content = %q, want %q", wrapper.data, testWrapperBody)
 	}
+	boundary, ok := h.writes[civm.DefaultGenerationBoundaryWrapperPath]
+	if !ok {
+		t.Fatalf("generation-boundary wrapper not written to %s (writes=%v)",
+			civm.DefaultGenerationBoundaryWrapperPath, h.writes)
+	}
+	if boundary.perm != safeDeleteWrapperPerm {
+		t.Fatalf("generation-boundary wrapper perm = %v, want %v", boundary.perm, safeDeleteWrapperPerm)
+	}
 
 	// Sudoers staged to the temp path at 0440, validated, then renamed into place.
 	sudoers, ok := h.writes[wantSudoersTmp]
@@ -125,6 +136,36 @@ func TestInstallScopedSudoersWritesBothArtifacts(t *testing.T) {
 	// Clean run leaves no temp removal.
 	if len(h.removes) != 0 {
 		t.Fatalf("unexpected removes on success: %v", h.removes)
+	}
+}
+
+func TestGenerationBoundaryDeployArtifactsAreFixedAndWhitelisted(t *testing.T) {
+	repoDeploy := filepath.Join("..", "..", "deploy")
+	wrapperPath := filepath.Join(repoDeploy, civm.DefaultGenerationBoundaryWrapperSource)
+	sudoersPath := filepath.Join(repoDeploy, civm.DefaultScopedSudoersSource)
+
+	wrapper, err := os.ReadFile(wrapperPath)
+	if err != nil {
+		t.Fatalf("read generation-boundary wrapper %s: %v", wrapperPath, err)
+	}
+	sudoers, err := os.ReadFile(sudoersPath)
+	if err != nil {
+		t.Fatalf("read sudoers %s: %v", sudoersPath, err)
+	}
+	content := string(wrapper)
+	if !strings.Contains(content, "CAPABILITY=generation-clean-boundary") ||
+		!strings.Contains(content, "\"$CIVMCTL\" capability \"$CAPABILITY\"") ||
+		!strings.Contains(content, "maintenance enter --execute --strict --timeout=120") ||
+		!strings.Contains(content, "maintenance exit --execute --timeout=120") ||
+		!strings.Contains(content, "warn-clean)") ||
+		!strings.Contains(content, `"$SYSTEMCTL" poweroff --no-block`) {
+		t.Fatalf("generation-boundary wrapper is missing its fixed contract:\n%s", content)
+	}
+	if strings.Contains(content, "$@") || strings.Contains(content, "eval ") {
+		t.Fatalf("generation-boundary wrapper must not forward arbitrary input:\n%s", content)
+	}
+	if !strings.Contains(string(sudoers), civm.DefaultGenerationBoundaryWrapperPath) {
+		t.Fatalf("sudoers does not whitelist %s:\n%s", civm.DefaultGenerationBoundaryWrapperPath, sudoers)
 	}
 }
 
@@ -260,7 +301,13 @@ func TestInstallScopedSudoersPropagatesSourceErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var h sudoersHarness
 			opts := newSudoersOpts(&h)
-			opts.ReadFileFn = tc.read
+			boundarySrc := filepath.Join(civm.DefaultDeploySourceDir, civm.DefaultGenerationBoundaryWrapperSource)
+			opts.ReadFileFn = func(path string) ([]byte, error) {
+				if path == boundarySrc {
+					return []byte(testWrapperBody), nil
+				}
+				return tc.read(path)
+			}
 
 			err := installScopedSudoers(context.Background(), opts)
 			if err == nil {
@@ -284,11 +331,14 @@ func TestInstallScopedSudoersReadsFromDeploySourceDir(t *testing.T) {
 
 	var readPaths []string
 	wrapperSrc := filepath.Join("/custom/deploy", civm.DefaultSafeDeleteWrapperSource)
+	boundarySrc := filepath.Join("/custom/deploy", civm.DefaultGenerationBoundaryWrapperSource)
 	sudoersSrc := filepath.Join("/custom/deploy", civm.DefaultScopedSudoersSource)
 	opts.ReadFileFn = func(path string) ([]byte, error) {
 		readPaths = append(readPaths, path)
 		switch path {
 		case wrapperSrc:
+			return []byte(testWrapperBody), nil
+		case boundarySrc:
 			return []byte(testWrapperBody), nil
 		case sudoersSrc:
 			return []byte(testSudoersBody), nil
@@ -299,7 +349,7 @@ func TestInstallScopedSudoersReadsFromDeploySourceDir(t *testing.T) {
 	if err := installScopedSudoers(context.Background(), opts); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if !contains(readPaths, wrapperSrc) || !contains(readPaths, sudoersSrc) {
+	if !contains(readPaths, wrapperSrc) || !contains(readPaths, boundarySrc) || !contains(readPaths, sudoersSrc) {
 		t.Fatalf("did not read from custom deploy dir: %v", readPaths)
 	}
 }
@@ -365,19 +415,26 @@ func TestInstallScopedSudoersWithRepoDeployArtifacts(t *testing.T) {
 	// The package lives at internal/hook; the repo deploy/ is two levels up.
 	repoDeploy := filepath.Join("..", "..", "deploy")
 	wrapperSrc := filepath.Join(repoDeploy, civm.DefaultSafeDeleteWrapperSource)
+	boundarySrc := filepath.Join(repoDeploy, civm.DefaultGenerationBoundaryWrapperSource)
 	sudoersSrc := filepath.Join(repoDeploy, civm.DefaultScopedSudoersSource)
 
 	wrapperBytes, err := os.ReadFile(wrapperSrc)
 	if err != nil {
 		t.Fatalf("read repo wrapper %s: %v", wrapperSrc, err)
 	}
+	boundaryBytes, err := os.ReadFile(boundarySrc)
+	if err != nil {
+		t.Fatalf("read repo generation-boundary wrapper %s: %v", boundarySrc, err)
+	}
 	sudoersBytes, err := os.ReadFile(sudoersSrc)
 	if err != nil {
 		t.Fatalf("read repo sudoers %s: %v", sudoersSrc, err)
 	}
 	// The sudoers must whitelist exactly the wrapper destination constant.
-	if !strings.Contains(string(sudoersBytes), civm.DefaultSafeDeleteWrapperPath) {
-		t.Fatalf("repo sudoers does not whitelist %s:\n%s", civm.DefaultSafeDeleteWrapperPath, sudoersBytes)
+	for _, path := range []string{civm.DefaultSafeDeleteWrapperPath, civm.DefaultGenerationBoundaryWrapperPath} {
+		if !strings.Contains(string(sudoersBytes), path) {
+			t.Fatalf("repo sudoers does not whitelist %s:\n%s", path, sudoersBytes)
+		}
 	}
 	// And it must NOT whitelist raw chown/rm or a path wildcard (DT-v2-1/3).
 	for _, forbidden := range []string{"/usr/bin/chown", "/usr/bin/rm", "/bin/chown", "/bin/rm", "*"} {
@@ -393,6 +450,8 @@ func TestInstallScopedSudoersWithRepoDeployArtifacts(t *testing.T) {
 		switch path {
 		case wrapperSrc:
 			return wrapperBytes, nil
+		case boundarySrc:
+			return boundaryBytes, nil
 		case sudoersSrc:
 			return sudoersBytes, nil
 		}
@@ -404,6 +463,9 @@ func TestInstallScopedSudoersWithRepoDeployArtifacts(t *testing.T) {
 	}
 	if string(h.writes[civm.DefaultSafeDeleteWrapperPath].data) != string(wrapperBytes) {
 		t.Fatalf("installed wrapper differs from repo artifact")
+	}
+	if string(h.writes[civm.DefaultGenerationBoundaryWrapperPath].data) != string(boundaryBytes) {
+		t.Fatalf("installed generation-boundary wrapper differs from repo artifact")
 	}
 	if len(h.renames) != 1 {
 		t.Fatalf("expected one activation, got %v", h.renames)

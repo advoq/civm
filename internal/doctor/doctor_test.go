@@ -182,7 +182,7 @@ func TestCollectAndRenderJSON(t *testing.T) {
 	if len(parsed.GitHubRepos) != 2 || parsed.GitHubRepos[1].Runners[0].Classification != "legacy_stale" {
 		t.Fatalf("parsed = %+v", parsed)
 	}
-	if len(parsed.HookChecks) != 7 {
+	if len(parsed.HookChecks) != 8 {
 		t.Fatalf("hook checks not rendered in JSON: %+v", parsed.HookChecks)
 	}
 }
@@ -401,6 +401,32 @@ func TestCheckScopedSudoersCapabilityProbe(t *testing.T) {
 	}
 	if c := checkScopedSudoers(context.Background(), failOpts); c.Severity != SeverityCritical {
 		t.Fatalf("probe failure should be Critical, got %+v", c)
+	}
+}
+
+func TestCheckGenerationBoundaryCapabilityRequiresExactMarker(t *testing.T) {
+	t.Parallel()
+
+	var got string
+	okOpts := DefaultOptions()
+	okOpts.RunFn = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		got = strings.Join(append([]string{name}, args...), " ")
+		return []byte(civm.GenerationCleanBoundaryMarker + "\n"), nil
+	}
+	if c := checkGenerationBoundaryCapability(context.Background(), okOpts); c.Severity != SeverityOK {
+		t.Fatalf("exact marker should be OK, got %+v", c)
+	}
+	want := "sudo -n " + civm.DefaultGenerationBoundaryWrapperPath + " --check"
+	if got != want {
+		t.Fatalf("probe invocation = %q, want %q", got, want)
+	}
+
+	badOpts := DefaultOptions()
+	badOpts.RunFn = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("civm-generation-boundary/v0\n"), nil
+	}
+	if c := checkGenerationBoundaryCapability(context.Background(), badOpts); c.Severity != SeverityCritical {
+		t.Fatalf("incompatible marker should be Critical, got %+v", c)
 	}
 }
 
@@ -685,6 +711,11 @@ func stubHookContractOK(opts *Options) {
 }
 
 func stubRunFnWithRequestedUser(_ context.Context, _ string, args ...string) ([]byte, error) {
+	for _, arg := range args {
+		if arg == civm.DefaultGenerationBoundaryWrapperPath {
+			return []byte(civm.GenerationCleanBoundaryMarker + "\n"), nil
+		}
+	}
 	for i, arg := range args {
 		if arg == "-p" && i+1 < len(args) && strings.HasPrefix(args[i+1], "User=") {
 			return []byte(strings.TrimPrefix(args[i+1], "User=") + "\n"), nil

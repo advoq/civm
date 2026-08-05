@@ -63,6 +63,10 @@ type Options struct {
 	Execute bool
 	// Force allows Enter to proceed even when idle.Check reports the host busy.
 	Force bool
+	// RequireStopped makes Enter fail closed until every eligible runner unit is
+	// stopped. Partial state is persisted so a later strict retry can finish the
+	// drain or Exit can restore the units that were already stopped.
+	RequireStopped bool
 	// StatePath is the JSON drain snapshot (default DefaultMaintenanceStatePath).
 	StatePath string
 	// LockPath is the flock file (default DefaultMaintenanceLockPath).
@@ -142,10 +146,14 @@ func applyDefaults(opts *Options) {
 // Enter drains this host: it stops the runner units and removes the civm label
 // per runner, then persists State. Individual systemctl/gh failures are logged
 // as warnings and tolerated; Enter only errors when BOTH the stop and the label
-// removal fail for EVERY runner (nothing was drained). Re-running with an
-// existing State is a no-op that only refreshes DrainedAt.
+// removal fail for EVERY runner (nothing was drained). When RequireStopped is
+// set, every eligible runner must be stopped; a partial snapshot is preserved
+// and retried rather than treated as a successful drain.
 func Enter(ctx context.Context, opts Options) (State, error) {
 	applyDefaults(&opts)
+	if opts.RequireStopped && opts.Force {
+		return State{}, errors.New("maintenance enter strict: --force is incompatible with a no-interruption drain")
+	}
 
 	if !opts.Execute {
 		return dryRunEnter(ctx, opts)
@@ -157,10 +165,29 @@ func Enter(ctx context.Context, opts Options) (State, error) {
 	}
 	defer func() { _ = release() }()
 
-	// Idempotent re-run: if a drain snapshot already exists, only refresh it.
+	// Default re-runs are idempotent. Strict re-runs deliberately retry only
+	// units that the persisted snapshot could not stop; otherwise a partial
+	// maintenance state would become a permanent false green.
 	if existing, ok, rerr := readState(opts); rerr != nil {
 		return State{}, rerr
 	} else if ok {
+		if opts.RequireStopped {
+			if !opts.Force && !opts.IdleCheckFn(ctx) {
+				return existing, errors.New("maintenance enter strict: host nao esta ocioso")
+			}
+			strictErr := retryStrictDrain(ctx, opts, &existing)
+			existing.DrainedAt = opts.NowFn().UTC().Format(timeLayout)
+			if werr := writeState(opts, existing); werr != nil {
+				return State{}, werr
+			}
+			if strictErr != nil {
+				return existing, strictErr
+			}
+			if !allRunnersStopped(existing.Runners) {
+				return existing, strictDrainError(existing.Runners)
+			}
+			return existing, nil
+		}
 		existing.DrainedAt = opts.NowFn().UTC().Format(timeLayout)
 		if werr := writeState(opts, existing); werr != nil {
 			return State{}, werr
@@ -172,8 +199,31 @@ func Enter(ctx context.Context, opts Options) (State, error) {
 		return State{}, errors.New("maintenance enter: host nao esta ocioso (use --force para drenar mesmo assim)")
 	}
 
-	runners := discoverRunners(ctx, opts)
+	runners, discoverErr := discoverRunners(ctx, opts)
+	if discoverErr != nil {
+		if opts.RequireStopped {
+			return State{}, discoverErr
+		}
+		warn("systemctl list-units: %v", discoverErr)
+		runners = nil
+	}
 	state := State{DrainedAt: opts.NowFn().UTC().Format(timeLayout)}
+	if opts.RequireStopped {
+		for _, runner := range runners {
+			state.Runners = append(state.Runners, RunnerState{Name: runner.Name, Repo: runner.Repo})
+		}
+		strictErr := strictDrain(ctx, opts, &state, runners)
+		if err := writeState(opts, state); err != nil {
+			return State{}, err
+		}
+		if strictErr != nil {
+			return state, strictErr
+		}
+		if !allRunnersStopped(state.Runners) {
+			return state, strictDrainError(state.Runners)
+		}
+		return state, nil
+	}
 	drainedAny := false
 	for _, rn := range runners {
 		applied := drainRunner(ctx, opts, rn)
@@ -189,6 +239,99 @@ func Enter(ctx context.Context, opts Options) (State, error) {
 		return State{}, err
 	}
 	return state, nil
+}
+
+func allRunnersStopped(runners []RunnerState) bool {
+	for _, runner := range runners {
+		if !runner.Stopped {
+			return false
+		}
+	}
+	return true
+}
+
+func strictDrainError(runners []RunnerState) error {
+	pendingStops := 0
+	pendingLabels := 0
+	for _, runner := range runners {
+		if !runner.Stopped {
+			pendingStops++
+		}
+		if runner.Repo == "" || !runner.LabelRemoved {
+			pendingLabels++
+		}
+	}
+	return fmt.Errorf("maintenance enter strict: %d listener(s) not stopped; %d runner label(s) not withdrawn", pendingStops, pendingLabels)
+}
+
+func retryStrictDrain(ctx context.Context, opts Options, state *State) error {
+	if state == nil {
+		return errors.New("maintenance enter strict: missing persisted state")
+	}
+	refs, err := discoverRunners(ctx, opts)
+	if err != nil {
+		return err
+	}
+	return strictDrain(ctx, opts, state, refs)
+}
+
+// strictDrain first withdraws every runner label, then proves idleness again,
+// and only then stops units. The ordering closes the dispatch race between an
+// idle probe and systemctl stop: a new job cannot be assigned after labels are
+// gone, while an already assigned job is caught by the second idle probe.
+func strictDrain(ctx context.Context, opts Options, state *State, refs []runnerRef) error {
+	if state == nil {
+		return errors.New("maintenance enter strict: missing persisted state")
+	}
+	byUnit := make(map[string]int, len(state.Runners))
+	for i, runner := range state.Runners {
+		byUnit[runnerUnitName(runner)] = i
+	}
+	for _, ref := range refs {
+		if _, known := byUnit[ref.Unit]; known {
+			continue
+		}
+		state.Runners = append(state.Runners, RunnerState{Name: ref.Name, Repo: ref.Repo})
+		byUnit[ref.Unit] = len(state.Runners) - 1
+	}
+
+	for i := range state.Runners {
+		runner := &state.Runners[i]
+		if runner.LabelRemoved || runner.Repo == "" {
+			continue
+		}
+		runnerID, err := removeLabel(ctx, opts, runner.Repo, runner.Name)
+		if err != nil {
+			warn("gh remove label %s on %s: %v", civmLabel, runner.Repo, err)
+			continue
+		}
+		runner.RunnerID = runnerID
+		runner.LabelRemoved = true
+	}
+	for _, runner := range state.Runners {
+		if runner.Repo == "" || !runner.LabelRemoved {
+			return strictDrainError(state.Runners)
+		}
+	}
+	if !opts.IdleCheckFn(ctx) {
+		return errors.New("maintenance enter strict: host became busy after labels were withdrawn")
+	}
+	for i := range state.Runners {
+		runner := &state.Runners[i]
+		if runner.Stopped {
+			continue
+		}
+		unit := runnerUnitName(*runner)
+		if _, err := opts.RunFn(ctx, "sudo", "systemctl", "stop", unit); err != nil {
+			warn("systemctl stop %s: %v", unit, err)
+			continue
+		}
+		runner.Stopped = true
+	}
+	if !allRunnersStopped(state.Runners) {
+		return strictDrainError(state.Runners)
+	}
+	return nil
 }
 
 // Exit restores the host using the recorded State, then deletes it. An absent
@@ -234,7 +377,12 @@ func dryRunEnter(ctx context.Context, opts Options) (State, error) {
 		return existing, nil
 	}
 	state := State{DrainedAt: opts.NowFn().UTC().Format(timeLayout)}
-	for _, rn := range discoverRunners(ctx, opts) {
+	runners, err := discoverRunners(ctx, opts)
+	if err != nil {
+		warn("systemctl list-units: %v", err)
+		runners = nil
+	}
+	for _, rn := range runners {
 		state.Runners = append(state.Runners, RunnerState{
 			Name:         rn.Name,
 			Repo:         rn.Repo,
@@ -263,12 +411,11 @@ type runnerRef struct {
 	Repo string
 }
 
-func discoverRunners(ctx context.Context, opts Options) []runnerRef {
+func discoverRunners(ctx context.Context, opts Options) ([]runnerRef, error) {
 	out, err := opts.RunFn(ctx, "systemctl", "list-units", "--type=service",
 		"--no-legend", "--no-pager", "--all", runnerUnitGlob)
 	if err != nil {
-		warn("systemctl list-units: %v", err)
-		return nil
+		return nil, fmt.Errorf("maintenance enter: enumerate runner units: %w", err)
 	}
 	allow := repoAllowSet(opts.Repos)
 	seen := map[string]struct{}{}
@@ -293,7 +440,7 @@ func discoverRunners(ctx context.Context, opts Options) []runnerRef {
 		refs = append(refs, candidate)
 	}
 	sort.SliceStable(refs, func(i, j int) bool { return refs[i].Unit < refs[j].Unit })
-	return refs
+	return refs, nil
 }
 
 func drainRunner(ctx context.Context, opts Options, rn runnerRef) RunnerState {

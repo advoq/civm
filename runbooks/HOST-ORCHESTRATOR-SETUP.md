@@ -19,6 +19,7 @@
 4. One fine-grained PAT per GitHub owner with **actions:read**, as files:
    `C:\ProgramData\civm\gh-token-<owner>.txt` (single line, no log echo).
 5. Guest user + IP/DNS reachable from SYSTEM SSH (prefer stable LAN IP if Tailscale DNS is stale).
+6. Capability guest `civm-generation-boundary/v1` instalada antes do owner C#.
 
 ## Owner ativo e rollback
 
@@ -113,6 +114,8 @@ the orchestrator treats missing/`<=0` guest free as **999 (unknown)** — does n
 | Lock | Only one of PS orch / civm-host **active** holds `V:\civm-reclaim.lock` |
 | Reboot/power policy | boot trigger present; start/stop-on-battery both `false`; `StartWhenAvailable=true` |
 | Task `civm-watchdog` | `LastTaskResult=0`; status `OK`; owner exatamente `1` |
+| Guest boundary | probe imprime exatamente `civm-generation-boundary/v1` |
+| Reaper | timer `enabled+active`; eventos classificáveis no journal |
 
 Inspect the effective definition from an elevated shell (a non-elevated query can
 hide SYSTEM tasks):
@@ -130,6 +133,7 @@ $t | Select-Object State, Actions, Triggers, Settings
 ## Related
 
 - Behavior SPEC: `docs/specs/orchestrator-scale-to-zero/`
+- Rollout guest→host: `runbooks/GENERATION-CLEAN-BOUNDARY-ROLLOUT.md`
 - PR-queue canary: `runbooks/PR-QUEUE-ENABLE.md`
 - VHDX maintenance: `runbooks/RUNBOOK-HOST-VHDX-MAINTENANCE.md`
 - Go host port: **superseded** — `docs/specs/orchestrator-go-port/STATUS.md`

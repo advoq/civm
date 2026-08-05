@@ -398,7 +398,7 @@ func TestRunnerSlot(t *testing.T) {
 		"/home/runner/actions-runner-cmpx": "cmpx",
 		"/home/runner/actions-runner":      "actions-runner",
 		"/srv/ci/my-runner":                "my-runner",
-		"actions-runner-acme":             "acme",
+		"actions-runner-acme":              "acme",
 	}
 	for dir, want := range cases {
 		if got := runnerSlot(dir); got != want {
@@ -509,7 +509,7 @@ func TestInstallSurfacesPortAllocationError(t *testing.T) {
 // only need ReadFileFn to return non-empty bytes and visudo to succeed.
 const (
 	fixtureWrapperContent = "#!/bin/sh\nexit 0\n"
-	fixtureSudoersContent = "emdev ALL=(root) NOPASSWD: /usr/local/bin/civm-safedelete\n"
+	fixtureSudoersContent = "emdev ALL=(root) NOPASSWD: /usr/local/bin/civm-safedelete, /usr/local/bin/civm-generation-boundary\n"
 )
 
 // deployReadFileFn returns a ReadFileFn that serves the deploy wrapper + sudoers
@@ -517,10 +517,13 @@ const (
 // .env/file fixtures). A nil base treats unknown paths as empty.
 func deployReadFileFn(base func(string) ([]byte, error)) func(string) ([]byte, error) {
 	wrapperSrc := filepath.Join(civmDeployDir, "bin/civm-safedelete")
+	boundarySrc := filepath.Join(civmDeployDir, "bin/civm-generation-boundary")
 	sudoersSrc := filepath.Join(civmDeployDir, "sudoers.d/civm-cleanup")
 	return func(path string) ([]byte, error) {
 		switch path {
 		case wrapperSrc:
+			return []byte(fixtureWrapperContent), nil
+		case boundarySrc:
 			return []byte(fixtureWrapperContent), nil
 		case sudoersSrc:
 			return []byte(fixtureSudoersContent), nil
@@ -558,6 +561,26 @@ func TestVerifySafeDeleteCapabilityPassesOnZeroExit(t *testing.T) {
 	}
 }
 
+func TestVerifyGenerationBoundaryCapabilityRequiresExactMarker(t *testing.T) {
+	good := InstallOptions{
+		RunFn: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte(civm.GenerationCleanBoundaryMarker + "\n"), nil
+		},
+	}
+	if err := verifyGenerationBoundaryCapability(context.Background(), good); err != nil {
+		t.Fatalf("expected exact marker to pass: %v", err)
+	}
+
+	bad := InstallOptions{
+		RunFn: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte("civm-generation-boundary/v0\n"), nil
+		},
+	}
+	if err := verifyGenerationBoundaryCapability(context.Background(), bad); err == nil {
+		t.Fatal("expected incompatible marker to fail closed")
+	}
+}
+
 func TestInstallFailsClosedWhenCapabilityProbeFails(t *testing.T) {
 	opts := InstallOptions{
 		Execute:     true,
@@ -592,7 +615,12 @@ func TestInstallFailsClosedWhenCapabilityProbeFails(t *testing.T) {
 // acceptVisudoRunFn returns a RunFn that accepts visudo validation and records
 // nothing else, so Execute-path tests do not perform real sudo/visudo.
 func acceptVisudoRunFn() func(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+	return func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		for _, arg := range args {
+			if arg == civm.DefaultGenerationBoundaryWrapperPath {
+				return []byte(civm.GenerationCleanBoundaryMarker + "\n"), nil
+			}
+		}
 		return nil, nil
 	}
 }

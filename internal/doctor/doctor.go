@@ -292,6 +292,7 @@ func collectHookChecks(ctx context.Context, opts Options, systemd []runner.Statu
 		checkRunnerServices(systemd, systemdErr),
 		checkRunnerSerialization(systemd, systemdErr),
 		checkScopedSudoers(ctx, opts),
+		checkGenerationBoundaryCapability(ctx, opts),
 		checkUnitScriptsInstalled(opts),
 	}
 	worst := SeverityOK
@@ -321,6 +322,35 @@ func checkScopedSudoers(ctx context.Context, opts Options) HookCheck {
 		Name:     "SCOPED_SUDOERS",
 		Severity: SeverityOK,
 		Detail:   fmt.Sprintf("sudo -n %s --check ok", civm.DefaultSafeDeleteWrapperPath),
+	}
+}
+
+// checkGenerationBoundaryCapability proves the exact versioned protocol used
+// by civm-host before it can request a guest drain, cleanup or poweroff. A
+// successful sudo syntax check is insufficient: the wrapper must be invokable
+// and its civmctl capability marker must match the host contract.
+func checkGenerationBoundaryCapability(ctx context.Context, opts Options) HookCheck {
+	out, err := opts.RunFn(ctx, "sudo", "-n", civm.DefaultGenerationBoundaryWrapperPath, "--check")
+	if err != nil {
+		return HookCheck{
+			Name:     "GENERATION_BOUNDARY_CAPABILITY",
+			Severity: SeverityCritical,
+			Detail: fmt.Sprintf("sudo -n %s --check failed (%v); deploy civmctl and run sudo civmctl hook install --execute --no-restart",
+				civm.DefaultGenerationBoundaryWrapperPath, err),
+		}
+	}
+	if strings.TrimSpace(string(out)) != civm.GenerationCleanBoundaryMarker {
+		return HookCheck{
+			Name:     "GENERATION_BOUNDARY_CAPABILITY",
+			Severity: SeverityCritical,
+			Detail: fmt.Sprintf("sudo -n %s --check returned incompatible marker %q; deploy matching civmctl and wrapper",
+				civm.DefaultGenerationBoundaryWrapperPath, strings.TrimSpace(string(out))),
+		}
+	}
+	return HookCheck{
+		Name:     "GENERATION_BOUNDARY_CAPABILITY",
+		Severity: SeverityOK,
+		Detail:   fmt.Sprintf("sudo -n %s --check returned %s", civm.DefaultGenerationBoundaryWrapperPath, civm.GenerationCleanBoundaryMarker),
 	}
 }
 
