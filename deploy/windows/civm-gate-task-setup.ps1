@@ -739,6 +739,11 @@ $deleteDenied = Denied { [IO.File]::Delete($DeleteProbe) }
 $moveDenied = Denied { [IO.File]::Move($DeleteProbe, $MoveProbe) }
 $aclDenied = Denied {
     $a = Get-Acl -LiteralPath $DeleteProbe
+    $aclMutationRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+        [System.Security.Principal.SecurityIdentifier]'S-1-1-0',
+        [System.Security.AccessControl.FileSystemRights]::Read,
+        [System.Security.AccessControl.AccessControlType]::Allow)
+    $a.AddAccessRule($aclMutationRule) | Out-Null
     Set-Acl -LiteralPath $DeleteProbe -AclObject $a
 }
 $runnerWriteDenied = $true

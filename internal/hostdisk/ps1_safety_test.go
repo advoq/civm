@@ -141,6 +141,8 @@ func TestGateRunnerTaskUsesLeastPrivilegeAndReadOnlyContext(t *testing.T) {
 		"delete_denied",
 		"move_denied",
 		"acl_denied",
+		"$aclMutationRule = [System.Security.AccessControl.FileSystemAccessRule]::new(",
+		"$a.AddAccessRule($aclMutationRule)",
 		"runner_write_denied",
 		"[string]::IsNullOrWhiteSpace($result)",
 		"catch [System.UnauthorizedAccessException]",
