@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.26](https://github.com/advoq/civm/compare/v1.22.25...v1.22.26) (2026-08-05)
+
+
+### Bug Fixes
+
+* recover legacy gate ACLs ([#238](https://github.com/advoq/civm/issues/238)) ([ef29b59](https://github.com/advoq/civm/commit/ef29b59170ffb33f6bd93b8f8bc1936560b6aac2))
+
 ## [1.22.25](https://github.com/advoq/civm/compare/v1.22.24...v1.22.25) (2026-08-05)
 
 
