@@ -22,6 +22,8 @@ $publisherTask = 'civm-host-orchestrator'
 $networkServiceSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-20'
 $systemSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-18'
 $administratorsSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-32-544'
+$listenerStartTimeoutSeconds = 120
+$remoteOnlineTimeoutSeconds = 120
 $runnerConfigPath = Join-Path $dir '.runner'
 $runCmdPath = Join-Path $dir 'run.cmd'
 $listenerPath = Join-Path $dir 'bin\Runner.Listener.exe'
@@ -635,7 +637,7 @@ function Wait-RemoteRunnerOnline {
         [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$Name
     )
-    $deadline = (Get-Date).AddSeconds(30)
+    $deadline = (Get-Date).AddSeconds($remoteOnlineTimeoutSeconds)
     do {
         Start-Sleep -Milliseconds 500
         $remote = Get-RemoteRunner -Owner $Owner -Name $Name
@@ -928,7 +930,7 @@ try {
         throw "task nao confirmou NETWORK SERVICE/ServiceAccount/Limited: $task"
     }
     Start-ScheduledTask -TaskName $task
-    $deadline = (Get-Date).AddSeconds(30)
+    $deadline = (Get-Date).AddSeconds($listenerStartTimeoutSeconds)
     do {
         Start-Sleep -Milliseconds 500
         $listeners = Get-RunnerProcesses -ProcessName 'Runner.Listener.exe'
