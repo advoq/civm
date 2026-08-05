@@ -226,8 +226,8 @@ if (-not $windowsPrincipal.IsInRole(
 }
 $RunnerVersion = $expectedVersion
 $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$systemSid = $currentSid
-$administratorsSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-32-545'
+$systemSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-18'
+$administratorsSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-32-544'
 $networkServiceSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-20'
 
 $sharedRoot = Join-Path ([System.IO.Path]::GetTempPath()) `
