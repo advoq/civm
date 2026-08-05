@@ -760,16 +760,18 @@ function Assert-SafeOfficialRunnerJunction {
     }
     $expected = [System.IO.Path]::GetFullPath((Join-Path $logicalRoot `
         "$($Item.Name).$ExpectedRunnerVersion"))
+    $physicalTarget = [System.IO.Path]::GetFullPath((Join-Path $runnerRoot `
+        "$($Item.Name).$ExpectedRunnerVersion"))
     $actual = [System.IO.Path]::GetFullPath([string]$targets[0])
     if (-not $actual.Equals($expected, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "junction oficial fora do alvo pinado: $($Item.FullName) -> $actual"
     }
-    $targetItem = Get-Item -LiteralPath $expected -Force -ErrorAction Stop
+    $targetItem = Get-Item -LiteralPath $physicalTarget -Force -ErrorAction Stop
     if (-not $targetItem.PSIsContainer -or
         ($targetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
         -not $targetItem.Parent.FullName.Equals(
-            $logicalRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "alvo da junction oficial nao e diretorio sibling real: $expected"
+            $runnerRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "alvo fisico da junction nao e sibling real: $physicalTarget"
     }
 }
 
