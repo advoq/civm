@@ -37,7 +37,10 @@ foreach ($source in $sources) {
     $ast = [System.Management.Automation.Language.Parser]::ParseFile(
         $source, [ref]$tokens, [ref]$parseErrors)
     if ($parseErrors.Count -ne 0) { throw "parse failed: $source" }
-    foreach ($name in @('Assert-SafeOfficialRunnerJunction', 'Get-SafeTreeItems')) {
+    foreach ($name in @(
+            'Get-FileLinkCount',
+            'Assert-SafeOfficialRunnerJunction',
+            'Get-SafeTreeItems')) {
         $functionAst = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -157,4 +160,317 @@ foreach ($source in $sources) {
         }
     }
     Write-Host "PASS: $(Split-Path $source -Leaf) official junction contract"
+}
+
+$provisionSource = $sources[0]
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $provisionSource, [ref]$tokens, [ref]$parseErrors)
+foreach ($name in @(
+        'Add-FileSystemRule',
+        'Resolve-AccountSid',
+        'Get-FileLinkCount',
+        'Set-ProtectedAcl',
+        'Assert-ProtectedAcl',
+        'Grant-AdminTraversal',
+        'Assert-SafeTreeRoot',
+        'Ensure-ProtectedSharedRoot',
+        'Assert-SafeOfficialRunnerJunction',
+        'Get-SafeTreeItems',
+        'Protect-AdminTree',
+        'Move-StagedRunner')) {
+    $functionAst = $ast.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq $name
+    }, $true)
+    if ($null -eq $functionAst) { throw "missing function $name in $provisionSource" }
+    Invoke-Expression $functionAst.Extent.Text
+}
+
+$sourceText = Get-Content -LiteralPath $provisionSource -Raw
+$resumeBranches = @($ast.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.IfStatementAst] -and
+        $node.Extent.Text -match 'if \(-not \$ResumeStaged\)' -and
+        $node.Extent.Text -match 'registration-token'
+}, $true))
+if ($resumeBranches.Count -ne 1) {
+    throw "expected one isolated fresh-provision branch; got $($resumeBranches.Count)"
+}
+$freshBranch = $resumeBranches[0]
+$outsideFreshBranch = $sourceText.Remove(
+    $freshBranch.Extent.StartOffset,
+    $freshBranch.Extent.EndOffset - $freshBranch.Extent.StartOffset)
+if ($outsideFreshBranch -match 'registration-token' -or
+    $outsideFreshBranch -match 'config\.cmd --unattended') {
+    throw 'resume path can reach registration POST or config replacement'
+}
+Write-Host 'PASS: resume path excludes registration POST and replacement'
+
+$setupText = Get-Content -LiteralPath $sources[1] -Raw
+if ($setupText -match 'Set-ExactProtectedAcl -Path \$Root') {
+    throw 'setup mutates the shared root from one gate'
+}
+if ($setupText -notmatch 'Assert-ExactProtectedAcl -Path \$Root') {
+    throw 'setup does not fail closed on shared-root ACL drift'
+}
+Write-Host 'PASS: setup validates shared root without mutating it'
+
+$windowsPrincipal = [System.Security.Principal.WindowsPrincipal]::new(
+    [System.Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $windowsPrincipal.IsInRole(
+        [System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'ACL handoff fixture requires elevation before creating its fixture'
+}
+$RunnerVersion = $expectedVersion
+$currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$systemSid = $currentSid
+$administratorsSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-32-545'
+$networkServiceSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-20'
+
+$sharedRoot = Join-Path ([System.IO.Path]::GetTempPath()) `
+    ('civm-shared-root-' + [guid]::NewGuid().ToString('N'))
+$sharedExternal = Join-Path ([System.IO.Path]::GetTempPath()) `
+    ('civm-shared-external-' + [guid]::NewGuid().ToString('N') + '.txt')
+$sharedAlias = Join-Path $sharedRoot 'outside-hardlink.txt'
+$sharedFixtureCreated = $false
+try {
+    New-Item -ItemType Directory -Path $sharedRoot | Out-Null
+    New-Item -ItemType File -Path $sharedExternal | Out-Null
+    New-Item -ItemType HardLink -Path $sharedAlias `
+        -Target $sharedExternal | Out-Null
+    $sharedFixtureCreated = $true
+    $legacy = New-Object System.Security.AccessControl.DirectorySecurity
+    $legacy.SetOwner($currentSid)
+    $legacy.SetAccessRuleProtection($false, $true)
+    $legacyRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+        $currentSid,
+        [System.Security.AccessControl.FileSystemRights]::FullControl,
+        [System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow)
+    $legacy.AddAccessRule($legacyRule) | Out-Null
+    Set-Acl -LiteralPath $sharedRoot -AclObject $legacy
+    $sharedSddlBefore = (Get-Acl -LiteralPath $sharedExternal).Sddl
+    $Root = $sharedRoot
+    Assert-Rejected { Ensure-ProtectedSharedRoot } `
+        '*DACL de provisionamento divergente*'
+    $sharedSddlAfter = (Get-Acl -LiteralPath $sharedExternal).Sddl
+    if ($sharedSddlAfter -ne $sharedSddlBefore) {
+        throw 'shared-root drift validation changed an external hard-link DACL'
+    }
+    Write-Host 'PASS: shared-root drift rejects without hard-link propagation'
+    Set-ProtectedAcl -Path $sharedRoot -Directory $true -NetworkRead $true `
+        -InheritToChildren $false
+    $canonicalSddlBefore = (Get-Acl -LiteralPath $sharedExternal).Sddl
+    Ensure-ProtectedSharedRoot
+    $canonicalSddlAfter = (Get-Acl -LiteralPath $sharedExternal).Sddl
+    if ($canonicalSddlAfter -ne $canonicalSddlBefore) {
+        throw 'canonical shared-root validation changed an external hard-link DACL'
+    }
+    Write-Host 'PASS: canonical shared root validates without mutation'
+} finally {
+    if ($sharedFixtureCreated) {
+        if (Test-Path -LiteralPath $sharedExternal) {
+            $fileAcl = New-Object System.Security.AccessControl.FileSecurity
+            $fileAcl.SetOwner($currentSid)
+            $fileAcl.SetAccessRuleProtection($true, $false)
+            $fileRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+                $currentSid,
+                [System.Security.AccessControl.FileSystemRights]::FullControl,
+                [System.Security.AccessControl.AccessControlType]::Allow)
+            $fileAcl.AddAccessRule($fileRule) | Out-Null
+            Set-Acl -LiteralPath $sharedExternal -AclObject $fileAcl
+        }
+        if (Test-Path -LiteralPath $sharedAlias) {
+            Remove-Item -LiteralPath $sharedAlias -Force
+        }
+        if (Test-Path -LiteralPath $sharedRoot) {
+            Remove-Item -LiteralPath $sharedRoot -Recurse -Force
+        }
+        if (Test-Path -LiteralPath $sharedExternal) {
+            Remove-Item -LiteralPath $sharedExternal -Force
+        }
+    }
+}
+
+foreach ($source in $sources) {
+    $sourceTokens = $null
+    $sourceErrors = $null
+    $sourceAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $source, [ref]$sourceTokens, [ref]$sourceErrors)
+    foreach ($functionName in @(
+            'Get-FileLinkCount',
+            'Assert-SafeOfficialRunnerJunction',
+            'Get-SafeTreeItems')) {
+        $sourceFunction = $sourceAst.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true)
+        if ($null -eq $sourceFunction) {
+            throw "missing function $functionName in $source"
+        }
+        Invoke-Expression $sourceFunction.Extent.Text
+    }
+    $hardLinkRoot = Join-Path ([System.IO.Path]::GetTempPath()) `
+        ('civm-acl-hardlink-root-' + [guid]::NewGuid().ToString('N'))
+    $hardLinkExternal = Join-Path ([System.IO.Path]::GetTempPath()) `
+        ('civm-acl-hardlink-external-' + [guid]::NewGuid().ToString('N') + '.txt')
+    $hardLinkAlias = Join-Path $hardLinkRoot 'outside-hardlink.txt'
+    $hardLinkFixtureCreated = $false
+    try {
+        New-Item -ItemType Directory -Path $hardLinkRoot | Out-Null
+        New-Item -ItemType File -Path $hardLinkExternal | Out-Null
+        New-Item -ItemType HardLink -Path $hardLinkAlias `
+            -Target $hardLinkExternal | Out-Null
+        $hardLinkFixtureCreated = $true
+        $restricted = New-Object System.Security.AccessControl.FileSecurity
+        $restricted.SetOwner($currentSid)
+        $restricted.SetAccessRuleProtection($true, $false)
+        $restrictedRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+            $networkServiceSid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            [System.Security.AccessControl.AccessControlType]::Allow)
+        $restricted.AddAccessRule($restrictedRule) | Out-Null
+        Set-Acl -LiteralPath $hardLinkExternal -AclObject $restricted
+        $externalSddlBefore = (Get-Acl -LiteralPath $hardLinkExternal).Sddl
+        if ((Get-FileLinkCount -Path $hardLinkAlias) -ne 2) {
+            throw 'native hard-link count did not return two'
+        }
+        Assert-Rejected {
+            [void](Get-SafeTreeItems -Path $hardLinkRoot `
+                -AllowedRunnerRoots @($hardLinkRoot))
+        } '*link de filesystem proibido*'
+        Assert-Rejected {
+            [void](Get-FileLinkCount -Path (Join-Path $hardLinkRoot 'missing'))
+        } '*falha validando hardlinks*'
+        $externalSddlAfter = (Get-Acl -LiteralPath $hardLinkExternal).Sddl
+        if ($externalSddlAfter -ne $externalSddlBefore) {
+            throw 'native hard-link validation changed the external DACL'
+        }
+        Write-Host "PASS: $(Split-Path $source -Leaf) rejects restricted hardlink"
+    } finally {
+        if ($hardLinkFixtureCreated) {
+            if (Test-Path -LiteralPath $hardLinkExternal) {
+                $fileAcl = New-Object System.Security.AccessControl.FileSecurity
+                $fileAcl.SetOwner($currentSid)
+                $fileAcl.SetAccessRuleProtection($true, $false)
+                $fileRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+                    $currentSid,
+                    [System.Security.AccessControl.FileSystemRights]::FullControl,
+                    [System.Security.AccessControl.AccessControlType]::Allow)
+                $fileAcl.AddAccessRule($fileRule) | Out-Null
+                Set-Acl -LiteralPath $hardLinkExternal -AclObject $fileAcl
+            }
+            if (Test-Path -LiteralPath $hardLinkAlias) {
+                Remove-Item -LiteralPath $hardLinkAlias -Force
+            }
+            if (Test-Path -LiteralPath $hardLinkRoot) {
+                Remove-Item -LiteralPath $hardLinkRoot -Recurse -Force
+            }
+            if (Test-Path -LiteralPath $hardLinkExternal) {
+                Remove-Item -LiteralPath $hardLinkExternal -Force
+            }
+        }
+    }
+}
+
+foreach ($functionName in @(
+        'Get-FileLinkCount',
+        'Grant-AdminTraversal',
+        'Assert-SafeOfficialRunnerJunction',
+        'Get-SafeTreeItems')) {
+    $provisionFunction = $ast.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq $functionName
+    }, $true)
+    Invoke-Expression $provisionFunction.Extent.Text
+}
+
+$swapRoot = Join-Path ([System.IO.Path]::GetTempPath()) `
+    ('civm-resume-swap-' + [guid]::NewGuid().ToString('N'))
+$dir = Join-Path $swapRoot 'runner-1'
+$stage = "$dir.new"
+$rollback = "$dir.rollback"
+$allowedRunnerRoots = @($dir, $stage, $rollback)
+try {
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    New-Item -ItemType File -Path (Join-Path $dir 'old-marker') | Out-Null
+    $swapRejected = $false
+    try {
+        Move-StagedRunner
+    } catch {
+        $swapRejected = $true
+    }
+    if (-not $swapRejected) {
+        throw 'missing staging did not reject the swap'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $dir 'old-marker') -PathType Leaf) -or
+        (Test-Path -LiteralPath $rollback)) {
+        throw 'failed second move did not restore the old directory'
+    }
+    New-Item -ItemType Directory -Path $stage | Out-Null
+    New-Item -ItemType File -Path (Join-Path $stage 'new-marker') | Out-Null
+    Move-StagedRunner
+    if (-not (Test-Path -LiteralPath (Join-Path $dir 'new-marker') -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $rollback 'old-marker') -PathType Leaf)) {
+        throw 'successful staged swap lost new or rollback content'
+    }
+    Write-Host 'PASS: staged swap compensates failure and preserves rollback'
+} finally {
+    if (Test-Path -LiteralPath $swapRoot) {
+        Remove-Item -LiteralPath $swapRoot -Recurse -Force
+    }
+}
+
+$aclFixture = Join-Path ([System.IO.Path]::GetTempPath()) `
+    ('civm-acl-handoff-' + [guid]::NewGuid().ToString('N'))
+$aclFixtureCreated = $false
+try {
+    $child = Join-Path $aclFixture 'child'
+    New-Item -ItemType Directory -Path $child -Force | Out-Null
+    $aclFixtureCreated = $true
+    New-Item -ItemType File -Path (Join-Path $child 'marker') | Out-Null
+    $restricted = New-Object System.Security.AccessControl.DirectorySecurity
+    $restricted.SetOwner($currentSid)
+    $restricted.SetAccessRuleProtection($true, $false)
+    $restrictedRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+        $networkServiceSid,
+        [System.Security.AccessControl.FileSystemRights]::FullControl,
+        [System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow)
+    $restricted.AddAccessRule($restrictedRule) | Out-Null
+    Set-Acl -LiteralPath $aclFixture -AclObject $restricted
+    try {
+        [void](Get-ChildItem -LiteralPath $aclFixture -Force -ErrorAction Stop)
+        throw 'restricted legacy ACL remained traversable'
+    } catch [System.UnauthorizedAccessException] {
+        # Expected: owner can repair the DACL but cannot enumerate the tree.
+    }
+    $items = @(Get-SafeTreeItems -Path $aclFixture `
+        -AllowedRunnerRoots @($aclFixture) -EnsureAdminTraversal)
+    if ($items.Count -ne 3) { throw "admin handoff item mismatch: $($items.Count)" }
+    Write-Host 'PASS: audited legacy ACL regains protected admin traversal'
+} finally {
+    if ($aclFixtureCreated) {
+        foreach ($directory in @($aclFixture, (Join-Path $aclFixture 'child'))) {
+            $recovery = New-Object System.Security.AccessControl.DirectorySecurity
+            $recovery.SetOwner($currentSid)
+            $recovery.SetAccessRuleProtection($true, $false)
+            $currentRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+                $currentSid,
+                [System.Security.AccessControl.FileSystemRights]::FullControl,
+                [System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',
+                [System.Security.AccessControl.PropagationFlags]::None,
+                [System.Security.AccessControl.AccessControlType]::Allow)
+            $recovery.AddAccessRule($currentRule) | Out-Null
+            Set-Acl -LiteralPath $directory -AclObject $recovery
+        }
+        Remove-Item -LiteralPath $aclFixture -Recurse -Force
+    }
 }

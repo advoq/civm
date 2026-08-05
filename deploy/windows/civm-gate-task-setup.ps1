@@ -56,6 +56,154 @@ function Resolve-AccountSid {
     }
 }
 
+function Get-FileLinkCount {
+    param([Parameter(Mandatory)][string]$Path)
+    if ($null -eq ('CivmGateNative.LinkInspector' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+namespace CivmGateNative {
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Luid { public uint LowPart; public int HighPart; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct TokenPrivileges {
+        public uint PrivilegeCount;
+        public Luid Luid;
+        public uint Attributes;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ByHandleFileInformation {
+        public uint FileAttributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+        public uint VolumeSerialNumber;
+        public uint FileSizeHigh;
+        public uint FileSizeLow;
+        public uint NumberOfLinks;
+        public uint FileIndexHigh;
+        public uint FileIndexLow;
+    }
+
+    public static class LinkInspector {
+        const uint TokenAdjustPrivileges = 0x20;
+        const uint TokenQuery = 0x8;
+        const uint PrivilegeEnabled = 0x2;
+        const uint MetadataOnly = 0;
+        const uint ShareAll = 0x7;
+        const uint OpenExisting = 3;
+        const uint OpenReparsePoint = 0x00200000;
+        const uint BackupSemantics = 0x02000000;
+        const int AccessDenied = 5;
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool OpenProcessToken(IntPtr process, uint access,
+            out SafeFileHandle token);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool LookupPrivilegeValue(string system, string name,
+            out Luid luid);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool AdjustTokenPrivileges(SafeFileHandle token,
+            bool disableAll, ref TokenPrivileges desired, uint bufferLength,
+            out TokenPrivileges previous, out uint returnedLength);
+
+        [DllImport("advapi32.dll", EntryPoint = "AdjustTokenPrivileges",
+            SetLastError = true)]
+        static extern bool RestoreTokenPrivileges(SafeFileHandle token,
+            bool disableAll, ref TokenPrivileges desired, uint bufferLength,
+            IntPtr previous, IntPtr returnedLength);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern SafeFileHandle CreateFile(string name, uint access,
+            uint share, IntPtr security, uint creation, uint flags,
+            IntPtr template);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool GetFileInformationByHandle(SafeFileHandle handle,
+            out ByHandleFileInformation information);
+
+        static SafeFileHandle Open(string path) {
+            return CreateFile(path, MetadataOnly, ShareAll, IntPtr.Zero,
+                OpenExisting, OpenReparsePoint | BackupSemantics, IntPtr.Zero);
+        }
+
+        public static uint GetLinkCount(string path) {
+            SafeFileHandle handle = Open(path);
+            SafeFileHandle token = null;
+            TokenPrivileges previous = new TokenPrivileges();
+            bool restorePrivilege = false;
+            try {
+                if (handle.IsInvalid) {
+                    int openError = Marshal.GetLastWin32Error();
+                    handle.Dispose();
+                    if (openError != AccessDenied) {
+                        throw new Win32Exception(openError);
+                    }
+                    if (!OpenProcessToken(Process.GetCurrentProcess().Handle,
+                            TokenAdjustPrivileges | TokenQuery, out token)) {
+                        throw new Win32Exception(Marshal.GetLastWin32Error());
+                    }
+                    Luid luid;
+                    if (!LookupPrivilegeValue(null, "SeBackupPrivilege", out luid)) {
+                        throw new Win32Exception(Marshal.GetLastWin32Error());
+                    }
+                    TokenPrivileges desired = new TokenPrivileges {
+                        PrivilegeCount = 1, Luid = luid,
+                        Attributes = PrivilegeEnabled
+                    };
+                    uint returnedLength;
+                    if (!AdjustTokenPrivileges(token, false, ref desired,
+                            (uint)Marshal.SizeOf(typeof(TokenPrivileges)),
+                            out previous, out returnedLength)) {
+                        throw new Win32Exception(Marshal.GetLastWin32Error());
+                    }
+                    restorePrivilege = true;
+                    int privilegeError = Marshal.GetLastWin32Error();
+                    if (privilegeError != 0) {
+                        throw new Win32Exception(privilegeError);
+                    }
+                    handle = Open(path);
+                    if (handle.IsInvalid) {
+                        throw new Win32Exception(Marshal.GetLastWin32Error());
+                    }
+                }
+                ByHandleFileInformation information;
+                if (!GetFileInformationByHandle(handle, out information)) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                return information.NumberOfLinks;
+            } finally {
+                if (handle != null) { handle.Dispose(); }
+                int restoreError = 0;
+                if (restorePrivilege && token != null && !token.IsInvalid) {
+                    if (!RestoreTokenPrivileges(token, false, ref previous, 0,
+                            IntPtr.Zero, IntPtr.Zero)) {
+                        restoreError = Marshal.GetLastWin32Error();
+                    }
+                }
+                if (token != null) { token.Dispose(); }
+                if (restoreError != 0) { throw new Win32Exception(restoreError); }
+            }
+        }
+    }
+}
+'@
+    }
+    try {
+        return [CivmGateNative.LinkInspector]::GetLinkCount($Path)
+    } catch {
+        throw "falha validando hardlinks em ${Path}: $($_.Exception.GetBaseException().Message)"
+    }
+}
+
 function Assert-NotReparsePoint {
     param([Parameter(Mandatory)][string]$Path)
     $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
@@ -83,6 +231,10 @@ function Get-SafeTreeItems {
             continue
         }
         if (-not [string]::IsNullOrEmpty([string]$item.LinkType)) {
+            throw "link de filesystem proibido no runner: $($item.FullName)"
+        }
+        if (-not $item.PSIsContainer -and
+            (Get-FileLinkCount -Path $item.FullName) -ne 1) {
             throw "link de filesystem proibido no runner: $($item.FullName)"
         }
         $items.Add($item)
@@ -534,10 +686,12 @@ try { Disable-And-UnregisterTask } catch { $lifecycleError = $_ }
 Stop-RunnerProcesses
 if ($null -ne $lifecycleError) { throw $lifecycleError }
 
-# Rewrite and verify every DACL so no stale explicit ACE survives.
+# The shared root belongs to the fleet. Never normalize it from one gate:
+# inherited ACE changes can propagate through hardlinks in another gate.
 $rootRights = [Security.AccessControl.FileSystemRights]::ReadAndExecute
-Set-ExactProtectedAcl -Path $Root -Directory $true -InheritToChildren $false `
+Assert-ExactProtectedAcl -Path $Root -Directory $true -InheritToChildren $false `
     -NetworkServiceRights $rootRights
+# Rewrite and verify every target-runner DACL so no stale explicit ACE survives.
 $allRunnerItems = Get-SafeTreeItems -Path $dir `
     -AllowedRunnerRoots $allowedRunnerRoots
 foreach ($item in $allRunnerItems) {
