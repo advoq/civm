@@ -5,6 +5,8 @@ import process from 'node:process'
 
 const ZERO_SHA = '0'.repeat(40)
 const FULL_CHANGE_SENTINEL = '__full_change_detection__'
+const LIVE_GENERATION_ROLLOUT =
+  /^runbooks\/GENERATION-CLEAN-BOUNDARY-ROLLOUT-\d{4}-\d{2}-\d{2}\.md$/
 
 export const FILTERS = {
   docs: [
@@ -83,13 +85,19 @@ export function isDocsFile(filePath) {
   return FILTERS.docs.some((pattern) => matchesPattern(filePath, pattern))
 }
 
+function forcesFullCI(filePath) {
+  return LIVE_GENERATION_ROLLOUT.test(normalizePath(filePath))
+}
+
 export function evaluateFilters(files, filterNames) {
   const normalizedFiles = files.map(normalizePath)
   const result = {}
 
   for (const filterName of filterNames) {
     if (filterName === 'full') {
-      result[filterName] = normalizedFiles.some((file) => !isDocsFile(file))
+      result[filterName] = normalizedFiles.some(
+        (file) => !isDocsFile(file) || forcesFullCI(file)
+      )
       continue
     }
 

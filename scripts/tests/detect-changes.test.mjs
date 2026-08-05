@@ -16,6 +16,19 @@ test('docs-only changes do not select full CI', () => {
   })
 })
 
+test('live generation rollout records select full CI canary', () => {
+  assert.deepEqual(
+    evaluateFilters(
+      ['runbooks/GENERATION-CLEAN-BOUNDARY-ROLLOUT-2026-08-05.md'],
+      ['full', 'docs']
+    ),
+    {
+      full: true,
+      docs: true,
+    }
+  )
+})
+
 test('runtime changes select full CI', () => {
   assert.deepEqual(
     evaluateFilters(['new-runtime-surface/config.toml'], ['full', 'docs']),
