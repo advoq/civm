@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.32](https://github.com/advoq/civm/compare/v1.22.31...v1.22.32) (2026-08-05)
+
+
+### Bug Fixes
+
+* **runner:** catch ACL probe denial ([#256](https://github.com/advoq/civm/issues/256)) ([8ad0f21](https://github.com/advoq/civm/commit/8ad0f21c8c567f893903c8a8625225370743140b))
+
 ## [1.22.31](https://github.com/advoq/civm/compare/v1.22.30...v1.22.31) (2026-08-05)
 
 
