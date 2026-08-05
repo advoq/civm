@@ -261,7 +261,7 @@ func TestGateRunnerProvisionDisablesAutoUpdate(t *testing.T) {
 		"StringComparer]::Ordinal",
 		"expectedRuleCounts",
 		"ACE administrativa existente e insuficiente",
-		"reparo alterou inventario de ACEs",
+		"reparo alterou conjunto de ACEs",
 		"Get-RunnerPathTasks",
 		"task orfa aponta para dir/staging do gate",
 		"processo ativo no staging durante resume",

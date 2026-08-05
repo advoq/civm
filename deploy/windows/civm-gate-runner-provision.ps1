@@ -443,7 +443,7 @@ function Grant-AdminTraversal {
         Sort-Object -Unique
     foreach ($key in $allRuleKeys) {
         if ([int]$expectedRuleCounts[$key] -ne [int]$actualRuleCounts[$key]) {
-            throw "reparo alterou inventario de ACEs: $Path; regra=$key; " +
+            throw "reparo alterou conjunto de ACEs: $Path; regra=$key; " +
                 "esperado=$([int]$expectedRuleCounts[$key]); " +
                 "atual=$([int]$actualRuleCounts[$key])"
         }
