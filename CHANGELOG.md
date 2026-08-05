@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.27](https://github.com/advoq/civm/compare/v1.22.26...v1.22.27) (2026-08-05)
+
+
+### Bug Fixes
+
+* **runner:** restore DACL writes for legacy owners ([#241](https://github.com/advoq/civm/issues/241)) ([35522f1](https://github.com/advoq/civm/commit/35522f1e8f53a8fc734e515591d3549c7b6f44b4))
+
 ## [1.22.26](https://github.com/advoq/civm/compare/v1.22.25...v1.22.26) (2026-08-05)
 
 
