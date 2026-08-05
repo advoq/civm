@@ -28,6 +28,8 @@ $listenerPath = Join-Path $dir 'bin\Runner.Listener.exe'
 $workDir = Join-Path $dir '_work'
 $diagDir = Join-Path $dir '_diag'
 $contextDir = Split-Path -Parent $ContextPath
+$expectedRunnerVersion = '2.336.0'
+$allowedRunnerRoots = @($dir, $rollback)
 
 function Add-FileSystemRule {
     param(
@@ -56,22 +58,32 @@ function Resolve-AccountSid {
 
 function Assert-NotReparsePoint {
     param([Parameter(Mandatory)][string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-    $item = Get-Item -LiteralPath $Path -Force
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) { return }
     if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw "reparse point proibido no escopo do gate: $Path"
     }
 }
 
 function Get-SafeTreeItems {
-    param([Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$AllowedRunnerRoots
+    )
     $pending = [System.Collections.Stack]::new()
     $pending.Push((Get-Item -LiteralPath $Path -Force))
     $items = [System.Collections.Generic.List[object]]::new()
     while ($pending.Count -ne 0) {
         $item = $pending.Pop()
         if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "reparse point proibido no runner: $($item.FullName)"
+            Assert-SafeOfficialRunnerJunction -Item $item `
+                -ExpectedRunnerVersion $expectedRunnerVersion `
+                -AllowedRunnerRoots $AllowedRunnerRoots
+            $items.Add($item)
+            continue
+        }
+        if (-not [string]::IsNullOrEmpty([string]$item.LinkType)) {
+            throw "link de filesystem proibido no runner: $($item.FullName)"
         }
         $items.Add($item)
         if ($item.PSIsContainer) {
@@ -81,6 +93,49 @@ function Get-SafeTreeItems {
         }
     }
     return $items.ToArray()
+}
+
+function Assert-SafeOfficialRunnerJunction {
+    param(
+        [Parameter(Mandatory)]$Item,
+        [Parameter(Mandatory)][string]$ExpectedRunnerVersion,
+        [Parameter(Mandatory)][string[]]$AllowedRunnerRoots
+    )
+    if ($Item.LinkType -ne 'Junction' -or
+        $Item.Name -notin @('bin', 'externals') -or
+        $null -eq $Item.Parent) {
+        throw "reparse point proibido no runner: $($Item.FullName)"
+    }
+    $targets = @($Item.Target)
+    if ($targets.Count -ne 1 -or [string]::IsNullOrWhiteSpace($targets[0])) {
+        throw "junction oficial sem alvo unico: $($Item.FullName)"
+    }
+    $fullName = [System.IO.Path]::GetFullPath($Item.FullName)
+    $matchingRoots = @($AllowedRunnerRoots | Where-Object {
+        $candidate = [System.IO.Path]::GetFullPath((Join-Path $_ $Item.Name))
+        $fullName.Equals($candidate, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($matchingRoots.Count -ne 1) {
+        throw "junction oficial fora da raiz top-level do runner: $fullName"
+    }
+    $runnerRoot = [System.IO.Path]::GetFullPath($matchingRoots[0])
+    if (-not $Item.Parent.FullName.Equals(
+            $runnerRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "junction oficial fora da raiz top-level do runner: $fullName"
+    }
+    $expected = [System.IO.Path]::GetFullPath((Join-Path $runnerRoot `
+        "$($Item.Name).$ExpectedRunnerVersion"))
+    $actual = [System.IO.Path]::GetFullPath([string]$targets[0])
+    if (-not $actual.Equals($expected, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "junction oficial fora do alvo pinado: $($Item.FullName) -> $actual"
+    }
+    $targetItem = Get-Item -LiteralPath $expected -Force -ErrorAction Stop
+    if (-not $targetItem.PSIsContainer -or
+        ($targetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        -not $targetItem.Parent.FullName.Equals(
+            $runnerRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "alvo da junction oficial nao e diretorio sibling real: $expected"
+    }
 }
 
 function Set-ExactProtectedAcl {
@@ -414,8 +469,17 @@ if ($result -notmatch '=False' -and $readOk) { exit 0 } else { exit 1 }
 
 Assert-NotReparsePoint -Path $Root
 Assert-NotReparsePoint -Path $dir
+Assert-NotReparsePoint -Path $rollback
 Assert-NotReparsePoint -Path 'C:\ProgramData\civm'
 Assert-NotReparsePoint -Path $contextDir
+foreach ($existingPath in @($dir, $rollback)) {
+    $existingItem = Get-Item -LiteralPath $existingPath -Force `
+        -ErrorAction SilentlyContinue
+    if ($null -ne $existingItem) {
+        [void](Get-SafeTreeItems -Path $existingPath `
+            -AllowedRunnerRoots $allowedRunnerRoots)
+    }
+}
 if (-not (Test-Path -LiteralPath $runCmdPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $runnerConfigPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $listenerPath -PathType Leaf)) {
@@ -474,7 +538,8 @@ if ($null -ne $lifecycleError) { throw $lifecycleError }
 $rootRights = [Security.AccessControl.FileSystemRights]::ReadAndExecute
 Set-ExactProtectedAcl -Path $Root -Directory $true -InheritToChildren $false `
     -NetworkServiceRights $rootRights
-$allRunnerItems = Get-SafeTreeItems -Path $dir
+$allRunnerItems = Get-SafeTreeItems -Path $dir `
+    -AllowedRunnerRoots $allowedRunnerRoots
 foreach ($item in $allRunnerItems) {
     $writable = $item.FullName.Equals(
         $workDir, [StringComparison]::OrdinalIgnoreCase) -or
@@ -543,7 +608,10 @@ try {
     throw $failure
 }
 
-if (Test-Path -LiteralPath $rollback) {
+if ($null -ne (Get-Item -LiteralPath $rollback -Force `
+        -ErrorAction SilentlyContinue)) {
+    [void](Get-SafeTreeItems -Path $rollback `
+        -AllowedRunnerRoots $allowedRunnerRoots)
     Remove-Item -LiteralPath $rollback -Recurse -Force
 }
 Write-Host "OK: '$task' NETWORK SERVICE/limited; contexto e binarios read-only."

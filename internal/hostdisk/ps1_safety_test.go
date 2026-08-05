@@ -133,6 +133,7 @@ func TestGateRunnerTaskUsesLeastPrivilegeAndReadOnlyContext(t *testing.T) {
 		"C:\\ProgramData\\civm\\gate\\current-context",
 		"Root ou ContextPath fora do escopo canônico",
 		"Assert-NotReparsePoint",
+		"Assert-NotReparsePoint -Path $rollback",
 		"Stop-ScheduledTask",
 		"-MethodName GetOwner",
 		"$allRunnerItems",
@@ -185,9 +186,22 @@ func TestGateRunnerTaskUsesLeastPrivilegeAndReadOnlyContext(t *testing.T) {
 	waitOnline := strings.Index(source, "\n    Wait-RemoteRunnerOnline -Owner")
 	compensation := strings.LastIndex(source, "\n        Quarantine-RemoteRunner -Owner")
 	compensationCleanup := strings.LastIndex(source, "\n    try { Disable-And-UnregisterTask }")
+	treePreflight := strings.Index(source, "\nforeach ($existingPath in @($dir, $rollback))")
+	runnerFileProbe := strings.Index(source, "\nif (-not (Test-Path -LiteralPath $runCmdPath")
 	if quarantine < 0 || removeContext < 0 || disableTask < 0 || stopProcesses < 0 ||
 		quarantine > removeContext || quarantine > disableTask || quarantine > stopProcesses {
 		t.Error("gate setup must quarantine remote admission before context or local lifecycle mutation")
+	}
+	if treePreflight < 0 || treePreflight > quarantine {
+		t.Error("gate setup must reject unsafe junctions before remote quarantine")
+	}
+	if runnerFileProbe < 0 || treePreflight > runnerFileProbe {
+		t.Error("gate setup must reject unsafe junctions before probing runner files")
+	}
+	rollbackRevalidation := strings.LastIndex(source, "\n    [void](Get-SafeTreeItems -Path $rollback")
+	rollbackRemoval := strings.LastIndex(source, "\n    Remove-Item -LiteralPath $rollback -Recurse -Force")
+	if rollbackRevalidation < 0 || rollbackRemoval < 0 || rollbackRevalidation > rollbackRemoval {
+		t.Error("gate setup must revalidate rollback immediately before recursive removal")
 	}
 	if startTask < 0 || waitOnline < 0 || startTask > waitOnline {
 		t.Error("gate setup must start the listener before proving remote online state")
@@ -249,5 +263,38 @@ func TestGateRunnerProvisionDisablesAutoUpdate(t *testing.T) {
 	}
 	if strings.Contains(source, "gh.exe") {
 		t.Error("gate provisioning must use the in-memory token directly, not ambient gh auth")
+	}
+}
+
+func TestGateRunnerScriptsAllowOnlyPinnedOfficialJunctions(t *testing.T) {
+	paths := []string{
+		"civm-gate-runner-provision.ps1",
+		"civm-gate-task-setup.ps1",
+	}
+	for _, name := range paths {
+		path := filepath.Join("..", "..", "deploy", "windows", name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		source := string(data)
+		for _, required := range []string{
+			"Assert-SafeOfficialRunnerJunction",
+			"$Item.LinkType -ne 'Junction'",
+			"$Item.Name -notin @('bin', 'externals')",
+			"$targets.Count -ne 1",
+			"[string]$item.LinkType",
+			"link de filesystem proibido",
+			"[string[]]$AllowedRunnerRoots",
+			"$Item.Name).$ExpectedRunnerVersion",
+			"junction oficial fora da raiz top-level do runner",
+			"junction oficial fora do alvo pinado",
+			"alvo da junction oficial nao e diretorio sibling real",
+			"$items.Add($item)\n            continue",
+		} {
+			if !strings.Contains(source, required) {
+				t.Errorf("%s is missing pinned junction guard %q", name, required)
+			}
+		}
 	}
 }

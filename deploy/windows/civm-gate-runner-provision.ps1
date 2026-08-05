@@ -35,6 +35,12 @@ $stage = "$dir.new"
 $rollback = "$dir.rollback"
 $task = "civm-gate-runner-$Index"
 $publisherTask = 'civm-host-orchestrator'
+$allowedRunnerRoots = @(foreach ($runnerIndex in 1..99) {
+    $runnerRoot = Join-Path $Root "runner-$runnerIndex"
+    $runnerRoot
+    "$runnerRoot.new"
+    "$runnerRoot.rollback"
+})
 $systemSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-18'
 $administratorsSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-32-544'
 $networkServiceSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-20'
@@ -127,14 +133,24 @@ function Set-ProtectedAcl {
 }
 
 function Get-SafeTreeItems {
-    param([Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$AllowedRunnerRoots
+    )
     $pending = [System.Collections.Stack]::new()
     $pending.Push((Get-Item -LiteralPath $Path -Force))
     $items = [System.Collections.Generic.List[object]]::new()
     while ($pending.Count -ne 0) {
         $item = $pending.Pop()
         if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "reparse point proibido no escopo do runner: $($item.FullName)"
+            Assert-SafeOfficialRunnerJunction -Item $item `
+                -ExpectedRunnerVersion $RunnerVersion `
+                -AllowedRunnerRoots $AllowedRunnerRoots
+            $items.Add($item)
+            continue
+        }
+        if (-not [string]::IsNullOrEmpty([string]$item.LinkType)) {
+            throw "link de filesystem proibido no escopo do runner: $($item.FullName)"
         }
         $items.Add($item)
         if ($item.PSIsContainer) {
@@ -146,9 +162,56 @@ function Get-SafeTreeItems {
     return $items.ToArray()
 }
 
+function Assert-SafeOfficialRunnerJunction {
+    param(
+        [Parameter(Mandatory)]$Item,
+        [Parameter(Mandatory)][string]$ExpectedRunnerVersion,
+        [Parameter(Mandatory)][string[]]$AllowedRunnerRoots
+    )
+    if ($Item.LinkType -ne 'Junction' -or
+        $Item.Name -notin @('bin', 'externals') -or
+        $null -eq $Item.Parent) {
+        throw "reparse point proibido no escopo do runner: $($Item.FullName)"
+    }
+    $targets = @($Item.Target)
+    if ($targets.Count -ne 1 -or [string]::IsNullOrWhiteSpace($targets[0])) {
+        throw "junction oficial sem alvo unico: $($Item.FullName)"
+    }
+    $fullName = [System.IO.Path]::GetFullPath($Item.FullName)
+    $matchingRoots = @($AllowedRunnerRoots | Where-Object {
+        $candidate = [System.IO.Path]::GetFullPath((Join-Path $_ $Item.Name))
+        $fullName.Equals($candidate, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($matchingRoots.Count -ne 1) {
+        throw "junction oficial fora da raiz top-level do runner: $fullName"
+    }
+    $runnerRoot = [System.IO.Path]::GetFullPath($matchingRoots[0])
+    if (-not $Item.Parent.FullName.Equals(
+            $runnerRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "junction oficial fora da raiz top-level do runner: $fullName"
+    }
+    $expected = [System.IO.Path]::GetFullPath((Join-Path $runnerRoot `
+        "$($Item.Name).$ExpectedRunnerVersion"))
+    $actual = [System.IO.Path]::GetFullPath([string]$targets[0])
+    if (-not $actual.Equals($expected, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "junction oficial fora do alvo pinado: $($Item.FullName) -> $actual"
+    }
+    $targetItem = Get-Item -LiteralPath $expected -Force -ErrorAction Stop
+    if (-not $targetItem.PSIsContainer -or
+        ($targetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        -not $targetItem.Parent.FullName.Equals(
+            $runnerRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "alvo da junction oficial nao e diretorio sibling real: $expected"
+    }
+}
+
 function Protect-AdminTree {
-    param([Parameter(Mandatory)][string]$Path)
-    foreach ($item in (Get-SafeTreeItems -Path $Path)) {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$AllowedRunnerRoots
+    )
+    foreach ($item in (Get-SafeTreeItems -Path $Path `
+            -AllowedRunnerRoots $AllowedRunnerRoots)) {
         Set-ProtectedAcl -Path $item.FullName -Directory $item.PSIsContainer `
             -NetworkRead $false -InheritToChildren $item.PSIsContainer
     }
@@ -266,8 +329,11 @@ function Get-LegacyService {
 }
 
 foreach ($existingPath in @($Root, $dir, $stage, $rollback)) {
-    if (Test-Path -LiteralPath $existingPath) {
-        [void](Get-SafeTreeItems -Path $existingPath)
+    $existingItem = Get-Item -LiteralPath $existingPath -Force `
+        -ErrorAction SilentlyContinue
+    if ($null -ne $existingItem) {
+        [void](Get-SafeTreeItems -Path $existingPath `
+            -AllowedRunnerRoots $allowedRunnerRoots)
     }
 }
 if (Test-Path -LiteralPath $stage) {
@@ -342,10 +408,11 @@ if ($actualSHA256 -ne $RunnerSHA256.ToLowerInvariant()) {
 }
 Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
 Remove-Item -LiteralPath $zip -Force
-foreach ($item in (Get-SafeTreeItems -Path $stage)) {
+foreach ($item in (Get-SafeTreeItems -Path $stage `
+        -AllowedRunnerRoots $allowedRunnerRoots)) {
     if (-not $item.PSIsContainer) { Unblock-File -LiteralPath $item.FullName }
 }
-Protect-AdminTree -Path $stage
+Protect-AdminTree -Path $stage -AllowedRunnerRoots $allowedRunnerRoots
 
 Push-Location $stage
 try {
@@ -365,7 +432,7 @@ try {
     $RegToken = $null
     Pop-Location
 }
-Protect-AdminTree -Path $stage
+Protect-AdminTree -Path $stage -AllowedRunnerRoots $allowedRunnerRoots
 
 $newConfigPath = Join-Path $stage '.runner'
 if (-not (Test-Path -LiteralPath $newConfigPath -PathType Leaf)) {
@@ -384,7 +451,7 @@ if ($null -eq $remote -or $remote.busy -or
 }
 
 if (Test-Path -LiteralPath $dir) {
-    Protect-AdminTree -Path $dir
+    Protect-AdminTree -Path $dir -AllowedRunnerRoots $allowedRunnerRoots
     Move-Item -LiteralPath $dir -Destination $rollback
 }
 Move-Item -LiteralPath $stage -Destination $dir

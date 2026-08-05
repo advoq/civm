@@ -8,6 +8,8 @@
 - `deploy/windows/civm-gate-task-setup.ps1`: preflight, migração de task,
   DACLs protegidas, listener direto, probe efetivo e owner real do processo.
 - `internal/hostdisk/ps1_safety_test.go`: contrato estrutural dos dois scripts.
+- a travessia permite somente `bin`/`externals` apontando para siblings da
+  versão pinada e nunca segue a junction;
 - `deploy/windows/civm-vm-orchestrator.ps1`: caminho de rollback alinhado ao
   contexto canônico e cinco interpolações inválidas corrigidas.
 - `rules/security.md` e `runbooks/PR-QUEUE-ENABLE.md`: confiança e rollout.
@@ -33,6 +35,10 @@
 - `File.Replace` em NTFS: conteúdo trocado e DACL protegida preservada como
   `Read, Synchronize`;
 - REST autenticado em memória: 4/4 gates encontrados sem expor o token;
+- fixture NTFS local e no CI Windows pago cobre junction oficial, alvo
+  externo, hard link, nível aninhado, nome/versão divergentes e cadeia de
+  reparse, sem travessia; 5.184 itens live nas quatro árvores em cada
+  implementação;
 - `go build ./...`: verde;
 - `go test -race -count=1 ./...`: verde.
 
