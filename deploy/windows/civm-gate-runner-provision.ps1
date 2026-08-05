@@ -335,7 +335,13 @@ function Grant-AdminTraversal {
                 [System.Security.AccessControl.FileSystemRights]::FullControl
         })
         if ($matches.Count -eq 0) {
-            throw "reparo nao concedeu travessia administrativa: $Path"
+            $actualSummary = @($rules | ForEach-Object {
+                "$($_.IdentityReference.Value):$($_.AccessControlType):" +
+                "$($_.FileSystemRights):$($_.InheritanceFlags):" +
+                "$($_.PropagationFlags):inherited=$($_.IsInherited)"
+            }) -join '; '
+            throw "reparo nao concedeu travessia administrativa: $Path; " +
+                "esperado=$($sid.Value); atual=$actualSummary"
         }
     }
 }
