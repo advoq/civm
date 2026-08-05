@@ -108,7 +108,7 @@ um único `/var/lib/docker`. O SPEC `docs/specs/multi-project-isolation/SPEC.md`
   Acima dos defaults dos peers e **abaixo** da faixa ephemeral do kernel (`/proc/sys/net/ipv4/ip_local_port_range`
   = `32768 60999`) — sem colisão com testcontainers.
 - **`ci-guard`** (`internal/ciguard/ciguard.go`) recusa compose com `container_name` fixo (R1), porta-host
-  literal (R2), compose sem project-name (R3), docker-heavy sem lock (R4).
+  literal (R2), compose sem project-name (R3), e alerta docker-heavy sem admissão explícita (R4).
 
 **Por que continua PARCIAL/IMPOSSÍVEL:** namespacing lógico evita **colisão de nome/porta**, mas NÃO isola:
 - o **content store do containerd** (a corrida "No such image": prune de um runner apagava image de outro);
@@ -116,10 +116,9 @@ um único `/var/lib/docker`. O SPEC `docs/specs/multi-project-isolation/SPEC.md`
 - o **daemon em si** (um `docker system prune` mal-filtrado de um runner atinge todos — já mitigado, ver §6).
 
 **AÇÃO p/ fechar (a melhor possível sem hardware novo):**
-- **Lock-serialização docker-heavy** (`internal/dockerlock` + `civmctl lock --exec`): faz no máximo 1 bring-up
-  docker-heavy por vez na box → reduz a janela de corrida no content store a ~zero. **Requer adoção pelo peer**
-  (`flock`/`civmctl lock` no step de `compose up`). Hoje o acme usa `runs-on: [self-hosted, civm]` sem o label
-  dedicado e sem wrapper de lock visível nos workflows — **lacuna aberta**.
+- **Admissão docker-heavy** (`internal/admit` + `civmctl admit --weight heavy --exclusive docker --exec`): faz no
+  máximo 1 bring-up Docker por vez e impõe cgroup ao payload → reduz a janela de corrida no content store a ~zero.
+  **Requer declaração no mesmo comando do peer**; `flock` local ou wrapper em outro step não provam proteção.
 - **Runner dedicado `civm-e2e`** (SPEC RF-5 / DT-8): rotear só E2E docker-heavy a 1 runner via
   `runs-on: [self-hosted, civm, civm-e2e]` + flip `CIVM_E2E_RUNNER_AVAILABLE`. **Status: NÃO adotado** —
   `CIVM_E2E_RUNNER_AVAILABLE` só aparece em `docs/specs/.../SPEC.md`, `PRD.md` e `runbooks/MULTI-PROJECT-RUNNER.md`,
@@ -387,7 +386,7 @@ que propaga correções como a deste branch (`fix/busy-branch-image-prune-race`)
 fecham de verdade com **efemeridade** (runner descartável por job) ou **expansão de hardware** (mais RAM/disco) ou
 **isolamento de daemon** (gate explícito do SPEC). O **máximo atingível hoje, sem hardware novo**, é:
 
-1. **Adotar a lock-serialização docker-heavy no peer** (acme) — fecha a janela de corrida do content store (§2/§4).
+1. **Adotar a admissão docker-heavy no peer** (`admit --weight heavy --exclusive docker`) — fecha a janela de corrida do content store (§2/§4).
 2. **`docker compose -p $COMPOSE_PROJECT_NAME down -v` por-run** no peer — recupera disco/volumes na hora (§1/§3).
 3. **Subir o registry-mirror `:5000`** já configurado mas morto — estabiliza pulls (§7).
 4. **Atualizar `git` + re-sincronizar os pins** e endurecer o classificador de paridade (§9).

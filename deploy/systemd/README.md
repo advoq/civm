@@ -194,12 +194,15 @@ Uso no passo do job (o comando após `--` roda sob a admissão):
 ```bash
 civmctl admit --weight heavy --exec -- make test
 civmctl admit --weight light --exec -- ./scripts/lint.sh
-civmctl admit --weight auto --exclusive docker --wait-minutes 30 --exec -- make up-local
+civmctl admit --weight heavy --exclusive docker --wait-minutes 30 --exec -- make up-local
 ```
 
 - `--weight heavy|light|auto` — `auto` lê `CIVM_JOB_WEIGHT` (heavy/light), default heavy.
 - `--exclusive docker` — também serializa no sub-slot docker (count=1), em vez do
   `civmctl lock --scope docker-heavy` legado (deprecated para jobs envelopados).
+- Para payload Docker-heavy, declare `--weight heavy` explicitamente: `auto` pode
+  resolver `CIVM_JOB_WEIGHT=light` e não reservar o cgroup heavy que o contrato
+  R4 exige.
 - `--wait-minutes N` — orçamento de espera; esgotado, sai com **exit 78** (sem slot
   no prazo) e o job-timeout do runner decide. **exit 79** = falha interna (ex:
   cgroup `memory` ausente → recusa heavy fail-closed; `/run/civm` não provisionável).

@@ -200,7 +200,7 @@ EXEMPLOS
   civmctl ci-guard --repo-root . --mode report --json
   civmctl lock --exec --scope docker-heavy --budget 50m --wait 75m -- make up-local
   civmctl admit --weight heavy --exec -- make test
-  civmctl admit --weight auto --exclusive docker --wait-minutes 30 --exec -- make up-local
+  civmctl admit --weight heavy --exclusive docker --wait-minutes 30 --exec -- make up-local
 
 DOCUMENTACAO
   PRD/SPEC: docs/specs/civmctl/
