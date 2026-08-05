@@ -266,6 +266,8 @@ func TestGateRunnerProvisionDisablesAutoUpdate(t *testing.T) {
 		"SetKernelObjectSecurity",
 		"RestoreTokenPrivileges",
 		"-AllowReparsePoint",
+		"rollback sem raiz logica autorizada",
+		"$logicalRoot = $rollbackBase",
 		"Set-DaclWithoutPropagation",
 		"StringComparer]::Ordinal",
 		"expectedRuleCounts",
