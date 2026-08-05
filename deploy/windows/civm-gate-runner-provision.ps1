@@ -212,25 +212,100 @@ namespace CivmGateNative {
 
     public static class SecurityDescriptorWriter {
         const uint DaclSecurityInformation = 0x00000004;
+        const uint TokenAdjustPrivileges = 0x20;
+        const uint TokenQuery = 0x8;
+        const uint PrivilegeEnabled = 0x2;
+        const uint WriteDac = 0x00040000;
+        const uint ShareAll = 0x7;
+        const uint OpenExisting = 3;
+        const uint OpenReparsePoint = 0x00200000;
+        const uint BackupSemantics = 0x02000000;
 
-        [DllImport("advapi32.dll", EntryPoint = "SetFileSecurityW",
-            CharSet = CharSet.Unicode, SetLastError = true)]
-        static extern bool SetFileSecurity(string path,
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool OpenProcessToken(IntPtr process, uint access,
+            out SafeFileHandle token);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool LookupPrivilegeValue(string system, string name,
+            out Luid luid);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool AdjustTokenPrivileges(SafeFileHandle token,
+            bool disableAll, ref TokenPrivileges desired, uint bufferLength,
+            out TokenPrivileges previous, out uint returnedLength);
+
+        [DllImport("advapi32.dll", EntryPoint = "AdjustTokenPrivileges",
+            SetLastError = true)]
+        static extern bool RestoreTokenPrivileges(SafeFileHandle token,
+            bool disableAll, ref TokenPrivileges desired, uint bufferLength,
+            IntPtr previous, IntPtr returnedLength);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern SafeFileHandle CreateFile(string name, uint access,
+            uint share, IntPtr security, uint creation, uint flags,
+            IntPtr template);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool SetKernelObjectSecurity(SafeFileHandle handle,
             uint securityInformation, IntPtr securityDescriptor);
 
         public static void SetDacl(string path, byte[] securityDescriptor) {
             if (securityDescriptor == null || securityDescriptor.Length == 0) {
                 throw new ArgumentException("security descriptor is empty");
             }
+            SafeFileHandle token = null;
+            SafeFileHandle target = null;
+            TokenPrivileges previous = new TokenPrivileges();
+            bool restorePrivilege = false;
             GCHandle pinned = GCHandle.Alloc(
                 securityDescriptor, GCHandleType.Pinned);
             try {
-                if (!SetFileSecurity(path, DaclSecurityInformation,
+                if (!OpenProcessToken(Process.GetCurrentProcess().Handle,
+                        TokenAdjustPrivileges | TokenQuery, out token)) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                Luid luid;
+                if (!LookupPrivilegeValue(null, "SeRestorePrivilege", out luid)) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                TokenPrivileges desired = new TokenPrivileges {
+                    PrivilegeCount = 1,
+                    Luid = luid,
+                    Attributes = PrivilegeEnabled
+                };
+                uint returnedLength;
+                if (!AdjustTokenPrivileges(token, false, ref desired,
+                        (uint)Marshal.SizeOf<TokenPrivileges>(), out previous,
+                        out returnedLength)) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                restorePrivilege = true;
+                int privilegeError = Marshal.GetLastWin32Error();
+                if (privilegeError != 0) {
+                    throw new Win32Exception(privilegeError);
+                }
+                target = CreateFile(path, WriteDac, ShareAll, IntPtr.Zero,
+                    OpenExisting, OpenReparsePoint | BackupSemantics,
+                    IntPtr.Zero);
+                if (target.IsInvalid) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                if (!SetKernelObjectSecurity(target, DaclSecurityInformation,
                         pinned.AddrOfPinnedObject())) {
                     throw new Win32Exception(Marshal.GetLastWin32Error());
                 }
             } finally {
                 pinned.Free();
+                if (target != null) { target.Dispose(); }
+                int restoreError = 0;
+                if (restorePrivilege && token != null && !token.IsInvalid) {
+                    if (!RestoreTokenPrivileges(token, false, ref previous, 0,
+                            IntPtr.Zero, IntPtr.Zero)) {
+                        restoreError = Marshal.GetLastWin32Error();
+                    }
+                }
+                if (token != null) { token.Dispose(); }
+                if (restoreError != 0) { throw new Win32Exception(restoreError); }
             }
         }
     }
