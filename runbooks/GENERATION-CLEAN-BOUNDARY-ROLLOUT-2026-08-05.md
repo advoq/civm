@@ -67,6 +67,33 @@ PASS para rollout guest-first, owner unico, cleanup, poweroff gracioso,
 compactacao e piso fisico de 80 GiB. PENDENTE nesta entrada: PR canario e
 segundo push no mesmo PR para provar duas geracoes reais consecutivas.
 
+## Canario do PR 230
+
+O SHA `4fa5424` disparou o workflow completo. Na primeira tentativa, antes da
+variavel opt-in existir no contexto do run, os tres jobs GitHub-hosted e o
+agregador passaram; o smoke self-hosted foi `skipped`. A tentativa 2 do mesmo
+run, depois de habilitar `CIVM_SELF_HOSTED_SMOKE=true`, criou o job real com
+labels `[self-hosted, civm]`.
+
+Antes de publicar esse contexto, o controlador mediu e executou:
+
+| Instante UTC | Acao | `V:` livre | Contexto publicado |
+| --- | --- | ---: | --- |
+| `09:39:48` | boot de manutencao | `86 GiB` | vazio |
+| `09:43:40` | cleanup + compactacao | `79 -> 87 GiB` | vazio |
+| `09:45:42` | boot separado da geracao | `87 GiB` | vazio |
+| `09:47:52` | admissao/hold | `80 GiB` | `pr-230@4fa5424...` |
+
+Na admissao, o guest reportou `32 GiB` livres. O runner Linux `2.336.0`
+estava `online`, `idle`, com labels `self-hosted,civm`, e o grupo `Default`
+autorizava explicitamente `advoq/civm`. Mesmo assim, o endpoint do job da
+tentativa rerun permaneceu `queued` e `runner_id=0`; nao houve atribuicao pelo
+scheduler do GitHub. Este commit cria um SHA novo no mesmo PR para validar o
+dispatch fresco, a cura do SHA anterior e a segunda geracao consecutiva.
+
+WYSIATI: a fronteira e a admissao acima foram observadas; a conclusao do job
+self-hosted no SHA novo ainda precisa aparecer verde no proprio PR.
+
 Rollback trigger: restaurar o backup do controlador e manter o gate fechado
 se um worker for interrompido, uma geracao publicar abaixo de 80 GiB, o lock
 ficar sem owner ou um retry recuperavel deixar de ocorrer.
