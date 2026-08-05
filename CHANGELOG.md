@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.24](https://github.com/advoq/civm/compare/v1.22.23...v1.22.24) (2026-08-05)
+
+
+### Bug Fixes
+
+* isolate Windows gate runners ([#232](https://github.com/advoq/civm/issues/232)) ([267ded0](https://github.com/advoq/civm/commit/267ded09e894ed34e69b34e67f29eed28b015432))
+
 ## [1.22.23](https://github.com/advoq/civm/compare/v1.22.22...v1.22.23) (2026-08-05)
 
 
