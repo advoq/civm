@@ -64,8 +64,8 @@ zero processo `civm-host`/SSH orfao e owner legado ainda `Disabled`.
 ## Veredito
 
 PASS para rollout guest-first, owner unico, cleanup, poweroff gracioso,
-compactacao e piso fisico de 80 GiB. PENDENTE nesta entrada: PR canario e
-segundo push no mesmo PR para provar duas geracoes reais consecutivas.
+compactacao, piso fisico de 80 GiB e canario self-hosted. O canario final
+esta registrado abaixo.
 
 ## Canario do PR 230
 
@@ -91,8 +91,41 @@ tentativa rerun permaneceu `queued` e `runner_id=0`; nao houve atribuicao pelo
 scheduler do GitHub. Este commit cria um SHA novo no mesmo PR para validar o
 dispatch fresco, a cura do SHA anterior e a segunda geracao consecutiva.
 
-WYSIATI: a fronteira e a admissao acima foram observadas; a conclusao do job
-self-hosted no SHA novo ainda precisa aparecer verde no proprio PR.
+O job de PR permaneceu sem atribuicao porque `advoq/civm` e publico e o grupo
+`Default` tinha `allows_public_repositories=false`. Um grupo temporario foi
+criado com acesso somente a `advoq/civm` e ao workflow
+`ci.yml@refs/heads/main`. O POST de criacao nao aplicou o repositorio
+selecionado; a pos-condicao mostrou `total_count=0`. Depois do PUT explicito,
+a pos-condicao passou a `total_count=1`.
+
+Por seguranca, o grupo nao foi aberto a todos os workflows de pull request.
+O canario confiavel foi disparado por `workflow_dispatch` no `main`, pinado
+ao workflow permitido. O primeiro job criado antes da associacao explicita
+nao foi reavaliado; um run novo do mesmo SHA recebeu o runner em `7 s`.
+
+## Resultado final do canario
+
+Run `30997503263`, contexto
+`branch-main@59cb68e257dabd014bfdd9d0ab5be9910a9a1f07`:
+
+- cleanup e compactacao terminaram antes da admissao;
+- `V:` passou de `80` para `87 GiB` na compactacao e tinha `80 GiB` com a
+  VM ligada na admissao;
+- guest reportou `32 GiB` livres;
+- runner `civm-advoq-org`, ID `71`, recebeu o job pelo grupo temporario;
+- smoke self-hosted passou em `37 s`, incluindo health, build, escalacao
+  controlada e cleanup do workspace;
+- o tick `10:29:46Z` manteve `hold`, com `running=1`, depois do smoke acabar
+  e enquanto o job GitHub-hosted ainda rodava;
+- workflow terminou com `5/5` jobs aprovados.
+
+Depois do canario, a variavel opt-in foi removida, o runner voltou ao grupo
+privado `Default`, o grupo temporario vazio foi apagado e o listener voltou
+`online`, `idle`. Nao ficou acesso self-hosted habilitado para repo publico.
+
+WYSIATI: foi observado um canario real e duas fronteiras consecutivas. Nao
+foi executada carga de aplicacao nesse smoke; carga pertence ao black-box do
+peer, nao ao rollout do controlador.
 
 Rollback trigger: restaurar o backup do controlador e manter o gate fechado
 se um worker for interrompido, uma geracao publicar abaixo de 80 GiB, o lock
