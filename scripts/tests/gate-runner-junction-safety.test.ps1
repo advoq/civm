@@ -61,6 +61,8 @@ foreach ($source in $sources) {
     $rollbackFixture = "$fixture.rollback"
     $rollbackLink = Join-Path $rollbackFixture 'externals'
     $rollbackTarget = Join-Path $fixture "externals.$expectedVersion"
+    $rollbackPhysicalTarget = Join-Path $rollbackFixture `
+        "externals.$expectedVersion"
     try {
         New-Item -ItemType Directory -Path $fixture, $external | Out-Null
 
@@ -81,9 +83,11 @@ foreach ($source in $sources) {
         New-Item -ItemType Directory -Path $rollbackTarget | Out-Null
         New-Item -ItemType Junction -Path $rollbackLink `
             -Target $rollbackTarget | Out-Null
+        Remove-Item -LiteralPath $rollbackTarget -Recurse -Force
+        New-Item -ItemType Directory -Path $rollbackPhysicalTarget | Out-Null
         $rollbackItems = @(Get-SafeTreeItems -Path $rollbackFixture `
             -AllowedRunnerRoots @($fixture, $rollbackFixture))
-        if ($rollbackItems.Count -ne 2) {
+        if ($rollbackItems.Count -ne 3) {
             throw "relocated rollback junction item mismatch: $($rollbackItems.Count)"
         }
         Remove-Junction -Path $rollbackLink
@@ -94,7 +98,6 @@ foreach ($source in $sources) {
         } '*fora do alvo pinado*'
         Remove-Junction -Path $rollbackLink
         Remove-Item -LiteralPath $rollbackFixture -Recurse -Force
-        Remove-Item -LiteralPath $rollbackTarget -Recurse -Force
 
         New-Item -ItemType Junction -Path $link -Target $external | Out-Null
         Assert-Rejected {
