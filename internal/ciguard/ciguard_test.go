@@ -251,6 +251,70 @@ func TestScanRuleR4DevctlCiUpSuppressedByLock(t *testing.T) {
 	}
 }
 
+func TestScanRuleR4AdmitDockerWrapperProtectsOnlyTheWrappedHeavyStep(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		workflow    string
+		wantFinding bool
+	}{
+		{
+			name:     "accepts explicit heavy docker admission around devctl up",
+			workflow: "env:\n  COMPOSE_PROJECT_NAME: civm\njobs:\n  e2e:\n    steps:\n      - run: civmctl admit --weight heavy --exclusive docker --wait-minutes 75 --exec -- go run ./tools/devctl/cmd/devctl ci up core\n",
+		},
+		{
+			name:     "accepts equals form for explicit heavy docker admission",
+			workflow: "env:\n  COMPOSE_PROJECT_NAME: civm\njobs:\n  e2e:\n    steps:\n      - run: civmctl admit --weight=heavy --exclusive=docker --exec -- go run ./tools/devctl/cmd/devctl ci up core\n",
+		},
+		{
+			name:        "rejects admission without docker exclusivity",
+			workflow:    "env:\n  COMPOSE_PROJECT_NAME: civm\njobs:\n  e2e:\n    steps:\n      - run: civmctl admit --weight heavy --exec -- go run ./tools/devctl/cmd/devctl ci up core\n",
+			wantFinding: true,
+		},
+		{
+			name:        "rejects admission without explicit heavy weight",
+			workflow:    "env:\n  COMPOSE_PROJECT_NAME: civm\njobs:\n  e2e:\n    steps:\n      - run: civmctl admit --exclusive docker --exec -- go run ./tools/devctl/cmd/devctl ci up core\n",
+			wantFinding: true,
+		},
+		{
+			name:        "does not let a separate legacy lock protect another step",
+			workflow:    "env:\n  COMPOSE_PROJECT_NAME: civm\njobs:\n  e2e:\n    steps:\n      - run: civmctl lock --exec --scope docker-heavy -- make test\n      - run: go run ./tools/devctl/cmd/devctl ci up core\n",
+			wantFinding: true,
+		},
+		{
+			name:        "does not let a later legacy lock protect an earlier heavy command",
+			workflow:    "env:\n  COMPOSE_PROJECT_NAME: civm\njobs:\n  e2e:\n    steps:\n      - run: go run ./tools/devctl/cmd/devctl ci up core && civmctl lock --exec -- make test\n",
+			wantFinding: true,
+		},
+		{
+			name:        "does not let admission protect a heavy command after its payload",
+			workflow:    "env:\n  COMPOSE_PROJECT_NAME: civm\njobs:\n  e2e:\n    steps:\n      - run: civmctl admit --weight heavy --exclusive docker --exec -- make test && go run ./tools/devctl/cmd/devctl ci up core\n",
+			wantFinding: true,
+		},
+		{
+			name:        "does not accept a nonexecuting legacy acquire subcommand",
+			workflow:    "env:\n  COMPOSE_PROJECT_NAME: civm\njobs:\n  e2e:\n    steps:\n      - run: civmctl lock acquire --scope docker-heavy -- go run ./tools/devctl/cmd/devctl ci up core\n",
+			wantFinding: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeWorkflow(t, root, tt.workflow)
+
+			result, err := Scan(DefaultOptions(root))
+			if err != nil {
+				t.Fatalf("Scan err = %v", err)
+			}
+			_, gotFinding := findingForRule(result.Findings, RuleUnlockedHeavy)
+			if gotFinding != tt.wantFinding {
+				t.Fatalf("R4 finding = %v, want %v; findings=%+v", gotFinding, tt.wantFinding, result.Findings)
+			}
+		})
+	}
+}
+
 func TestScanWaiverSuppressesFinding(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

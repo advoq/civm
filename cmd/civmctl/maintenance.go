@@ -14,7 +14,7 @@ import (
 
 func runMaintenance(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "uso: civmctl maintenance <enter|exit> [--execute] [--json] [--repos=a,b]")
+		fmt.Fprintln(os.Stderr, "uso: civmctl maintenance <enter|exit> [--execute] [--strict] [--json] [--repos=a,b]")
 		return exitUsage
 	}
 	sub := args[0]
@@ -39,6 +39,7 @@ func runMaintenanceAction(
 	fs.SetOutput(io.Discard)
 	execute := fs.Bool("execute", false, "aplicar drain/restore (default: dry-run)")
 	force := fs.Bool("force", false, "enter: drenar mesmo com host nao-ocioso")
+	strict := fs.Bool("strict", false, "enter: exigir que todos os runners parem")
 	jsonOut := fs.Bool("json", false, "saida JSON estruturada")
 	reposRaw := fs.String("repos", "", "repos a drenar: vazio infere das units, ou owner/repo separados por virgula")
 	statePath := fs.String("state-path", civm.DefaultMaintenanceStatePath, "arquivo de snapshot do drain")
@@ -52,10 +53,19 @@ func runMaintenanceAction(
 		fmt.Fprintf(os.Stderr, "erro nos args de maintenance %s: --timeout deve ser >0\n", name)
 		return exitUsage
 	}
+	if *strict && name != "enter" {
+		fmt.Fprintln(os.Stderr, "erro nos args de maintenance exit: --strict so vale para enter")
+		return exitUsage
+	}
+	if *strict && *force {
+		fmt.Fprintln(os.Stderr, "erro nos args de maintenance enter: --strict e --force sao incompativeis")
+		return exitUsage
+	}
 
 	opts := maintenance.DefaultOptions()
 	opts.Execute = *execute
 	opts.Force = *force
+	opts.RequireStopped = *strict
 	opts.StatePath = *statePath
 	opts.LockPath = *lockPath
 	opts.Repos = splitCSV(*reposRaw)

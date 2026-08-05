@@ -515,10 +515,31 @@ host-ports dos peers — evidência colada no Slice 0 (DT-v2-11). Por isso
 jobs nunca devem bind porta fixa fora do bloco alocado; ver §"Riscos
 compartilhados" item 2.
 
-### Lock docker-heavy — `civmctl lock --exec --scope docker-heavy`
+### Admissão docker-heavy — `civmctl admit --weight heavy --exclusive docker`
+
+O contrato atual para um passo que cria imagens, containers, redes ou volumes
+é uma admissão explícita no **mesmo comando** que executa o payload:
+
+```bash
+civmctl admit --weight heavy --exclusive docker --wait-minutes 75 --exec -- make up-local
+```
+
+Ela combina três proteções do civm: slot heavy com cgroup `MemoryMax`,
+backpressure do `mem-watchdog` e sub-slot Docker global de capacidade 1. O
+payload após o separador `--` fica dentro da admissão; não divida wrapper e
+bring-up em steps distintos nem deixe o bring-up após `&&`. Assim o cleanup
+enxerga o holder Docker ativo e não poda o daemon durante a extração.
+
+`civmctl ci-guard` R4 aceita a forma explícita acima. `--weight auto` não é
+contrato suficiente para Docker-heavy porque uma variável do workflow pode
+resolvê-lo como `light`; use `--weight heavy --exclusive docker`.
+
+### Compatibilidade legada — `civmctl lock --exec --scope docker-heavy`
 
 Um único lock global em `/run/civm/docker-heavy.lock` serializa todo
-trabalho docker-heavy entre runners do mesmo daemon. Embrulhe assim:
+trabalho docker-heavy entre runners do mesmo daemon. Ele continua disponível
+para consumidores em migração, mas novos workflows devem usar `admit` acima.
+O formato legado aceito pelo R4 é:
 
 ```bash
 civmctl lock --exec --scope docker-heavy --budget 50m --wait 75m -- make up-local
@@ -557,7 +578,7 @@ HOLD só marca `over_budget`.
 
 #### Definição de "docker-heavy" (civm SPECv2 §Definição docker-heavy / DT-v2-10)
 
-- **É docker-heavy (embrulhar em `civmctl lock --exec`):**
+- **É docker-heavy (embrulhar em `civmctl admit --weight heavy --exclusive docker --exec`):**
   `docker compose up/down/run`, `docker build`, `docker buildx`,
   `docker pull` — qualquer operação que aloca recursos do daemon
   (imagem/container/rede/volume) e pode colidir com job concorrente.
@@ -579,13 +600,15 @@ civmctl ci-guard --repo-root . --mode report --json
 | R1 | `container_name` fixo no compose | ERROR |
 | R2 | host-port estática no compose | ERROR |
 | R3 | compose sem project-name | ERROR |
-| R4 | docker-heavy sem `civmctl lock` | WARN (só `report`) |
+| R4 | docker-heavy sem admissão explícita do civm | WARN (só `report`) |
 
 `--mode enforce` retorna exit 1 se houver ≥1 ERROR não-waivado; R4
 **nunca** conta como violation em `enforce`. Waiver line-based:
 `# civm:ci-guard-allow <rule> <motivo>` suprime `<rule>` na próxima
 linha significativa; waiver que não casa nenhum finding → WARN
-`orphan-waiver`.
+`orphan-waiver`. R4 exige que o payload pesado esteja após o mesmo `--` do
+`civmctl admit --weight heavy --exclusive docker --exec`; um `flock` local,
+um `lock acquire` ou um wrapper em outro step não suprime o aviso.
 
 ### Gating do runner `civm-e2e` (consumidor)
 

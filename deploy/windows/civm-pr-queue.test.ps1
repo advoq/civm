@@ -1,95 +1,53 @@
-# Teste da decisao PURA da fila FIFO por-PR (Resolve-PrSlot). Sem GitHub/Hyper-V ->
-# roda em qualquer pwsh (Kahneman #13). Ids sao STRING (ctx = 'pr-1234' ou 'branch-main').
+# Pure FIFO tests for generation identities. No GitHub, guest, or Hyper-V.
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\civm-pr-queue.ps1"
 
 $pass = 0; $fail = 0
-function Test-Slot($label, $got, $expAction, $expCurrent) {
-    if ($got.action -eq $expAction -and "$($got.currentPr)" -eq "$expCurrent") {
+function Test-Slot($label, $got, $expectedAction, $expectedCurrent) {
+    if ($got.action -eq $expectedAction -and "$($got.currentPr)" -eq "$expectedCurrent") {
         $script:pass++; "PASS  [$($got.action) -> $($got.currentPr)]  $label"
     }
     else {
-        $script:fail++; "FAIL  esperado=($expAction -> $expCurrent) got=($($got.action) -> $($got.currentPr))  ::  $label"
+        $script:fail++; "FAIL  expected=($expectedAction -> $expectedCurrent) got=($($got.action) -> $($got.currentPr)) :: $label"
     }
 }
-function Test-Eq($label, $got, $exp) {
-    if ("$got" -eq "$exp") { $script:pass++; "PASS  [eq] $label" }
-    else { $script:fail++; "FAIL  [eq] esperado='$exp' got='$got'  ::  $label" }
+function Test-Eq($label, $got, $expected) {
+    if ("$got" -eq "$expected") { $script:pass++; "PASS  [eq] $label" }
+    else { $script:fail++; "FAIL  [eq] expected='$expected' got='$got' :: $label" }
 }
-function Pr($n, $j) { [pscustomobject]@{ number = $n; realJobs = $j } }
+function Pr($id, $jobs) { [pscustomobject]@{ number = $id; realJobs = $jobs } }
+function PRRun($number, $sha) { [pscustomobject]@{ head_sha = $sha; head_branch = 'feature/demo'; pull_requests = @([pscustomobject]@{ number = $number }) } }
+function BranchRun($branch, $sha) { [pscustomobject]@{ head_sha = $sha; head_branch = $branch; pull_requests = @() } }
 
-$migrated = Ensure-PrQueueState ([pscustomobject]@{
-    currentPr = 'pr-42'
-    currentIdleSinceUtc = ''
-})
-Test-Eq 'state migration contexts' @($migrated.contexts).Count 0
-Test-Eq 'state migration lastCompactHeadSha' "$($migrated.lastCompactHeadSha)" ''
-Test-Eq 'state migration lastCompactContext' "$($migrated.lastCompactContext)" ''
+# Exact, immutable generation identity: a new SHA is a new queue item.
+Test-Eq 'PR generation includes number and SHA' (Get-RunGenerationContext (PRRun 10 'aaa')) 'pr-10@aaa'
+Test-Eq 'branch generation includes ref and SHA' (Get-RunGenerationContext (BranchRun 'main' 'bbb')) 'branch-main@bbb'
+Test-Eq 'missing SHA is rejected' (Get-RunGenerationContext (PRRun 10 '')) ''
+Test-Eq 'two SHA values are distinct generations' ((Get-RunGenerationContext (PRRun 10 'aaa')) -ne (Get-RunGenerationContext (PRRun 10 'bbb'))) $true
+Test-Eq 'legacy push-wave resolver is absent' ([bool](Get-Command Resolve-PushWaveCompact -ErrorAction SilentlyContinue)) $false
 
-# Relogio fixo (a funcao e pura: le os timestamps passados, nunca o relogio real).
-$now = '2026-06-25T00:00:00Z'
-$ago1 = '2026-06-24T23:59:00Z'  # 1 min antes de $now
-$ago4 = '2026-06-24T23:56:00Z'  # 4 min antes de $now
-$exact = '2026-06-24T23:57:00Z' # exatamente 3 min antes de $now
+$migrated = Ensure-PrQueueState ([pscustomobject]@{ currentPr = 'pr-42@aaa'; currentIdleSinceUtc = '' })
+Test-Eq 'state migration has contexts' @($migrated.contexts).Count 0
+Test-Eq 'state migration preserves current generation' "$($migrated.currentPr)" 'pr-42@aaa'
 
-# --- IDLE: nada na fila, nada concedido ---
-Test-Slot 'fila vazia -> idle' (Resolve-PrSlot -Prs @() -CurrentPr '' -NowUtc $now) 'idle' ''
+$now = '2026-08-04T00:10:00Z'
+$ago9 = '2026-08-04T00:01:00Z'
+$ago10 = '2026-08-04T00:00:00Z'
 
-# --- GRANT: sem slot + ctx esperando -> concede ao 1o da fila (FIFO por chegada) ---
-Test-Slot 'grant ao 1o da fila' (Resolve-PrSlot -Prs @((Pr 'pr-10' 0), (Pr 'pr-11' 0)) -CurrentPr '' -NowUtc $now) 'grant' 'pr-10'
-Test-Slot 'grant respeita a ORDEM da lista, nao o id' (Resolve-PrSlot -Prs @((Pr 'branch-main' 0), (Pr 'pr-5' 0)) -CurrentPr '' -NowUtc $now) 'grant' 'branch-main'
-Test-Slot 'grant mesmo com realJobs=0 (gate esperando)' (Resolve-PrSlot -Prs @((Pr 'pr-10' 0)) -CurrentPr '' -NowUtc $now) 'grant' 'pr-10'
+Test-Slot 'empty queue stays idle' (Resolve-PrSlot -Prs @() -CurrentPr '' -NowUtc $now) 'idle' ''
+Test-Slot 'grant first exact generation' (Resolve-PrSlot -Prs @((Pr 'pr-10@aaa' 0), (Pr 'pr-10@bbb' 0)) -CurrentPr '' -NowUtc $now) 'grant' 'pr-10@aaa'
+Test-Slot 'same PR newer SHA stays behind current generation' (Resolve-PrSlot -Prs @((Pr 'pr-10@aaa' 2), (Pr 'pr-10@bbb' 1)) -CurrentPr 'pr-10@aaa' -NowUtc $now) 'hold' 'pr-10@aaa'
 
-# --- HOLD: ctx atual com check real -> segura o slot e ZERA o grace ---
-$h = Resolve-PrSlot -Prs @((Pr 'pr-10' 3)) -CurrentPr 'pr-10' -NowUtc $now
-Test-Slot 'hold com check real' $h 'hold' 'pr-10'
-Test-Eq 'hold com check real zera o grace' $h.idleSinceUtc ''
-Test-Slot 'check real vence o grace antigo' (Resolve-PrSlot -Prs @((Pr 'pr-10' 5)) -CurrentPr 'pr-10' -CurrentIdleSinceUtc $ago4 -NowUtc $now) 'hold' 'pr-10'
+$active = Resolve-PrSlot -Prs @((Pr 'pr-10@aaa' 2), (Pr 'pr-10@bbb' 1)) -CurrentPr 'pr-10@aaa' -CurrentIdleSinceUtc $ago10 -NowUtc $now
+Test-Slot 'active run holds current generation' $active 'hold' 'pr-10@aaa'
+Test-Eq 'active run clears old grace' "$($active.idleSinceUtc)" ''
 
-# --- GRACE: ctx sem check real, mas pode ser gap entre os workflows DELE ---
-$g = Resolve-PrSlot -Prs @((Pr 'pr-10' 0)) -CurrentPr 'pr-10' -CurrentIdleSinceUtc '' -NowUtc $now
-Test-Slot '0 check real, 1o tick ocioso -> hold (arma grace)' $g 'hold' 'pr-10'
-Test-Eq 'arma o grace com NowUtc' $g.idleSinceUtc $now
-Test-Slot 'dentro do grace (1<3 min) -> hold' (Resolve-PrSlot -Prs @((Pr 'pr-10' 0)) -CurrentPr 'pr-10' -CurrentIdleSinceUtc $ago1 -NowUtc $now -DoneGraceMinutes 3) 'hold' 'pr-10'
-Test-Eq 'dentro do grace preserva o idleSince' (Resolve-PrSlot -Prs @((Pr 'pr-10' 0)) -CurrentPr 'pr-10' -CurrentIdleSinceUtc $ago1 -NowUtc $now -DoneGraceMinutes 3).idleSinceUtc $ago1
+$armed = Resolve-PrSlot -Prs @((Pr 'pr-10@aaa' 0), (Pr 'pr-10@bbb' 1)) -CurrentPr 'pr-10@aaa' -CurrentIdleSinceUtc '' -NowUtc $now
+Test-Slot 'first empty observation arms ten-minute grace' $armed 'hold' 'pr-10@aaa'
+Test-Eq 'grace starts at observation time' "$($armed.idleSinceUtc)" $now
+Test-Slot 'nine minutes remains inside grace' (Resolve-PrSlot -Prs @((Pr 'pr-10@aaa' 0), (Pr 'pr-10@bbb' 1)) -CurrentPr 'pr-10@aaa' -CurrentIdleSinceUtc $ago9 -NowUtc $now) 'hold' 'pr-10@aaa'
+Test-Slot 'ten minutes advances to next exact generation' (Resolve-PrSlot -Prs @((Pr 'pr-10@aaa' 0), (Pr 'pr-10@bbb' 1)) -CurrentPr 'pr-10@aaa' -CurrentIdleSinceUtc $ago10 -NowUtc $now) 'boundary_advance' 'pr-10@bbb'
+Test-Slot 'last generation advances to empty only after grace' (Resolve-PrSlot -Prs @((Pr 'pr-10@aaa' 0)) -CurrentPr 'pr-10@aaa' -CurrentIdleSinceUtc $ago10 -NowUtc $now) 'boundary_advance' ''
 
-# --- BOUNDARY_ADVANCE: grace estourou -> ctx concluido -> limpa+compacta + avanca ---
-Test-Slot 'grace estourou (4>=3) + proximo na fila -> avanca' (Resolve-PrSlot -Prs @((Pr 'pr-10' 0), (Pr 'pr-11' 0)) -CurrentPr 'pr-10' -CurrentIdleSinceUtc $ago4 -NowUtc $now -DoneGraceMinutes 3) 'boundary_advance' 'pr-11'
-Test-Slot 'grace estourou + fila vazia -> avanca para vazio (libera o slot)' (Resolve-PrSlot -Prs @((Pr 'pr-10' 0)) -CurrentPr 'pr-10' -CurrentIdleSinceUtc $ago4 -NowUtc $now -DoneGraceMinutes 3) 'boundary_advance' ''
-Test-Slot 'ctx SUMIU da lista (fechado) + grace estourou -> avanca pro proximo' (Resolve-PrSlot -Prs @((Pr 'pr-11' 0)) -CurrentPr 'pr-10' -CurrentIdleSinceUtc $ago4 -NowUtc $now -DoneGraceMinutes 3) 'boundary_advance' 'pr-11'
-Test-Eq 'boundary_advance limpa o idleSince' (Resolve-PrSlot -Prs @((Pr 'pr-10' 0), (Pr 'pr-11' 0)) -CurrentPr 'pr-10' -CurrentIdleSinceUtc $ago4 -NowUtc $now -DoneGraceMinutes 3).idleSinceUtc ''
-
-# --- FIFO no avanco + borda do grace ---
-Test-Slot 'avanca para o 1o da lista diferente do atual' (Resolve-PrSlot -Prs @((Pr 'pr-10' 0), (Pr 'pr-11' 0), (Pr 'pr-12' 0)) -CurrentPr 'pr-10' -CurrentIdleSinceUtc $ago4 -NowUtc $now -DoneGraceMinutes 3) 'boundary_advance' 'pr-11'
-Test-Slot 'grace == limite (3>=3) -> avanca (borda)' (Resolve-PrSlot -Prs @((Pr 'pr-10' 0), (Pr 'pr-11' 0)) -CurrentPr 'pr-10' -CurrentIdleSinceUtc $exact -NowUtc $now -DoneGraceMinutes 3) 'boundary_advance' 'pr-11'
-
-# --- main (push de branch) tratado como contexto, igual um PR ---
-Test-Slot 'branch-main como contexto -> grant' (Resolve-PrSlot -Prs @((Pr 'branch-main' 4)) -CurrentPr '' -NowUtc $now) 'grant' 'branch-main'
-Test-Slot 'branch-main com check real -> hold' (Resolve-PrSlot -Prs @((Pr 'branch-main' 4)) -CurrentPr 'branch-main' -NowUtc $now) 'hold' 'branch-main'
-Test-Slot 'PR espera a main terminar (FIFO): main na frente -> grant main' (Resolve-PrSlot -Prs @((Pr 'branch-main' 0), (Pr 'pr-20' 0)) -CurrentPr '' -NowUtc $now) 'grant' 'branch-main'
-
-# --- PUSH-WAVE COMPACT: entre pushes do MESMO PR (mudanca de head_sha) ---
-function Test-Wave($label, $got, $expAction) {
-    if ("$($got.action)" -eq "$expAction") { $script:pass++; "PASS  [wave:$expAction] $label" }
-    else { $script:fail++; "FAIL  [wave] esperado=$expAction got=$($got.action)  ::  $label" }
-}
-Test-Wave 'sem currentPr -> none' (Resolve-PushWaveCompact -CurrentPr '' -TipHeadSha 'aaa') 'none'
-Test-Wave 'sem tip -> none' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha '') 'none'
-# Seed SEMPRE (mesmo busy) — bug 2026-07-10: busy no topo matava o seed e o wave
-Test-Wave '1a vez (sem last) + busy -> seed' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'aaa' -LastCompactHeadSha '' -LastCompactContext '' -GuestHasActiveJob $true -VFreeGB 25) 'seed'
-Test-Wave '1a vez (sem last) idle -> seed' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'aaa' -LastCompactHeadSha '' -LastCompactContext '' -VFreeGB 25) 'seed'
-Test-Wave 'ctx novo (last de outro PR) -> seed' (Resolve-PushWaveCompact -CurrentPr 'pr-2' -TipHeadSha 'ccc' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 25) 'seed'
-Test-Wave 'mesmo tip (intra-push) -> none anti-thrash' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'aaa' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 25) 'none'
-Test-Wave 'mesmo tip + busy -> none anti-thrash' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'aaa' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -GuestHasActiveJob $true -VFreeGB 25) 'none'
-# Tip mudou: intencao compact/skip mesmo com busy (caller reap+wait+force)
-Test-Wave 'tip mudou + V sujo + busy -> compact' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -GuestHasActiveJob $true -VFreeGB 25) 'compact'
-Test-Wave 'tip mudou + V sujo -> compact' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 25) 'compact'
-Test-Wave 'tip mudou + V=54 borda -> compact' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 54) 'compact'
-Test-Wave 'tip mudou + V=55 ==floor -> skip_clean' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 55) 'skip_clean'
-Test-Wave 'tip mudou + V folgado + busy -> skip_clean' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -GuestHasActiveJob $true -VFreeGB 67) 'skip_clean'
-Test-Wave 'tip mudou + V folgado -> skip_clean' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 67) 'skip_clean'
-Test-Wave 'tip mudou + V=0 nao medido -> seed fail-safe' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'bbb' -LastCompactHeadSha 'aaa' -LastCompactContext 'pr-1' -VFreeGB 0) 'seed'
-Test-Wave 'case-insensitive same tip -> none' (Resolve-PushWaveCompact -CurrentPr 'pr-1' -TipHeadSha 'AABB' -LastCompactHeadSha 'aabb' -LastCompactContext 'pr-1' -VFreeGB 25) 'none'
-
-''; "RESULTADO: $pass PASS / $fail FAIL"
+''; "RESULT: $pass PASS / $fail FAIL"
 if ($fail -gt 0) { exit 1 }

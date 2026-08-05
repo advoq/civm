@@ -19,9 +19,8 @@ const (
 	sudoersTempSuffix = ".tmp"
 )
 
-// installScopedSudoers installs the privileged safedelete wrapper and the scoped
-// sudoers drop-in that whitelists exactly that wrapper under NOPASSWD
-// (docs/specs/civm-runner-reliability, DT-v2-1/3/5/7/8).
+// installScopedSudoers installs the privileged fixed-command wrappers and the
+// scoped sudoers drop-in that whitelists exactly those wrappers under NOPASSWD.
 //
 // Single source of truth: both artifacts are read from DeploySourceDir via
 // opts.ReadFileFn (mirrors DefaultUnitsSourceDir / ScriptContent). go:embed is
@@ -40,6 +39,9 @@ func installScopedSudoers(ctx context.Context, opts InstallOptions) error {
 	if err := installSafeDeleteWrapper(opts); err != nil {
 		return err
 	}
+	if err := installGenerationBoundaryWrapper(opts); err != nil {
+		return err
+	}
 	return installSudoersDropIn(ctx, opts)
 }
 
@@ -48,20 +50,37 @@ func installScopedSudoers(ctx context.Context, opts InstallOptions) error {
 // process's (the bootstrap runs `hook install --execute` under sudo), so we only
 // set the mode here; the parent dir is ensured first.
 func installSafeDeleteWrapper(opts InstallOptions) error {
-	src := filepath.Join(opts.DeploySourceDir, civm.DefaultSafeDeleteWrapperSource)
+	return installPrivilegedWrapper(
+		opts,
+		civm.DefaultSafeDeleteWrapperSource,
+		civm.DefaultSafeDeleteWrapperPath,
+		"safedelete",
+	)
+}
+
+func installGenerationBoundaryWrapper(opts InstallOptions) error {
+	return installPrivilegedWrapper(
+		opts,
+		civm.DefaultGenerationBoundaryWrapperSource,
+		civm.DefaultGenerationBoundaryWrapperPath,
+		"generation-boundary",
+	)
+}
+
+func installPrivilegedWrapper(opts InstallOptions, source, destination, name string) error {
+	src := filepath.Join(opts.DeploySourceDir, source)
 	content, err := opts.ReadFileFn(src)
 	if err != nil {
-		return fmt.Errorf("read safedelete wrapper source %s: %w", src, err)
+		return fmt.Errorf("read %s wrapper source %s: %w", name, src, err)
 	}
 	if len(content) == 0 {
-		return fmt.Errorf("safedelete wrapper source %s is empty", src)
+		return fmt.Errorf("%s wrapper source %s is empty", name, src)
 	}
-	dst := civm.DefaultSafeDeleteWrapperPath
-	if err := opts.MkdirAllFn(filepath.Dir(dst), 0o755); err != nil {
-		return fmt.Errorf("mkdir for safedelete wrapper %s: %w", dst, err)
+	if err := opts.MkdirAllFn(filepath.Dir(destination), 0o755); err != nil {
+		return fmt.Errorf("mkdir for %s wrapper %s: %w", name, destination, err)
 	}
-	if err := opts.WriteFileFn(dst, content, safeDeleteWrapperPerm); err != nil {
-		return fmt.Errorf("write safedelete wrapper %s: %w", dst, err)
+	if err := opts.WriteFileFn(destination, content, safeDeleteWrapperPerm); err != nil {
+		return fmt.Errorf("write %s wrapper %s: %w", name, destination, err)
 	}
 	return nil
 }

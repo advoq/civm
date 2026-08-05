@@ -125,6 +125,15 @@ func runnerByName(state State, name string) (RunnerState, bool) {
 	return RunnerState{}, false
 }
 
+func hasRunCall(calls [][]string, want string) bool {
+	for _, call := range calls {
+		if strings.Join(call, " ") == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestEnterWritesStateAndDrainsBothRunners(t *testing.T) {
 	t.Parallel()
 	rec := newRecorder()
@@ -448,6 +457,217 @@ func TestEnterPartialFailureStopOnlyRecordsCorrectly(t *testing.T) {
 	}
 	if starts != 1 {
 		t.Fatalf("Exit start calls = %d, want 1", starts)
+	}
+}
+
+func TestEnterStrictPersistsPartialDrainAndFails(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	rec.listOutput = twoRunnerListing()
+	rec.runErrOn = func(name string, args []string) error {
+		if name == "sudo" && strings.Join(args, " ") == "systemctl stop "+unitVitae {
+			return errFake
+		}
+		return nil
+	}
+	statePath := filepath.Join(t.TempDir(), "maintenance.json")
+	opts := rec.options(statePath)
+	opts.RequireStopped = true
+
+	state, err := Enter(context.Background(), opts)
+	if err == nil {
+		t.Fatal("strict enter must fail when one listener did not stop")
+	}
+	if _, ok := rec.files[statePath]; !ok {
+		t.Fatal("strict partial drain must persist recoverable state")
+	}
+	first, ok := runnerByName(state, "runner-1")
+	if !ok || !first.Stopped {
+		t.Fatalf("runner-1 state = %+v, want stopped", first)
+	}
+	second, ok := runnerByName(state, "runner-2")
+	if !ok || second.Stopped {
+		t.Fatalf("runner-2 state = %+v, want not stopped", second)
+	}
+}
+
+func TestEnterStrictRetriesOnlyPendingRunner(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	rec.listOutput = twoRunnerListing()
+	failSecond := true
+	rec.runErrOn = func(name string, args []string) error {
+		if failSecond && name == "sudo" && strings.Join(args, " ") == "systemctl stop "+unitVitae {
+			return errFake
+		}
+		return nil
+	}
+	statePath := filepath.Join(t.TempDir(), "maintenance.json")
+	opts := rec.options(statePath)
+	opts.RequireStopped = true
+	if _, err := Enter(context.Background(), opts); err == nil {
+		t.Fatal("first strict enter must leave a retryable partial state")
+	}
+
+	failSecond = false
+	rec.runCalls = nil
+	state, err := Enter(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("strict retry err = %v", err)
+	}
+	for _, name := range []string{"runner-1", "runner-2"} {
+		rn, ok := runnerByName(state, name)
+		if !ok || !rn.Stopped {
+			t.Fatalf("%s after retry = %+v, want stopped", name, rn)
+		}
+	}
+	if hasRunCall(rec.runCalls, "sudo systemctl stop "+unitCivm) {
+		t.Fatalf("strict retry stopped an already drained runner: %v", rec.runCalls)
+	}
+	if !hasRunCall(rec.runCalls, "sudo systemctl stop "+unitVitae) {
+		t.Fatalf("strict retry did not stop the pending runner: %v", rec.runCalls)
+	}
+}
+
+func TestEnterStrictRetryBusyDoesNotMutate(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	rec.listOutput = twoRunnerListing()
+	rec.runErrOn = func(name string, args []string) error {
+		if name == "sudo" && strings.Join(args, " ") == "systemctl stop "+unitVitae {
+			return errFake
+		}
+		return nil
+	}
+	statePath := filepath.Join(t.TempDir(), "maintenance.json")
+	opts := rec.options(statePath)
+	opts.RequireStopped = true
+	if _, err := Enter(context.Background(), opts); err == nil {
+		t.Fatal("first strict enter must leave a retryable partial state")
+	}
+
+	rec.idle = false
+	rec.runCalls = nil
+	if _, err := Enter(context.Background(), opts); err == nil {
+		t.Fatal("strict retry while busy must fail")
+	}
+	for _, call := range rec.runCalls {
+		if strings.Contains(strings.Join(call, " "), "systemctl stop") {
+			t.Fatalf("busy strict retry mutated runner units: %v", rec.runCalls)
+		}
+	}
+}
+
+func TestEnterStrictFailsClosedWhenRunnerDiscoveryIsUnknown(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	rec.listOutput = twoRunnerListing()
+	statePath := filepath.Join(t.TempDir(), "maintenance.json")
+	opts := rec.options(statePath)
+	opts.RequireStopped = true
+	baseRun := opts.RunFn
+	opts.RunFn = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "systemctl" && strings.Contains(strings.Join(args, " "), "list-units") {
+			return nil, errFake
+		}
+		return baseRun(ctx, name, args...)
+	}
+
+	if _, err := Enter(context.Background(), opts); err == nil {
+		t.Fatal("strict enter must fail when it cannot enumerate eligible runners")
+	}
+	if _, ok := rec.files[statePath]; ok {
+		t.Fatal("strict enter must not write a complete-looking state after unknown discovery")
+	}
+}
+
+func TestEnterStrictRemovesEveryLabelBeforeStoppingAnyRunner(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	rec.listOutput = twoRunnerListing()
+	statePath := filepath.Join(t.TempDir(), "maintenance.json")
+	opts := rec.options(statePath)
+	opts.RequireStopped = true
+	baseRun := opts.RunFn
+	baseGH := opts.GHFn
+	labelRemovals := 0
+	opts.GHFn = func(ctx context.Context, args ...string) ([]byte, error) {
+		if strings.Contains(strings.Join(args, " "), "--method DELETE") && strings.Contains(strings.Join(args, " "), "labels/civm") {
+			labelRemovals++
+		}
+		return baseGH(ctx, args...)
+	}
+	opts.RunFn = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "sudo" && strings.Contains(strings.Join(args, " "), "systemctl stop") && labelRemovals != 2 {
+			return nil, errors.New("strict stop raced label withdrawal")
+		}
+		return baseRun(ctx, name, args...)
+	}
+
+	state, err := Enter(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("strict enter must withdraw every label before stopping units: %v", err)
+	}
+	for _, name := range []string{"runner-1", "runner-2"} {
+		runner, ok := runnerByName(state, name)
+		if !ok || !runner.Stopped || !runner.LabelRemoved {
+			t.Fatalf("strict state for %s = %+v, want label removed then stopped", name, runner)
+		}
+	}
+}
+
+func TestEnterStrictDoesNotStopWhenAnyLabelCannotBeWithdrawn(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	rec.listOutput = twoRunnerListing()
+	statePath := filepath.Join(t.TempDir(), "maintenance.json")
+	opts := rec.options(statePath)
+	opts.RequireStopped = true
+	baseGH := opts.GHFn
+	opts.GHFn = func(ctx context.Context, args ...string) ([]byte, error) {
+		if strings.Contains(strings.Join(args, " "), "repos/other/peer/actions/runners/12/labels/civm") {
+			return nil, errFake
+		}
+		return baseGH(ctx, args...)
+	}
+
+	state, err := Enter(context.Background(), opts)
+	if err == nil {
+		t.Fatal("strict enter must fail when it cannot withdraw every runner label")
+	}
+	for _, runner := range state.Runners {
+		if runner.Stopped {
+			t.Fatalf("strict enter stopped %s despite incomplete label withdrawal", runner.Name)
+		}
+	}
+}
+
+func TestExitRestoresStoppedSubsetAfterStrictPartialDrain(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	rec.listOutput = twoRunnerListing()
+	rec.runErrOn = func(name string, args []string) error {
+		if name == "sudo" && strings.Join(args, " ") == "systemctl stop "+unitVitae {
+			return errFake
+		}
+		return nil
+	}
+	statePath := filepath.Join(t.TempDir(), "maintenance.json")
+	opts := rec.options(statePath)
+	opts.RequireStopped = true
+	if _, err := Enter(context.Background(), opts); err == nil {
+		t.Fatal("first strict enter must leave a partial state")
+	}
+
+	rec.runCalls = nil
+	if _, err := Exit(context.Background(), opts); err != nil {
+		t.Fatalf("exit partial strict state: %v", err)
+	}
+	if !hasRunCall(rec.runCalls, "sudo systemctl start "+unitCivm) {
+		t.Fatalf("exit did not restore the stopped unit: %v", rec.runCalls)
+	}
+	if hasRunCall(rec.runCalls, "sudo systemctl start "+unitVitae) {
+		t.Fatalf("exit started a unit that strict drain never stopped: %v", rec.runCalls)
 	}
 }
 
