@@ -49,7 +49,7 @@ const (
 	remediationContainerName  = "remova container_name: nomes fixos impedem co-residencia entre runners"
 	remediationStaticHostPort = "use ${CIVM_PORT_BASE}+N ou porta ephemeral em vez de host-port estatica"
 	remediationMissingProject = "passe -p/--project-name ou exporte COMPOSE_PROJECT_NAME no escopo do step"
-	remediationUnlockedHeavy  = "envolva o passo docker-heavy em civmctl lock --exec; flock repo-local nao difere a cleanup"
+	remediationUnlockedHeavy  = "envolva o mesmo comando em civmctl admit --weight heavy --exclusive docker --exec; flock repo-local nao difere a cleanup"
 	remediationOrphanWaiver   = "remova o waiver: a regra citada nao casou nenhum finding na proxima linha"
 )
 
@@ -262,15 +262,17 @@ var (
 	// evita falso-positivo em `make update`/`make upstream`. Ver ADR-107.
 	dockerHeavyUpRe = regexp.MustCompile(`docker[\s-]compose\b.*\bup\b|--build\b|\bmake\s+up\b|\bdevctl\b.*\bci\s+up\b`)
 	projectNameRe   = regexp.MustCompile(`-p\b|--project-name\b|COMPOSE_PROJECT_NAME`)
-	// lockWrapRe matches ONLY `civmctl lock` — the heartbeat-backed cross-repo
-	// docker-heavy lock the disk-watchdog cleanup honors via dockerlock.IsActive.
-	// A bare repo-local `flock` is intentionally NOT accepted: it serializes
-	// within one repo but is invisible to IsActive, so the cleanup still prunes
-	// the daemon mid-extract. Incident 2026-06-14: a consumer's
-	// `flock "$CI_LOCAL_LOCK" -- make up-local` passed R4, yet a cleanup tick
-	// swept an in-flight containerd overlayfs snapshot and corrupted the image
-	// extract. Counting bare flock as protection was the blind spot that shipped.
-	lockWrapRe = regexp.MustCompile(`civmctl\s+lock\b`)
+	// legacyLockWrapRe keeps existing consumers covered while they migrate to
+	// admission. A repository-local flock is deliberately not accepted: cleanup
+	// cannot observe it, so it may prune the shared daemon mid-extract.
+	legacyLockWrapRe   = regexp.MustCompile(`civmctl\s+lock\b`)
+	legacyLockSubcmdRe = regexp.MustCompile(`^\s*(?:acquire|release)\b`)
+	admitWrapRe        = regexp.MustCompile(`civmctl\s+admit\b`)
+	heavyWeightRe      = regexp.MustCompile(`--weight(?:=|\s+)heavy(?:\s|$)`)
+	dockerExclusiveRe  = regexp.MustCompile(`--exclusive(?:=|\s+)docker(?:\s|$)`)
+	execWrapRe         = regexp.MustCompile(`--exec\b`)
+	payloadSeparatorRe = regexp.MustCompile(`(?:^|\s)--(?:\s|$)`)
+	shellControlRe     = regexp.MustCompile(`&&|\|\||;|\|`)
 )
 
 type waiver struct {
@@ -310,14 +312,13 @@ func scanComposeFile(opts Options, path string) ([]Finding, error) {
 }
 
 // scanWorkflowFile applies R3 (compose without project name) and R4 (docker-heavy
-// step without a lock wrapper, warn-only).
+// step without a central wrapper, warn-only).
 func scanWorkflowFile(opts Options, path string) ([]Finding, error) {
 	lines, err := readLines(opts, path)
 	if err != nil {
 		return nil, err
 	}
 	hasProjectScope := fileHasProjectScope(lines)
-	hasLockScope := fileHasLockScope(lines)
 	waivers := map[int]*waiver{}
 	var findings []Finding
 	for idx, raw := range lines {
@@ -335,10 +336,10 @@ func scanWorkflowFile(opts Options, path string) ([]Finding, error) {
 			File: path, Line: lineNo, Rule: RuleMissingProject, Severity: SeverityError,
 			Message: "docker compose sem project-name colide COMPOSE_PROJECT_NAME entre runners", Remediation: remediationMissingProject,
 		}, idx, missingProject)
-		unlockedHeavy := dockerHeavyUpRe.MatchString(raw) && !lockWrapRe.MatchString(raw) && !hasLockScope
+		unlockedHeavy := dockerHeavyUpRe.MatchString(raw) && !protectsDockerHeavy(raw)
 		findings = appendIfActive(findings, waivers, Finding{
 			File: path, Line: lineNo, Rule: RuleUnlockedHeavy, Severity: SeverityWarn,
-			Message: "passo docker-heavy sem civmctl lock pode colidir no daemon", Remediation: remediationUnlockedHeavy,
+			Message: "passo docker-heavy sem admissao civm pode colidir no daemon", Remediation: remediationUnlockedHeavy,
 		}, idx, unlockedHeavy)
 	}
 	findings = append(findings, orphanWaiverFindings(path, lines, waivers)...)
@@ -356,13 +357,64 @@ func fileHasProjectScope(lines []string) bool {
 	return false
 }
 
-func fileHasLockScope(lines []string) bool {
-	for _, raw := range lines {
-		if lockWrapRe.MatchString(raw) {
-			return true
-		}
+// protectsDockerHeavy proves that the docker-heavy command is in the payload of
+// the central wrapper. Matching unrelated text elsewhere on the YAML line would
+// create a false green for `heavy && wrapper` or `wrapper -- light && heavy`.
+// The preferred wrapper explicitly requests a heavy cgroup slot, the global
+// Docker sub-slot, and execution of that payload.
+func protectsDockerHeavy(line string) bool {
+	if legacyLockProtectsDockerHeavy(line) {
+		return true
 	}
-	return false
+	return admitProtectsDockerHeavy(line)
+}
+
+func legacyLockProtectsDockerHeavy(line string) bool {
+	options, payload, ok := wrapperPayload(line, legacyLockWrapRe)
+	if !ok || legacyLockSubcmdRe.MatchString(options) {
+		return false
+	}
+	return execWrapRe.MatchString(options) && payloadStartsWithDockerHeavy(payload)
+}
+
+func admitProtectsDockerHeavy(line string) bool {
+	options, payload, ok := wrapperPayload(line, admitWrapRe)
+	if !ok {
+		return false
+	}
+	return heavyWeightRe.MatchString(options) &&
+		dockerExclusiveRe.MatchString(options) &&
+		execWrapRe.MatchString(options) &&
+		payloadStartsWithDockerHeavy(payload)
+}
+
+// wrapperPayload returns wrapper options and the command payload after its
+// standalone `--` separator. The separator is required so flags belonging to a
+// later shell command cannot be mistaken for admission flags.
+func wrapperPayload(line string, wrapper *regexp.Regexp) (string, string, bool) {
+	match := wrapper.FindStringIndex(line)
+	if match == nil {
+		return "", "", false
+	}
+	args := line[match[1]:]
+	separator := payloadSeparatorRe.FindStringIndex(args)
+	if separator == nil {
+		return "", "", false
+	}
+	return args[:separator[0]], args[separator[1]:], true
+}
+
+// payloadStartsWithDockerHeavy accepts a heavy command only before the first
+// shell control operator. That accepts `wrapper -- ci up | tee` (the heavy
+// child is wrapped) and rejects `wrapper -- test && ci up` (the latter runs
+// outside the wrapper).
+func payloadStartsWithDockerHeavy(payload string) bool {
+	heavy := dockerHeavyUpRe.FindStringIndex(payload)
+	if heavy == nil {
+		return false
+	}
+	control := shellControlRe.FindStringIndex(payload)
+	return control == nil || heavy[0] < control[0]
 }
 
 // appendIfActive appends finding when matched is true and the line is not
