@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.31](https://github.com/advoq/civm/compare/v1.22.30...v1.22.31) (2026-08-05)
+
+
+### Bug Fixes
+
+* **runner:** require effective ACL mutation ([#253](https://github.com/advoq/civm/issues/253)) ([3458352](https://github.com/advoq/civm/commit/34583520ab1d089eed8aa7d9de8b69cc334c95f9))
+
 ## [1.22.30](https://github.com/advoq/civm/compare/v1.22.29...v1.22.30) (2026-08-05)
 
 
