@@ -195,11 +195,13 @@ namespace CivmGateNative {
     }
 
     public static class SecurityDescriptorWriter {
+        const uint OwnerSecurityInformation = 0x00000001;
         const uint DaclSecurityInformation = 0x00000004;
         const uint TokenAdjustPrivileges = 0x20;
         const uint TokenQuery = 0x8;
         const uint PrivilegeEnabled = 0x2;
         const uint WriteDac = 0x00040000;
+        const uint ReadControl = 0x00020000;
         const uint ShareAll = 0x7;
         const uint OpenExisting = 3;
         const uint OpenReparsePoint = 0x00200000;
@@ -232,6 +234,76 @@ namespace CivmGateNative {
         [DllImport("advapi32.dll", SetLastError = true)]
         static extern bool SetKernelObjectSecurity(SafeFileHandle handle,
             uint securityInformation, IntPtr securityDescriptor);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool GetKernelObjectSecurity(SafeFileHandle handle,
+            uint securityInformation, byte[] securityDescriptor,
+            uint length, out uint needed);
+
+        public static byte[] GetOwnerAndDacl(string path) {
+            SafeFileHandle token = null;
+            SafeFileHandle target = null;
+            TokenPrivileges previous = new TokenPrivileges();
+            bool restorePrivilege = false;
+            try {
+                if (!OpenProcessToken(Process.GetCurrentProcess().Handle,
+                        TokenAdjustPrivileges | TokenQuery, out token)) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                Luid luid;
+                if (!LookupPrivilegeValue(null, "SeBackupPrivilege", out luid)) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                TokenPrivileges desired = new TokenPrivileges {
+                    PrivilegeCount = 1,
+                    Luid = luid,
+                    Attributes = PrivilegeEnabled
+                };
+                uint returnedLength;
+                if (!AdjustTokenPrivileges(token, false, ref desired,
+                        (uint)Marshal.SizeOf<TokenPrivileges>(), out previous,
+                        out returnedLength)) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                restorePrivilege = true;
+                int privilegeError = Marshal.GetLastWin32Error();
+                if (privilegeError != 0) {
+                    throw new Win32Exception(privilegeError);
+                }
+                target = CreateFile(path, ReadControl, ShareAll, IntPtr.Zero,
+                    OpenExisting, OpenReparsePoint | BackupSemantics,
+                    IntPtr.Zero);
+                if (target.IsInvalid) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                uint needed;
+                bool first = GetKernelObjectSecurity(target,
+                    OwnerSecurityInformation | DaclSecurityInformation,
+                    null, 0, out needed);
+                int sizeError = Marshal.GetLastWin32Error();
+                if (first || sizeError != 122 || needed == 0) {
+                    throw new Win32Exception(first ? 87 : sizeError);
+                }
+                byte[] descriptor = new byte[needed];
+                if (!GetKernelObjectSecurity(target,
+                        OwnerSecurityInformation | DaclSecurityInformation,
+                        descriptor, needed, out needed)) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                return descriptor;
+            } finally {
+                if (target != null) { target.Dispose(); }
+                int restoreError = 0;
+                if (restorePrivilege && token != null && !token.IsInvalid) {
+                    if (!RestoreTokenPrivileges(token, false, ref previous, 0,
+                            IntPtr.Zero, IntPtr.Zero)) {
+                        restoreError = Marshal.GetLastWin32Error();
+                    }
+                }
+                if (token != null) { token.Dispose(); }
+                if (restoreError != 0) { throw new Win32Exception(restoreError); }
+            }
+        }
 
         public static void SetDacl(string path, byte[] securityDescriptor) {
             if (securityDescriptor == null || securityDescriptor.Length == 0) {

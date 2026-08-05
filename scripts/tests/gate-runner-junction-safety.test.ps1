@@ -174,6 +174,7 @@ foreach ($name in @(
         'Initialize-CivmGateNative',
         'Get-FileLinkCount',
         'Set-DaclWithoutPropagation',
+        'Get-SecurityDescriptorWithoutFollowing',
         'Set-ProtectedAcl',
         'Assert-ProtectedAcl',
         'Grant-AdminTraversal',
@@ -344,6 +345,21 @@ try {
     Write-Host 'PASS: raw admin insertion does not propagate through hardlink'
 } finally {
     if ($inheritableFixtureCreated) {
+        if (Test-Path -LiteralPath $inheritableRoot) {
+            $rootRecovery = New-Object `
+                System.Security.AccessControl.DirectorySecurity
+            $rootRecovery.SetOwner($currentSid)
+            $rootRecovery.SetAccessRuleProtection($true, $false)
+            $rootRecoveryRule = `
+                [System.Security.AccessControl.FileSystemAccessRule]::new(
+                    $currentSid,
+                    [System.Security.AccessControl.FileSystemRights]::FullControl,
+                    [System.Security.AccessControl.AccessControlType]::Allow)
+            $rootRecovery.AddAccessRule($rootRecoveryRule) | Out-Null
+            [CivmGateNative.SecurityDescriptorWriter]::SetDacl(
+                $inheritableRoot,
+                $rootRecovery.GetSecurityDescriptorBinaryForm())
+        }
         if (Test-Path -LiteralPath $inheritableExternal) {
             $fileAcl = New-Object System.Security.AccessControl.FileSecurity
             $fileAcl.SetOwner($currentSid)
@@ -452,6 +468,8 @@ foreach ($source in $sources) {
 
 foreach ($functionName in @(
         'Get-FileLinkCount',
+        'Set-DaclWithoutPropagation',
+        'Get-SecurityDescriptorWithoutFollowing',
         'Grant-AdminTraversal',
         'Assert-SafeOfficialRunnerJunction',
         'Get-SafeTreeItems')) {
@@ -461,6 +479,63 @@ foreach ($functionName in @(
             $node.Name -eq $functionName
     }, $true)
     Invoke-Expression $provisionFunction.Extent.Text
+}
+
+$reparseAclRoot = Join-Path ([System.IO.Path]::GetTempPath()) `
+    ('civm-reparse-acl-handoff-' + [guid]::NewGuid().ToString('N'))
+$reparseAclLink = Join-Path $reparseAclRoot 'externals'
+$reparseAclTarget = Join-Path $reparseAclRoot "externals.$expectedVersion"
+$reparseAclCreated = $false
+try {
+    New-Item -ItemType Directory -Path $reparseAclTarget -Force | Out-Null
+    New-Item -ItemType File -Path (
+        Join-Path $reparseAclTarget 'marker') | Out-Null
+    New-Item -ItemType Junction -Path $reparseAclLink `
+        -Target $reparseAclTarget | Out-Null
+    $reparseAclCreated = $true
+    $targetSddlBefore = (Get-Acl -LiteralPath $reparseAclTarget).Sddl
+
+    $restrictedLink = New-Object `
+        System.Security.AccessControl.DirectorySecurity
+    $restrictedLink.SetOwner($systemSid)
+    $restrictedLink.SetAccessRuleProtection($true, $false)
+    $restrictedLinkRule = `
+        [System.Security.AccessControl.FileSystemAccessRule]::new(
+            $networkServiceSid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            [System.Security.AccessControl.AccessControlType]::Allow)
+    $restrictedLink.AddAccessRule($restrictedLinkRule) | Out-Null
+    Set-DaclWithoutPropagation -Path $reparseAclLink `
+        -SecurityDescriptor $restrictedLink.GetSecurityDescriptorBinaryForm()
+
+    $RunnerVersion = $expectedVersion
+    $items = @(Get-SafeTreeItems -Path $reparseAclRoot `
+        -AllowedRunnerRoots @($reparseAclRoot) -EnsureAdminTraversal)
+    if ($items.Count -ne 4) {
+        throw "restricted junction handoff item mismatch: $($items.Count)"
+    }
+    $targetSddlAfter = (Get-Acl -LiteralPath $reparseAclTarget).Sddl
+    if ($targetSddlAfter -ne $targetSddlBefore) {
+        throw 'restricted junction handoff changed target DACL'
+    }
+    Write-Host 'PASS: restricted official junction regains admin traversal'
+} finally {
+    if ($reparseAclCreated) {
+        $recoveryLink = New-Object `
+            System.Security.AccessControl.DirectorySecurity
+        $recoveryLink.SetOwner($currentSid)
+        $recoveryLink.SetAccessRuleProtection($true, $false)
+        $recoveryLinkRule = `
+            [System.Security.AccessControl.FileSystemAccessRule]::new(
+                $currentSid,
+                [System.Security.AccessControl.FileSystemRights]::FullControl,
+                [System.Security.AccessControl.AccessControlType]::Allow)
+        $recoveryLink.AddAccessRule($recoveryLinkRule) | Out-Null
+        Set-DaclWithoutPropagation -Path $reparseAclLink `
+            -SecurityDescriptor $recoveryLink.GetSecurityDescriptorBinaryForm()
+        Remove-Junction -Path $reparseAclLink
+        Remove-Item -LiteralPath $reparseAclRoot -Recurse -Force
+    }
 }
 
 $swapRoot = Join-Path ([System.IO.Path]::GetTempPath()) `
