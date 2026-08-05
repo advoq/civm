@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.33](https://github.com/advoq/civm/compare/v1.22.32...v1.22.33) (2026-08-05)
+
+
+### Bug Fixes
+
+* **runner:** await gate session convergence ([#259](https://github.com/advoq/civm/issues/259)) ([bf46a13](https://github.com/advoq/civm/commit/bf46a1356c8bc7bf802ec3079045158d7b7f870e))
+
 ## [1.22.32](https://github.com/advoq/civm/compare/v1.22.31...v1.22.32) (2026-08-05)
 
 
