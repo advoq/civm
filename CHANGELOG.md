@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.28](https://github.com/advoq/civm/compare/v1.22.27...v1.22.28) (2026-08-05)
+
+
+### Bug Fixes
+
+* **runner:** inspect restricted junctions by handle ([#244](https://github.com/advoq/civm/issues/244)) ([c368595](https://github.com/advoq/civm/commit/c36859528257fb841579c7f9c174c9d38ab7e9b1))
+
 ## [1.22.27](https://github.com/advoq/civm/compare/v1.22.26...v1.22.27) (2026-08-05)
 
 
