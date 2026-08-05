@@ -148,6 +148,7 @@ func TestGateRunnerTaskUsesLeastPrivilegeAndReadOnlyContext(t *testing.T) {
 		"$remoteOnlineTimeoutSeconds = 120",
 		"AddSeconds($listenerStartTimeoutSeconds)",
 		"AddSeconds($remoteOnlineTimeoutSeconds)",
+		"return ,@(Get-CimInstance Win32_Process",
 		"runner_write_denied",
 		"[string]::IsNullOrWhiteSpace($result)",
 		"catch [System.UnauthorizedAccessException]",

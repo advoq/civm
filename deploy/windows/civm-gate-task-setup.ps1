@@ -560,7 +560,7 @@ function Assert-ExactProtectedAcl {
 
 function Get-RunnerProcesses {
     param([Parameter(Mandatory)][string]$ProcessName)
-    return @(Get-CimInstance Win32_Process -Filter "Name = '$ProcessName'" |
+    return ,@(Get-CimInstance Win32_Process -Filter "Name = '$ProcessName'" |
         Where-Object {
             $_.ExecutablePath -and $_.ExecutablePath.StartsWith(
                 $dir + '\', [System.StringComparison]::OrdinalIgnoreCase)
