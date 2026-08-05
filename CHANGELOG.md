@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.25](https://github.com/advoq/civm/compare/v1.22.24...v1.22.25) (2026-08-05)
+
+
+### Bug Fixes
+
+* allow only pinned runner junctions ([#235](https://github.com/advoq/civm/issues/235)) ([b51dba8](https://github.com/advoq/civm/commit/b51dba835ae4b5b4fe98df48c8543a9eddce2557))
+
 ## [1.22.24](https://github.com/advoq/civm/compare/v1.22.23...v1.22.24) (2026-08-05)
 
 
