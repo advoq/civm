@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.22.23](https://github.com/advoq/civm/compare/v1.22.22...v1.22.23) (2026-08-05)
+
+
+### Bug Fixes
+
+* **ci:** enforce clean generation boundary ([59cb68e](https://github.com/advoq/civm/commit/59cb68e257dabd014bfdd9d0ab5be9910a9a1f07))
+
+
+### Documentation
+
+* **host:** record clean boundary rollout ([#230](https://github.com/advoq/civm/issues/230)) ([068cf37](https://github.com/advoq/civm/commit/068cf37b3befa2fad325648996db1100f789e24a))
+
 ## [1.22.22](https://github.com/advoq/civm/compare/v1.22.21...v1.22.22) (2026-08-03)
 
 
