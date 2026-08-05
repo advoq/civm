@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.30](https://github.com/advoq/civm/compare/v1.22.29...v1.22.30) (2026-08-05)
+
+
+### Bug Fixes
+
+* **runner:** validate rollback physical targets ([#250](https://github.com/advoq/civm/issues/250)) ([5929e35](https://github.com/advoq/civm/commit/5929e352359689c67afe58b428f37cbc0e5c79cf))
+
 ## [1.22.29](https://github.com/advoq/civm/compare/v1.22.28...v1.22.29) (2026-08-05)
 
 
