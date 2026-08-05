@@ -296,6 +296,74 @@ try {
     }
 }
 
+$inheritableRoot = Join-Path ([System.IO.Path]::GetTempPath()) `
+    ('civm-acl-inheritable-root-' + [guid]::NewGuid().ToString('N'))
+$inheritableExternal = Join-Path ([System.IO.Path]::GetTempPath()) `
+    ('civm-acl-inheritable-external-' + [guid]::NewGuid().ToString('N') + '.txt')
+$inheritableAlias = Join-Path $inheritableRoot 'outside-hardlink.txt'
+$inheritableFixtureCreated = $false
+try {
+    New-Item -ItemType Directory -Path $inheritableRoot | Out-Null
+    New-Item -ItemType File -Path $inheritableExternal | Out-Null
+    New-Item -ItemType HardLink -Path $inheritableAlias `
+        -Target $inheritableExternal | Out-Null
+    $inheritableFixtureCreated = $true
+    $inheritableAcl = New-Object System.Security.AccessControl.DirectorySecurity
+    $inheritableAcl.SetOwner($currentSid)
+    $inheritableAcl.SetAccessRuleProtection($true, $false)
+    $inheritableRule = `
+        [System.Security.AccessControl.FileSystemAccessRule]::new(
+            $systemSid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            [System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow)
+    $inheritableAcl.AddAccessRule($inheritableRule) | Out-Null
+    Set-Acl -LiteralPath $inheritableRoot -AclObject $inheritableAcl
+    $driftAcl = New-Object System.Security.AccessControl.FileSecurity
+    $driftAcl.SetOwner($currentSid)
+    $driftAcl.SetAccessRuleProtection($false, $false)
+    $driftRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+        $currentSid,
+        [System.Security.AccessControl.FileSystemRights]::FullControl,
+        [System.Security.AccessControl.AccessControlType]::Allow)
+    $driftAcl.AddAccessRule($driftRule) | Out-Null
+    Set-Acl -LiteralPath $inheritableExternal -AclObject $driftAcl
+    $inheritableSddlBefore = (Get-Acl -LiteralPath $inheritableExternal).Sddl
+    Assert-Rejected {
+        [void](Get-SafeTreeItems -Path $inheritableRoot `
+            -AllowedRunnerRoots @($inheritableRoot) -EnsureAdminTraversal)
+    } '*link de filesystem proibido*'
+    $inheritableSddlAfter = (Get-Acl -LiteralPath $inheritableExternal).Sddl
+    if ($inheritableSddlAfter -ne $inheritableSddlBefore) {
+        throw 'admin traversal propagated an inheritable ACE through hardlink'
+    }
+    Write-Host 'PASS: raw admin insertion does not propagate through hardlink'
+} finally {
+    if ($inheritableFixtureCreated) {
+        if (Test-Path -LiteralPath $inheritableExternal) {
+            $fileAcl = New-Object System.Security.AccessControl.FileSecurity
+            $fileAcl.SetOwner($currentSid)
+            $fileAcl.SetAccessRuleProtection($true, $false)
+            $fileRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+                $currentSid,
+                [System.Security.AccessControl.FileSystemRights]::FullControl,
+                [System.Security.AccessControl.AccessControlType]::Allow)
+            $fileAcl.AddAccessRule($fileRule) | Out-Null
+            Set-Acl -LiteralPath $inheritableExternal -AclObject $fileAcl
+        }
+        if (Test-Path -LiteralPath $inheritableAlias) {
+            Remove-Item -LiteralPath $inheritableAlias -Force
+        }
+        if (Test-Path -LiteralPath $inheritableRoot) {
+            Remove-Item -LiteralPath $inheritableRoot -Recurse -Force
+        }
+        if (Test-Path -LiteralPath $inheritableExternal) {
+            Remove-Item -LiteralPath $inheritableExternal -Force
+        }
+    }
+}
+
 foreach ($source in $sources) {
     $sourceTokens = $null
     $sourceErrors = $null
