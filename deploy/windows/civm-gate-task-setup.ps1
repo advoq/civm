@@ -56,8 +56,7 @@ function Resolve-AccountSid {
     }
 }
 
-function Get-FileLinkCount {
-    param([Parameter(Mandatory)][string]$Path)
+function Initialize-CivmGateNative {
     if ($null -eq ('CivmGateNative.LinkInspector' -as [type])) {
         Add-Type -TypeDefinition @'
 using System;
@@ -194,9 +193,39 @@ namespace CivmGateNative {
             }
         }
     }
+
+    public static class SecurityDescriptorWriter {
+        const uint DaclSecurityInformation = 0x00000004;
+
+        [DllImport("advapi32.dll", EntryPoint = "SetFileSecurityW",
+            CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool SetFileSecurity(string path,
+            uint securityInformation, IntPtr securityDescriptor);
+
+        public static void SetDacl(string path, byte[] securityDescriptor) {
+            if (securityDescriptor == null || securityDescriptor.Length == 0) {
+                throw new ArgumentException("security descriptor is empty");
+            }
+            GCHandle pinned = GCHandle.Alloc(
+                securityDescriptor, GCHandleType.Pinned);
+            try {
+                if (!SetFileSecurity(path, DaclSecurityInformation,
+                        pinned.AddrOfPinnedObject())) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+            } finally {
+                pinned.Free();
+            }
+        }
+    }
 }
 '@
     }
+}
+
+function Get-FileLinkCount {
+    param([Parameter(Mandatory)][string]$Path)
+    Initialize-CivmGateNative
     try {
         return [CivmGateNative.LinkInspector]::GetLinkCount($Path)
     } catch {

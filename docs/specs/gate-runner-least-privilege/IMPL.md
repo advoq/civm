@@ -8,7 +8,9 @@
   drain, o walker restaura acesso somente em diretórios reais, audita aliases
   e permite retomar staging validado sem novo replace. A raiz compartilhada é
   criada uma vez ou somente validada; um gate não normaliza ACL da fleet. A
-  contagem nativa de hardlinks precede toda reescrita de ACL em arquivos.
+  contagem nativa de hardlinks precede toda reescrita de ACL em arquivos; o
+  reparo de diretórios preserva o inventário raw de ACEs e usa escrita de DACL
+  sem propagação aos filhos, com chaves Base64 comparadas ordinalmente.
 - `deploy/windows/civm-gate-task-setup.ps1`: preflight, migração de task,
   DACLs protegidas, listener direto, probe efetivo e owner real do processo.
 - `internal/hostdisk/ps1_safety_test.go`: contrato estrutural dos dois scripts.

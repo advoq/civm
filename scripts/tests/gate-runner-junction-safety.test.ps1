@@ -38,6 +38,7 @@ foreach ($source in $sources) {
         $source, [ref]$tokens, [ref]$parseErrors)
     if ($parseErrors.Count -ne 0) { throw "parse failed: $source" }
     foreach ($name in @(
+            'Initialize-CivmGateNative',
             'Get-FileLinkCount',
             'Assert-SafeOfficialRunnerJunction',
             'Get-SafeTreeItems')) {
@@ -170,7 +171,9 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile(
 foreach ($name in @(
         'Add-FileSystemRule',
         'Resolve-AccountSid',
+        'Initialize-CivmGateNative',
         'Get-FileLinkCount',
+        'Set-DaclWithoutPropagation',
         'Set-ProtectedAcl',
         'Assert-ProtectedAcl',
         'Grant-AdminTraversal',
@@ -370,6 +373,7 @@ foreach ($source in $sources) {
     $sourceAst = [System.Management.Automation.Language.Parser]::ParseFile(
         $source, [ref]$sourceTokens, [ref]$sourceErrors)
     foreach ($functionName in @(
+            'Initialize-CivmGateNative',
             'Get-FileLinkCount',
             'Assert-SafeOfficialRunnerJunction',
             'Get-SafeTreeItems')) {

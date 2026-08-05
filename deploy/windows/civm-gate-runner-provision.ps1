@@ -72,8 +72,7 @@ function Resolve-AccountSid {
     }
 }
 
-function Get-FileLinkCount {
-    param([Parameter(Mandatory)][string]$Path)
+function Initialize-CivmGateNative {
     if ($null -eq ('CivmGateNative.LinkInspector' -as [type])) {
         Add-Type -TypeDefinition @'
 using System;
@@ -210,13 +209,58 @@ namespace CivmGateNative {
             }
         }
     }
+
+    public static class SecurityDescriptorWriter {
+        const uint DaclSecurityInformation = 0x00000004;
+
+        [DllImport("advapi32.dll", EntryPoint = "SetFileSecurityW",
+            CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool SetFileSecurity(string path,
+            uint securityInformation, IntPtr securityDescriptor);
+
+        public static void SetDacl(string path, byte[] securityDescriptor) {
+            if (securityDescriptor == null || securityDescriptor.Length == 0) {
+                throw new ArgumentException("security descriptor is empty");
+            }
+            GCHandle pinned = GCHandle.Alloc(
+                securityDescriptor, GCHandleType.Pinned);
+            try {
+                if (!SetFileSecurity(path, DaclSecurityInformation,
+                        pinned.AddrOfPinnedObject())) {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+            } finally {
+                pinned.Free();
+            }
+        }
+    }
 }
 '@
     }
+}
+
+function Get-FileLinkCount {
+    param([Parameter(Mandatory)][string]$Path)
+    Initialize-CivmGateNative
     try {
         return [CivmGateNative.LinkInspector]::GetLinkCount($Path)
     } catch {
         throw "falha validando hardlinks em ${Path}: $($_.Exception.GetBaseException().Message)"
+    }
+}
+
+function Set-DaclWithoutPropagation {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][byte[]]$SecurityDescriptor
+    )
+    Initialize-CivmGateNative
+    try {
+        [CivmGateNative.SecurityDescriptorWriter]::SetDacl(
+            $Path, $SecurityDescriptor)
+    } catch {
+        throw "falha gravando DACL sem propagacao em ${Path}: " +
+            $_.Exception.GetBaseException().Message
     }
 }
 
@@ -306,35 +350,126 @@ function Grant-AdminTraversal {
     }
     $acl = Get-Acl -LiteralPath $Path
     $wasProtected = $acl.AreAccessRulesProtected
-    foreach ($sid in @($systemSid, $administratorsSid)) {
-        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
-            $sid, [System.Security.AccessControl.FileSystemRights]::FullControl,
-            [System.Security.AccessControl.InheritanceFlags]::None,
-            [System.Security.AccessControl.PropagationFlags]::None,
-            [System.Security.AccessControl.AccessControlType]::Allow)
-        $acl.AddAccessRule($rule) | Out-Null
+    $wasOwnerSid = Resolve-AccountSid -Account $acl.Owner
+    $binary = $acl.GetSecurityDescriptorBinaryForm()
+    $raw = [System.Security.AccessControl.RawSecurityDescriptor]::new($binary, 0)
+    if ($null -eq $raw.DiscretionaryAcl) {
+        throw "diretorio sem DACL para travessia administrativa: $Path"
     }
-    Set-Acl -LiteralPath $Path -AclObject $acl
+    $expectedRuleCounts = [System.Collections.Hashtable]::new(
+        [System.StringComparer]::Ordinal)
+    for ($aceIndex = 0; $aceIndex -lt $raw.DiscretionaryAcl.Count; $aceIndex++) {
+        $existingAce = $raw.DiscretionaryAcl[$aceIndex]
+        $aceBinary = [byte[]]::new($existingAce.BinaryLength)
+        $existingAce.GetBinaryForm($aceBinary, 0)
+        $key = [Convert]::ToBase64String($aceBinary)
+        $expectedRuleCounts[$key] = 1 + [int]$expectedRuleCounts[$key]
+    }
+    $insertIndex = 0
+    while ($insertIndex -lt $raw.DiscretionaryAcl.Count -and
+        ([int]$raw.DiscretionaryAcl[$insertIndex].AceFlags -band
+            [int][System.Security.AccessControl.AceFlags]::Inherited) -eq 0) {
+        $insertIndex++
+    }
+    $sidsToAdd = [System.Collections.Generic.List[object]]::new()
+    foreach ($sid in @($systemSid, $administratorsSid)) {
+        $matchingAllowFound = $false
+        $sufficientAllowFound = $false
+        for ($aceIndex = 0; $aceIndex -lt $raw.DiscretionaryAcl.Count; $aceIndex++) {
+            $candidate = $raw.DiscretionaryAcl[$aceIndex]
+            if ($candidate -is [System.Security.AccessControl.QualifiedAce] -and
+                $candidate.AceQualifier -eq `
+                    [System.Security.AccessControl.AceQualifier]::AccessAllowed -and
+                $candidate.SecurityIdentifier.Value -eq $sid.Value) {
+                $matchingAllowFound = $true
+            }
+            if ($candidate -is [System.Security.AccessControl.CommonAce] -and
+                $candidate.AceQualifier -eq `
+                    [System.Security.AccessControl.AceQualifier]::AccessAllowed -and
+                $candidate.SecurityIdentifier.Value -eq $sid.Value -and
+                ([int]$candidate.AceFlags -band
+                    [int][System.Security.AccessControl.AceFlags]::InheritOnly) -eq 0 -and
+                ($candidate.AccessMask -band `
+                    [int][System.Security.AccessControl.FileSystemRights]::FullControl) -eq `
+                    [int][System.Security.AccessControl.FileSystemRights]::FullControl) {
+                $sufficientAllowFound = $true
+                break
+            }
+        }
+        if ($sufficientAllowFound) { continue }
+        if ($matchingAllowFound) {
+            throw "ACE administrativa existente e insuficiente: $Path; " +
+                "principal=$($sid.Value)"
+        }
+        $sidsToAdd.Add($sid)
+    }
+    foreach ($sid in $sidsToAdd) {
+        $ace = [System.Security.AccessControl.CommonAce]::new(
+            [System.Security.AccessControl.AceFlags]::None,
+            [System.Security.AccessControl.AceQualifier]::AccessAllowed,
+            [int][System.Security.AccessControl.FileSystemRights]::FullControl,
+            $sid, $false, $null)
+        $raw.DiscretionaryAcl.InsertAce($insertIndex, $ace)
+        $insertIndex++
+        $aceBinary = [byte[]]::new($ace.BinaryLength)
+        $ace.GetBinaryForm($aceBinary, 0)
+        $ruleKey = [Convert]::ToBase64String($aceBinary)
+        $expectedRuleCounts[$ruleKey] = 1 + [int]$expectedRuleCounts[$ruleKey]
+    }
+    if ($sidsToAdd.Count -ne 0) {
+        $updatedBinary = [byte[]]::new($raw.BinaryLength)
+        $raw.GetBinaryForm($updatedBinary, 0)
+        Set-DaclWithoutPropagation -Path $Path `
+            -SecurityDescriptor $updatedBinary
+    }
     $actual = Get-Acl -LiteralPath $Path
-    if ($actual.AreAccessRulesProtected -ne $wasProtected) {
-        throw "reparo alterou protecao da DACL: $Path"
+    if ($actual.AreAccessRulesProtected -ne $wasProtected -or
+        (Resolve-AccountSid -Account $actual.Owner) -ne $wasOwnerSid) {
+        throw "reparo alterou owner ou protecao da DACL: $Path"
+    }
+    $actualBinary = $actual.GetSecurityDescriptorBinaryForm()
+    $actualRaw = [System.Security.AccessControl.RawSecurityDescriptor]::new(
+        $actualBinary, 0)
+    $actualRuleCounts = [System.Collections.Hashtable]::new(
+        [System.StringComparer]::Ordinal)
+    for ($aceIndex = 0; $aceIndex -lt $actualRaw.DiscretionaryAcl.Count; $aceIndex++) {
+        $actualAce = $actualRaw.DiscretionaryAcl[$aceIndex]
+        $aceBinary = [byte[]]::new($actualAce.BinaryLength)
+        $actualAce.GetBinaryForm($aceBinary, 0)
+        $key = [Convert]::ToBase64String($aceBinary)
+        $actualRuleCounts[$key] = 1 + [int]$actualRuleCounts[$key]
+    }
+    $allRuleKeys = @($expectedRuleCounts.Keys) + @($actualRuleCounts.Keys) |
+        Sort-Object -Unique
+    foreach ($key in $allRuleKeys) {
+        if ([int]$expectedRuleCounts[$key] -ne [int]$actualRuleCounts[$key]) {
+            throw "reparo alterou inventario de ACEs: $Path; regra=$key; " +
+                "esperado=$([int]$expectedRuleCounts[$key]); " +
+                "atual=$([int]$actualRuleCounts[$key])"
+        }
     }
     $rules = @($actual.GetAccessRules(
         $true, $true, [System.Security.Principal.SecurityIdentifier]))
     foreach ($sid in @($systemSid, $administratorsSid)) {
-        $matches = @($rules | Where-Object {
-            -not $_.IsInherited -and $_.IdentityReference.Value -eq $sid.Value -and
-            $_.AccessControlType -eq `
-                [System.Security.AccessControl.AccessControlType]::Allow -and
-            $_.InheritanceFlags -eq `
-                [System.Security.AccessControl.InheritanceFlags]::None -and
-            $_.PropagationFlags -eq `
-                [System.Security.AccessControl.PropagationFlags]::None -and
-            ($_.FileSystemRights -band `
-                [System.Security.AccessControl.FileSystemRights]::FullControl) -eq `
-                [System.Security.AccessControl.FileSystemRights]::FullControl
-        })
-        if ($matches.Count -eq 0) {
+        $sufficientAceFound = $false
+        for ($aceIndex = 0;
+            $aceIndex -lt $actualRaw.DiscretionaryAcl.Count;
+            $aceIndex++) {
+            $candidate = $actualRaw.DiscretionaryAcl[$aceIndex]
+            if ($candidate -is [System.Security.AccessControl.CommonAce] -and
+                $candidate.AceQualifier -eq `
+                    [System.Security.AccessControl.AceQualifier]::AccessAllowed -and
+                $candidate.SecurityIdentifier.Value -eq $sid.Value -and
+                ([int]$candidate.AceFlags -band
+                    [int][System.Security.AccessControl.AceFlags]::InheritOnly) -eq 0 -and
+                ($candidate.AccessMask -band `
+                    [int][System.Security.AccessControl.FileSystemRights]::FullControl) -eq `
+                    [int][System.Security.AccessControl.FileSystemRights]::FullControl) {
+                $sufficientAceFound = $true
+                break
+            }
+        }
+        if (-not $sufficientAceFound) {
             $actualSummary = @($rules | ForEach-Object {
                 "$($_.IdentityReference.Value):$($_.AccessControlType):" +
                 "$($_.FileSystemRights):$($_.InheritanceFlags):" +
