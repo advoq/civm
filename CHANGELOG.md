@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.29](https://github.com/advoq/civm/compare/v1.22.28...v1.22.29) (2026-08-05)
+
+
+### Bug Fixes
+
+* **runner:** validate relocated rollback junctions ([#247](https://github.com/advoq/civm/issues/247)) ([25723aa](https://github.com/advoq/civm/commit/25723aadd105334cad97b4230fc0cdc27747e1dd))
+
 ## [1.22.28](https://github.com/advoq/civm/compare/v1.22.27...v1.22.28) (2026-08-05)
 
 
