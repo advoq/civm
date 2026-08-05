@@ -508,7 +508,10 @@ try {
     $aclFixtureCreated = $true
     New-Item -ItemType File -Path (Join-Path $child 'marker') | Out-Null
     $restricted = New-Object System.Security.AccessControl.DirectorySecurity
-    $restricted.SetOwner($currentSid)
+    # Reproduce legacy runner descendants that are not owned by the operator.
+    # An operator-owned fixture grants implicit WRITE_DAC and hides the live
+    # handoff failure this contract is meant to catch.
+    $restricted.SetOwner($systemSid)
     $restricted.SetAccessRuleProtection($true, $false)
     $restrictedRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
         $networkServiceSid,
