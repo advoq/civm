@@ -3,9 +3,9 @@
 > Inventário da máquina virtual que hospeda os self-hosted runners do civm.
 > Mantenha atualizado a cada mudança de toolchain/SO ou limpeza grande.
 >
-> **Disco revalidado em 2026-07-30** — coleta read-only no guest e métricas do
-> host durante o boundary de `main@1ae4e29e`. Toolchains abaixo mantêm a última
-> atualização completa de 2026-06-17 até novo inventário.
+> **Disco revalidado em 2026-07-30; memória em 2026-08-05** — coleta read-only
+> no guest e métricas do host. Toolchains abaixo mantêm a última atualização
+> completa de 2026-06-17 até novo inventário.
 
 ## Host & hardware
 
@@ -13,7 +13,7 @@
   `sudo` (UAC off) — Get-VM/Optimize-VHD/Start/Stop funcionam.
 - **VHDX:** dinâmico em `V:\Hyper-V\gha-ubuntu-2404\Virtual Hard Disks\gha-ubuntu-2404.vhdx`.
   O volume **V: (119 GB) é o teto real de disco** — o VHDX cresce nele.
-- **vCPU:** 12 · **RAM:** 8 GiB (Hyper-V materializa VMRS enquanto ligada;
+- **vCPU:** 12 · **RAM:** 12 GiB fixos (Hyper-V materializa VMRS enquanto ligada;
   scale-to-zero o libera quando ociosa) · **Disco do guest:** 40 GiB.
 
 ## Sistema

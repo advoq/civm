@@ -1,5 +1,10 @@
 # PAID-CI-PARITY-CHECKLIST — civm self-hosted vs GitHub-hosted (CI pago)
 
+> **Snapshot histórico, não baseline operacional.** Este documento foi
+> sucedido por `PAID-CI-PARITY.md`; hardware atual fica em
+> `docs/HARDWARE.md`. Valores de RAM desta primeira passada não descrevem o
+> padrão atual de `12 GiB` fixos.
+
 > **Propósito.** Esta é a **âncora adversarial de paridade** entre o runner
 > `civm` (UMA VM Hyper-V compartilhada por 8 runners) e o que o CI **pago**
 > (GitHub-hosted, Ubuntu 24.04) entrega. Para CADA garantia do pago, dizemos

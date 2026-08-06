@@ -15,8 +15,8 @@ Resumo terso para CLIs estilo Codex/aider/Jules. Para visão completa, ler `READ
 5. **Disciplinas e regras** portáveis (Kahneman, SSDV3, invariantes).
 
 A VM roda **paridade com `ubuntu-latest` do GitHub Actions** (Ubuntu 24.04 LTS,
-mesmas versões de Go/Node/Python/Docker/gh) com mais hardware (4+ cores,
-128GB SSD, 32GB+ RAM) para builds mais rápidos durante desenvolvimento.
+mesmas versões de Go/Node/Python/Docker/gh) em host com 12 threads, SSD 128G e
+31,9 GiB de RAM; o guest usa 12 GiB fixos.
 
 ## O que civm NÃO é
 

@@ -168,7 +168,8 @@ PRD/SPEC/IMPL: `docs/specs/civmctl/`.
 ## Como o civm runner funciona
 
 1. **Setup uma vez** seguindo `runbooks/MULTI-PROJECT-RUNNER.md`:
-   - Provisionar VM Linux (Ubuntu 24.04 LTS, 4+ cores, 128GB SSD)
+   - Provisionar VM Linux (Ubuntu 24.04 LTS, 12 vCPU, 12 GiB fixos,
+     SSD host 128G)
    - Instalar toolchains (Go, Node, Docker, gh CLI, etc) — parity ubuntu-latest
    - Registrar N runners GitHub com label `civm`
    - Configurar timers systemd de cleanup, disk-watchdog, runner-watchdog,
