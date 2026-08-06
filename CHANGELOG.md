@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.22.35](https://github.com/advoq/civm/compare/v1.22.34...v1.22.35) (2026-08-06)
+
+
+### Bug Fixes
+
+* **host:** standardize VM memory at 12 GiB ([#265](https://github.com/advoq/civm/issues/265)) ([f452e1b](https://github.com/advoq/civm/commit/f452e1b7be2afba617c1dd7a48ce7af3ffad65eb))
+
+
+### Documentation
+
+* **orchestrator:** preserve Go port design history ([#268](https://github.com/advoq/civm/issues/268)) ([aaab870](https://github.com/advoq/civm/commit/aaab8702b0cf3a585fd65d00078e98fcd7cdab7d))
+
 ## [1.22.34](https://github.com/advoq/civm/compare/v1.22.33...v1.22.34) (2026-08-05)
 
 
