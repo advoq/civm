@@ -24,7 +24,7 @@
 
 ```
 +------------------------------------------------------+
-| VM "civm" (Ubuntu 24.04 LTS, 4+ cores, 32GB+ RAM) |
+| VM "civm" (Ubuntu 24.04 LTS, 12 vCPU, 12 GiB RAM) |
 |                                                      |
 |  systemd services:                                   |
 |   - actions.runner.<owner>-<repo-a>.civm-a.service   |

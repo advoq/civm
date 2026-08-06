@@ -1,6 +1,7 @@
 # HARDWARE da box civm — fonte da verdade
 
-> Revalidado em 30/07/2026 via métricas do host e SSH read-only no guest.
+> Disco revalidado em 30/07/2026. Memória revalidada em 05/08/2026 via
+> Hyper-V e, após a aplicação, pelo guest.
 > Valores de capacidade usam **GiB** (`2^30 bytes`), mesmo quando interfaces
 > exibem `GB`. Bytes exatos aparecem quando relevantes.
 >
@@ -57,7 +58,7 @@ para outro disco ou trocar o SSD; software de limpeza não amplia o teto físico
 O `V:` contém principalmente:
 
 - o arquivo VHDX dinâmico;
-- o VMRS de aproximadamente `8 GiB` enquanto a VM está ligada;
+- o VMRS de aproximadamente `12 GiB` enquanto a VM está ligada;
 - metadados do Hyper-V/filesystem.
 
 Desligar a VM libera o VMRS. `fstrim` informa ao host quais blocos do guest
@@ -68,7 +69,7 @@ Nenhuma dessas operações remove dados ainda alocados no guest.
 
 | Recurso | Valor atual |
 | --- | --- |
-| RAM | `8 GiB` |
+| RAM | `12 GiB` fixos; Dynamic Memory desabilitado |
 | vCPU | `12` |
 | Disco virtual | `40 GiB` |
 | Filesystem `/` | `37,70 GiB`; `23,66 GiB` usados; `14,03 GiB` disponíveis |
@@ -78,6 +79,19 @@ Dos `174` volumes, ao menos `171` são volumes nomeados de Docker Compose com
 projeto no formato `advoq-org-<run-id>`; `3` são anônimos sem labels. O comando
 atual `docker volume prune -f` não remove os named nessa versão do Docker, razão
 pela qual uma execução reportada como limpeza deixou `10,44 GB` para trás.
+
+### Padrão de memória
+
+Em 05/08/2026, o baseline mudou de Dynamic Memory `7/7,5/12 GiB`
+(`minimum/startup/maximum`) para `12 GiB` fixos. Antes da mudança, o Hyper-V
+reduziu `MemoryAssigned` para `7 GiB` enquanto o guest expunha cerca de
+`6,76 GiB`; em outro pico, o host já havia atribuído `12 GiB`. Fixar o mesmo
+teto elimina essa variação sem aumentar o maior consumo já observado.
+
+O host tem `31,9 GiB` físicos e o WSL está limitado separadamente a `16 GiB`.
+Por isso, a aplicação só é permitida com a VM `Off`; o owner continua liberando
+o VMRS ao desligar a VM entre gerações. O helper versionado é
+`deploy/windows/configure-civm-vm-memory.ps1`.
 
 ## Snapshots históricos, não baselines atuais
 

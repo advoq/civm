@@ -1,5 +1,10 @@
 # CI-PARITY-CHECKLIST — civm self-hosted vs GitHub-hosted (CI pago)
 
+> **Snapshot histórico, não baseline operacional.** Este documento foi
+> sucedido por `PAID-CI-PARITY.md`; hardware atual fica em
+> `docs/HARDWARE.md`. Valores de RAM desta auditoria de 16/06/2026 não
+> descrevem o padrão atual de `12 GiB` fixos.
+
 > **Âncora adversarial.** Para cada garantia do runner GitHub-hosted (`ubuntu-latest`,
 > o "CI pago"), este doc afirma se a box civm self-hosted é **FIEL**, **PARCIAL**,
 > **INFIEL** ou **IMPOSSÍVEL** (estrutural), com a evidência REAL (código / saída

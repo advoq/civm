@@ -27,6 +27,40 @@ Produção usa `civm-host-orchestrator` em modo active. Os scripts PowerShell
 abaixo são o caminho de rollback e devem permanecer `Disabled` enquanto o C#
 estiver ativo. Nunca mantenha os dois owners em `Ready`/`Running`.
 
+## Memória fixa da VM
+
+O padrão é `12 GiB` fixos. A alteração é operação de boundary: aguarde fila
+vazia, confirme `Runner.Worker=0`, deixe o owner concluir cleanup/compactação e
+confirme a VM `Off`. O helper não inicia nem desliga a VM.
+
+Em PowerShell elevado, primeiro revise o plano e só depois aplique:
+
+```powershell
+Get-VM -Name gha-ubuntu-2404 | Select-Object Name, State
+
+.\configure-civm-vm-memory.ps1
+.\configure-civm-vm-memory.ps1 -Execute
+
+Get-VMMemory -VMName gha-ubuntu-2404 |
+  Select-Object DynamicMemoryEnabled, Startup, Minimum, Maximum
+Get-VM -Name gha-ubuntu-2404 | Select-Object Name, State
+```
+
+Pós-condição: `DynamicMemoryEnabled=False`, `Startup=12884901888` e VM ainda
+`Off`. Reaplicar deve retornar `noop`. O owner C# continua sendo o único
+responsável pelo próximo start.
+
+Rollback, também somente com a VM `Off`:
+
+```powershell
+Set-VMMemory -VMName gha-ubuntu-2404 `
+  -DynamicMemoryEnabled $true `
+  -MinimumBytes 7GB -StartupBytes 7.5GB -MaximumBytes 12GB
+```
+
+Rollback trigger: qualquer um dos 3 primeiros jobs terminar por OOM/exit 137,
+ou o host permanecer com menos de 1 GiB livre por 5 minutos.
+
 ## Deploy scripts PowerShell (rollback)
 
 From an elevated PowerShell, in the repo `deploy/windows` (or a staging copy):
