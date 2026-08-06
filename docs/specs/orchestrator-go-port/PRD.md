@@ -2,7 +2,7 @@
 slug: orchestrator-go-port
 title: Port do orchestrator scale-to-zero de PowerShell para Go (civmctl orchestrate)
 milestone: —
-issues: []
+issues: ["#267"]
 ---
 
 # PRD — Port do orchestrator scale-to-zero de PowerShell para Go
